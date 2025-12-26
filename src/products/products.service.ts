@@ -16,8 +16,9 @@ export class ProductsService {
         return createdProduct.save();
     }
 
-    async findAll(): Promise<ProductDocument[]> {
-        return this.productModel.find().sort({ createdAt: -1 }).exec();
+    async findAll(status?: string): Promise<ProductDocument[]> {
+        const filter = status ? { status } : {};
+        return this.productModel.find(filter).sort({ createdAt: -1 }).exec();
     }
 
     async findOne(id: string): Promise<ProductDocument> {
@@ -47,5 +48,19 @@ export class ProductsService {
             throw new NotFoundException(`Product with ID ${id} not found`);
         }
         return deletedProduct;
+    }
+
+    async migrateStatuses(): Promise<void> {
+        // Update all products with 'active' or 'inactive' status to 'published'
+        await this.productModel.updateMany(
+            { status: { $in: ['active', 'inactive'] } },
+            { $set: { status: 'published' } }
+        ).exec();
+
+        // Also update any products that don't have a status field yet
+        await this.productModel.updateMany(
+            { status: { $exists: false } },
+            { $set: { status: 'published' } }
+        ).exec();
     }
 }

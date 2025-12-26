@@ -79,6 +79,6 @@ export class CreateProductDto {
 
     @IsString()
     @IsOptional()
-    @IsEnum(['active', 'inactive'])
+    @IsEnum(['published', 'draft'])
     status?: string;
 }

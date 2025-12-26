@@ -6,8 +6,13 @@ import {
     Patch,
     Param,
     Delete,
+    Query,
     UseGuards,
+    UseInterceptors,
+    UploadedFiles,
 } from '@nestjs/common';
+import { FilesInterceptor } from '@nestjs/platform-express';
+import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { ProductsService } from './products.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
@@ -18,7 +23,25 @@ import { UserRole } from '../users/entities/user.entity';
 
 @Controller('products')
 export class ProductsController {
-    constructor(private readonly productsService: ProductsService) { }
+    constructor(
+        private readonly productsService: ProductsService,
+        private readonly cloudinaryService: CloudinaryService,
+    ) { }
+
+    @Post('upload')
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.ADMIN)
+    @UseInterceptors(FilesInterceptor('images'))
+    async uploadImages(@UploadedFiles() files: Express.Multer.File[]) {
+        try {
+            console.log(`[ProductsController] Uploading ${files?.length || 0} files...`);
+            const urls = await this.cloudinaryService.uploadImages(files);
+            return { urls };
+        } catch (error) {
+            console.error('[ProductsController] Image upload failed:', error);
+            throw error;
+        }
+    }
 
     @Post()
     @UseGuards(JwtAuthGuard, RolesGuard)
@@ -28,8 +51,8 @@ export class ProductsController {
     }
 
     @Get()
-    findAll() {
-        return this.productsService.findAll();
+    findAll(@Query('status') status?: string) {
+        return this.productsService.findAll(status);
     }
 
     @Get(':id')

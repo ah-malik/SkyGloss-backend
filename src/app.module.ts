@@ -10,6 +10,8 @@ import { AuthModule } from './auth/auth.module';
 import { CertificationsModule } from './certifications/certifications.module';
 import { ProductsModule } from './products/products.module';
 import { SeedService } from './seed.service';
+import { CloudinaryModule } from './cloudinary/cloudinary.module';
+import { OrdersModule } from './orders/orders.module';
 
 @Module({
   imports: [
@@ -29,6 +31,8 @@ import { SeedService } from './seed.service';
     AuthModule,
     CertificationsModule,
     ProductsModule,
+    CloudinaryModule,
+    OrdersModule,
   ],
   controllers: [AppController],
   providers: [AppService, SeedService],

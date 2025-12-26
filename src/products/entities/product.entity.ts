@@ -51,7 +51,7 @@ export class Product {
     @Prop()
     technicalSheetUrl?: string;
 
-    @Prop({ default: 'active', enum: ['active', 'inactive'] })
+    @Prop({ default: 'published', enum: ['published', 'draft'] })
     status: string;
 }
 

@@ -15,6 +15,10 @@ export class SeedService implements OnModuleInit {
   async onModuleInit() {
     console.log('[SeedService] Starting auto-seed...');
     try {
+      // 0. Migrate existing product statuses
+      await this.productsService.migrateStatuses();
+      console.log('[SeedService] Product statuses migrated to new enum');
+
       // 1. Seed Admin
       const adminEmail = 'admin@example.com';
       let admin = await this.usersService.findByEmail(adminEmail);
@@ -92,7 +96,7 @@ export class SeedService implements OnModuleInit {
               { size: '100ml', price: 169.98 },
               { size: '250ml', price: 318.98 },
             ],
-            status: 'active',
+            status: 'published',
           },
           {
             name: 'RESIN FILM',
@@ -107,7 +111,7 @@ export class SeedService implements OnModuleInit {
             specifications: [{ label: 'Volume', value: '60ml' }],
             applicationGuide: ['Prepare surface', 'Apply thin layer', 'Level coating'],
             sizes: [{ size: '60ml', price: 160.99 }],
-            status: 'active',
+            status: 'published',
           },
           {
             name: 'EDGE BLADE',
@@ -118,7 +122,7 @@ export class SeedService implements OnModuleInit {
             specifications: [{ label: 'Material', value: 'Tungsten Carbide' }],
             applicationGuide: ['Hold at 45-degree angle', 'Clean frequently'],
             sizes: [{ size: '1pc', price: 39.99 }],
-            status: 'active',
+            status: 'published',
           },
         ];
 
