@@ -14,31 +14,32 @@ export class OrdersController {
 
     @Post('checkout-session')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.SHOP)
+    @Roles(UserRole.SHOP, UserRole.TECHNICIAN)
     createCheckoutSession(
         @GetUser('_id') userId: string,
+        @GetUser('role') role: string,
         @Body() createOrderDto: CreateOrderDto,
     ) {
-        return this.ordersService.createCheckoutSession(userId, createOrderDto);
+        return this.ordersService.createCheckoutSession(userId, createOrderDto, role);
     }
 
     @Get('my-orders')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.SHOP)
+    @Roles(UserRole.SHOP, UserRole.TECHNICIAN)
     getMyOrders(@GetUser('_id') userId: string) {
         return this.ordersService.getMyOrders(userId);
     }
 
     @Get(':id')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.SHOP, UserRole.ADMIN)
+    @Roles(UserRole.SHOP, UserRole.TECHNICIAN, UserRole.ADMIN)
     getOrderById(@Param('id') id: string) {
         return this.ordersService.getOrderById(id);
     }
 
     @Get('verify/:orderId')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.SHOP)
+    @Roles(UserRole.SHOP, UserRole.TECHNICIAN)
     verifyPayment(@Param('orderId') orderId: string) {
         return this.ordersService.verifyPayment(orderId);
     }
@@ -58,6 +59,13 @@ export class OrdersController {
         @Body('status') status: any,
     ) {
         return this.ordersService.updateStatus(id, status);
+    }
+
+    @Get('admin/stats')
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.ADMIN)
+    getDashboardStats() {
+        return this.ordersService.getDashboardStats();
     }
 
     // Not guarding webhook as it comes from Stripe server

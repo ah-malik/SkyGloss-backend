@@ -82,8 +82,8 @@ export class CertificationsService {
           },
         ],
         mode: 'payment',
-        success_url: `${this.configService.get<string>('FRONTEND_URL') || 'http://localhost:5173'}/dashboard/distributor?success=true&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${this.configService.get<string>('FRONTEND_URL') || 'http://localhost:5173'}/dashboard/distributor?canceled=true`,
+        success_url: `${this.configService.get<string>('FRONTEND_URL') || 'https://skygloss-frontend.netlify.app/'}/dashboard/distributor?success=true&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${this.configService.get<string>('FRONTEND_URL') || 'https://skygloss-frontend.netlify.app/'}/dashboard/distributor?canceled=true`,
         client_reference_id: certification._id.toString(),
         metadata: {
           certificationId: certification._id.toString(),

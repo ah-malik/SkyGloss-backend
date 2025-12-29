@@ -27,7 +27,7 @@ export class OrdersService {
         }
     }
 
-    async createCheckoutSession(userId: string, createOrderDto: CreateOrderDto) {
+    async createCheckoutSession(userId: string, createOrderDto: CreateOrderDto, role?: string) {
         if (!this.stripe) {
             throw new BadRequestException('Stripe is not configured on the server.');
         }
@@ -48,6 +48,15 @@ export class OrdersService {
             status: OrderStatus.PENDING,
             orderNumber: `ORD-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
         });
+
+        const baseUrl = this.configService.get<string>('FRONTEND_URL') || 'https://skygloss-frontend.netlify.app';
+        // Determine redirect path based on role
+        let dashboardPath = '/dashboard/shop';
+        if (role === 'technician') {
+            dashboardPath = '/dashboard/technician';
+        } else if (role === 'distributor') {
+            dashboardPath = '/dashboard/distributor';
+        }
 
         try {
             // Create Stripe Line Items
@@ -100,8 +109,8 @@ export class OrdersService {
                 payment_method_types: ['card'],
                 line_items,
                 mode: 'payment',
-                success_url: `${this.configService.get<string>('FRONTEND_URL') || 'http://localhost:5173'}/dashboard/shop?success=true&order_id=${order._id}`,
-                cancel_url: `${this.configService.get<string>('FRONTEND_URL') || 'http://localhost:5173'}/dashboard/shop?canceled=true`,
+                success_url: `${baseUrl}${dashboardPath}?success=true&order_id=${order._id}`,
+                cancel_url: `${baseUrl}${dashboardPath}?canceled=true`,
                 client_reference_id: order._id.toString(),
                 customer_email: shippingAddress.email,
                 metadata: {
@@ -190,12 +199,68 @@ export class OrdersService {
     }
 
     async getAllOrders(): Promise<Order[]> {
-        return this.orderModel.find().populate('user', 'firstName lastName email').sort({ createdAt: -1 });
+        return this.orderModel.find().populate('user', 'firstName lastName email role').sort({ createdAt: -1 });
     }
 
     async updateStatus(id: string, status: OrderStatus): Promise<Order> {
         const order = await this.orderModel.findByIdAndUpdate(id, { status }, { new: true });
         if (!order) throw new NotFoundException('Order not found');
         return order;
+    }
+
+    async getDashboardStats() {
+        // 1. Recent Orders (5)
+        const recentOrders = await this.orderModel
+            .find()
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .populate('user', 'firstName lastName email');
+
+        // 2. Total Revenue (Paid only)
+        const totalRevenueResult = await this.orderModel.aggregate([
+            { $match: { status: OrderStatus.PAID } },
+            { $group: { _id: null, total: { $sum: '$totalAmount' } } }
+        ]);
+        const totalRevenue = totalRevenueResult[0]?.total || 0;
+
+        // 3. Daily Sales (Last 7 Days)
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        sevenDaysAgo.setHours(0, 0, 0, 0);
+
+        const dailySales = await this.orderModel.aggregate([
+            {
+                $match: {
+                    status: OrderStatus.PAID,
+                    createdAt: { $gte: sevenDaysAgo }
+                }
+            },
+            {
+                $group: {
+                    _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+                    sales: { $sum: "$totalAmount" }
+                }
+            },
+            { $sort: { _id: 1 } }
+        ]);
+
+        // Fill in missing days
+        const chartData: { date: string; sales: number }[] = [];
+        for (let i = 6; i >= 0; i--) {
+            const d = new Date();
+            d.setDate(d.getDate() - i);
+            const dateStr = d.toISOString().split('T')[0];
+            const found = dailySales.find(day => day._id === dateStr);
+            chartData.push({
+                date: dateStr,
+                sales: found ? found.sales : 0
+            });
+        }
+
+        return {
+            recentOrders,
+            totalRevenue,
+            chartData
+        };
     }
 }

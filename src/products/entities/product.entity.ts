@@ -53,6 +53,9 @@ export class Product {
 
     @Prop({ default: 'published', enum: ['published', 'draft'] })
     status: string;
+
+    @Prop({ default: 'all', enum: ['shop', 'technician', 'all'] })
+    targetAudience: string;
 }
 
 export const ProductSchema = SchemaFactory.createForClass(Product);

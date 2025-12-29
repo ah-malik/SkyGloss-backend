@@ -51,8 +51,11 @@ export class ProductsController {
     }
 
     @Get()
-    findAll(@Query('status') status?: string) {
-        return this.productsService.findAll(status);
+    findAll(
+        @Query('status') status?: string,
+        @Query('targetAudience') targetAudience?: string,
+    ) {
+        return this.productsService.findAll(status, targetAudience);
     }
 
     @Get(':id')

@@ -151,7 +151,7 @@ export class AuthService {
     // In a real app, send an email. For now, log to console.
     console.log(`Password reset token for ${user.email}: ${token}`);
     console.log(
-      `Reset link: http://localhost:5173/reset-password?token=${token}`,
+      `Reset link: https://skygloss-frontend.netlify.app/reset-password?token=${token}`,
     );
 
     return {

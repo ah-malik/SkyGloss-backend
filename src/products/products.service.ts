@@ -16,8 +16,17 @@ export class ProductsService {
         return createdProduct.save();
     }
 
-    async findAll(status?: string): Promise<ProductDocument[]> {
-        const filter = status ? { status } : {};
+    async findAll(status?: string, targetAudience?: string): Promise<ProductDocument[]> {
+        const filter: any = {};
+
+        if (status) {
+            filter.status = status;
+        }
+
+        if (targetAudience) {
+            filter.targetAudience = { $in: [targetAudience, 'all'] };
+        }
+
         return this.productModel.find(filter).sort({ createdAt: -1 }).exec();
     }
 

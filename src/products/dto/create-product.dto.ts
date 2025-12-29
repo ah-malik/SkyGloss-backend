@@ -81,4 +81,9 @@ export class CreateProductDto {
     @IsOptional()
     @IsEnum(['published', 'draft'])
     status?: string;
+
+    @IsString()
+    @IsOptional()
+    @IsEnum(['shop', 'technician', 'all'])
+    targetAudience?: string;
 }
