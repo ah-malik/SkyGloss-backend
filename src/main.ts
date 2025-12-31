@@ -18,6 +18,7 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   app.useGlobalFilters(new HttpExceptionFilter());
   app.useGlobalInterceptors(new TransformInterceptor());
+  console.log('MONGO_URI:', process.env.MONGO_URI);
 
   // Swagger Documentation
   const config = new DocumentBuilder()

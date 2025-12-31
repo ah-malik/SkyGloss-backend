@@ -19,6 +19,9 @@ export class ChatMessage {
 
     @Prop({ default: false })
     isRead: boolean;
+
+    @Prop({ type: Date, default: Date.now, index: { expires: '7d' } })
+    createdAt: Date;
 }
 
 export const ChatMessageSchema = SchemaFactory.createForClass(ChatMessage);

@@ -25,6 +25,9 @@ export class ChatRoom {
 
     @Prop()
     lastMessageAt: Date;
+
+    @Prop({ type: Date, default: Date.now, index: { expires: '7d' } })
+    updatedAt: Date;
 }
 
 export const ChatRoomSchema = SchemaFactory.createForClass(ChatRoom);
