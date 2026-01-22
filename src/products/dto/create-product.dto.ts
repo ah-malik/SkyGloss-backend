@@ -86,4 +86,8 @@ export class CreateProductDto {
     @IsOptional()
     @IsEnum(['shop', 'technician', 'all'])
     targetAudience?: string;
+
+    @IsNumber()
+    @IsOptional()
+    displayOrder?: number;
 }

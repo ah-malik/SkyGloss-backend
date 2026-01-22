@@ -58,6 +58,10 @@ class ShippingAddressDto {
     @IsString()
     @IsNotEmpty()
     country: string;
+
+    @IsString()
+    @IsNotEmpty()
+    phoneNumber: string;
 }
 
 export class CreateOrderDto {

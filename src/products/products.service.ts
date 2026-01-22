@@ -12,6 +12,7 @@ export class ProductsService {
     ) { }
 
     async create(createProductDto: CreateProductDto): Promise<ProductDocument> {
+        console.log('[ProductsService] Creating product with data:', JSON.stringify(createProductDto));
         const createdProduct = new this.productModel(createProductDto);
         return createdProduct.save();
     }
@@ -27,7 +28,7 @@ export class ProductsService {
             filter.targetAudience = { $in: [targetAudience, 'all'] };
         }
 
-        return this.productModel.find(filter).sort({ createdAt: -1 }).exec();
+        return this.productModel.find(filter).sort({ displayOrder: 1, createdAt: -1 }).exec();
     }
 
     async findOne(id: string): Promise<ProductDocument> {
@@ -42,6 +43,7 @@ export class ProductsService {
         id: string,
         updateProductDto: UpdateProductDto,
     ): Promise<ProductDocument> {
+        console.log(`[ProductsService] Updating product ${id} with data:`, JSON.stringify(updateProductDto));
         const updatedProduct = await this.productModel
             .findByIdAndUpdate(id, updateProductDto, { new: true })
             .exec();

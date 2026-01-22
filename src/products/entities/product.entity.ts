@@ -56,6 +56,9 @@ export class Product {
 
     @Prop({ default: 'all', enum: ['shop', 'technician', 'all'] })
     targetAudience: string;
+
+    @Prop({ default: 0 })
+    displayOrder: number;
 }
 
 export const ProductSchema = SchemaFactory.createForClass(Product);

@@ -138,7 +138,7 @@ export class OrdersService {
     }
 
     async getOrderById(id: string): Promise<Order> {
-        const order = await this.orderModel.findById(id);
+        const order = await this.orderModel.findById(id).populate('user', 'firstName lastName email role');
         if (!order) {
             throw new NotFoundException('Order not found');
         }
@@ -206,6 +206,27 @@ export class OrdersService {
         const order = await this.orderModel.findByIdAndUpdate(id, { status }, { new: true });
         if (!order) throw new NotFoundException('Order not found');
         return order;
+    }
+
+    async createOrderRequest(userId: string, createOrderDto: CreateOrderDto) {
+        const { items, shippingAddress } = createOrderDto;
+        const totalAmount = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+
+        // Calculate final mount with shipping and tax to match record keeping
+        const shippingRate = 15;
+        const taxRate = 0.08;
+        const finalAmount = totalAmount + shippingRate + (totalAmount * taxRate);
+
+        const order = new this.orderModel({
+            user: userId,
+            items,
+            totalAmount: finalAmount,
+            shippingAddress,
+            status: OrderStatus.PENDING,
+            orderNumber: `REQ-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        });
+
+        return order.save();
     }
 
     async getDashboardStats() {

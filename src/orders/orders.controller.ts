@@ -77,4 +77,14 @@ export class OrdersController {
         }
         return this.ordersService.handleWebhook(sig as string, req.rawBody);
     }
+
+    @Post('request')
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.ADMIN, UserRole.DISTRIBUTOR)
+    createOrderRequest(
+        @GetUser('_id') userId: string,
+        @Body() createOrderDto: CreateOrderDto,
+    ) {
+        return this.ordersService.createOrderRequest(userId, createOrderDto);
+    }
 }

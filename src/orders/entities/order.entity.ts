@@ -15,7 +15,7 @@ export enum OrderStatus {
 
 @Schema()
 export class OrderItem {
-    @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Product', required: true })
+    @Prop({ type: String, required: true })
     product: string;
 
     @Prop({ required: true })
@@ -59,6 +59,9 @@ export class ShippingAddress {
 
     @Prop({ required: true })
     country: string;
+
+    @Prop({ required: true })
+    phoneNumber: string;
 }
 
 @Schema({ timestamps: true })
