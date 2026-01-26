@@ -10,8 +10,12 @@ import { UserRole, UserStatus } from '../entities/user.entity';
 
 export class CreateUserDto {
   @IsEmail()
-  @IsOptional() // Optional because Access Code users might not have email immediately? Actually schema says unique/sparse. Let's make it optional for DTO but validation in logic.
-  email?: string; // Optional for tech, required for admin/distributor/shop-usa
+  @IsOptional() 
+  email?: string;
+
+  @IsString()
+  @IsOptional()
+  username?: string;
 
   @IsString()
   @IsOptional()

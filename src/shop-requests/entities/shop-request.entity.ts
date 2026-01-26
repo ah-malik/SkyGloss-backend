@@ -39,6 +39,12 @@ export class ShopRequest {
   status: RequestStatus;
 
   @Prop()
+  username?: string;
+
+  @Prop()
+  password?: string;
+
+  @Prop()
   adminComments?: string;
 }
 

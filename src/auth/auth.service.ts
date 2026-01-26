@@ -15,6 +15,7 @@ import { User, UserDocument } from '../users/entities/user.entity';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import * as crypto from 'crypto';
+import { MailService } from '../mail/mail.service';
 
 @Injectable()
 export class AuthService {
@@ -22,10 +23,13 @@ export class AuthService {
     private usersService: UsersService,
     private jwtService: JwtService,
     private accessCodesService: AccessCodesService,
+    private mailService: MailService,
   ) { }
 
-  async validateUser(email: string, pass: string): Promise<any> {
-    const user = await this.usersService.findByEmail(email);
+  async validateUser(identifier: string, pass: string): Promise<any> {
+    console.log(`[Auth] Validating user: ${identifier}`);
+    const user = await this.usersService.findByUsernameOrEmail(identifier);
+    console.log(`[Auth] User found: ${!!user}`);
     if (user && user.password && (await bcrypt.compare(pass, user.password))) {
       const { password, ...result } = user.toObject();
       return result;
@@ -42,6 +46,7 @@ export class AuthService {
         id: userId,
         email: user.email,
         role: user.role,
+        country: user.country,
         firstName: user.firstName,
         lastName: user.lastName,
       },
@@ -148,15 +153,18 @@ export class AuthService {
       resetPasswordExpires: expires,
     } as any);
 
-    // In a real app, send an email. For now, log to console.
-    console.log(`Password reset token for ${user.email}: ${token}`);
-    console.log(
-      `Reset link: https://skygloss-frontend.netlify.app/reset-password?token=${token}`,
-    );
+    // Send actual email
+    if (user.email) {
+      try {
+        await this.mailService.sendPasswordResetEmail(user.email, token);
+      } catch (error) {
+        throw new BadRequestException('Failed to send reset email. The mail server might be down or credentials incorrect.');
+      }
+    }
 
     return {
       message:
-        'Password reset link has been sent to your email (check console in dev)',
+        'Password reset link has been sent to your email',
     };
   }
 

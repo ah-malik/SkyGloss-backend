@@ -37,7 +37,16 @@ export class UsersService implements OnModuleInit {
         email: createUserDto.email,
       });
       if (existingUser) {
-        throw new BadRequestException('User already exists');
+        throw new BadRequestException('User already exists (email)');
+      }
+    }
+
+    if (createUserDto.username) {
+      const existingUser = await this.userModel.findOne({
+        username: createUserDto.username,
+      });
+      if (existingUser) {
+        throw new BadRequestException('User already exists (username)');
       }
     }
 
@@ -69,6 +78,12 @@ export class UsersService implements OnModuleInit {
 
   async findByEmail(email: string): Promise<UserDocument | null> {
     return this.userModel.findOne({ email }).exec();
+  }
+
+  async findByUsernameOrEmail(identifier: string): Promise<UserDocument | null> {
+    return this.userModel.findOne({
+      $or: [{ email: identifier }, { username: identifier }]
+    }).exec();
   }
 
   async findByAccessCode(accessCode: string): Promise<UserDocument | null> {

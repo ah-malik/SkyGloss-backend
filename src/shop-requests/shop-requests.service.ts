@@ -56,13 +56,46 @@ export class ShopRequestsService {
   async approve(
     id: string,
     adminId: string,
-  ): Promise<{ message: string; accessCode: string }> {
+  ): Promise<{ message: string; accessCode: string | null }> {
     const request = await this.findOne(id);
     if (request.status !== RequestStatus.PENDING) {
       throw new BadRequestException('Request is not pending');
     }
 
-    // Generate Access Code instead of creating User directly
+    console.log(`[Approve] Processing Shop Request ${id}. Username: ${request.username}, Password present: ${!!request.password}`);
+
+    // Check if request has credentials (USA Flow)
+    if (request.username && request.password) {
+      try {
+        await this.usersService.create({
+          firstName: request.contactName.split(' ')[0] || 'Shop',
+          lastName: request.contactName.split(' ').slice(1).join(' ') || 'User',
+          email: request.email,
+          username: request.username,
+          password: request.password,
+          role: UserRole.SHOP,
+          status: UserStatus.ACTIVE,
+          country: request.country,
+          phoneNumber: request.phoneNumber,
+          companyName: request.shopName,
+        });
+      } catch (error) {
+        console.error(`[Approve] Failed to create user: ${error.message}`);
+        throw new BadRequestException(`Failed to create user: ${error.message}`);
+      }
+
+      request.status = RequestStatus.APPROVED;
+      await request.save();
+
+      console.log(`[Approve] Created User for Shop Request ${id}`);
+
+      return {
+        message: 'Shop request approved and new user account created successfully.',
+        accessCode: null,
+      };
+    }
+
+    // International Flow: Generate Access Code
     const accessCode = await this.accessCodesService.generateCode(
       UserRole.SHOP,
       adminId,
@@ -70,8 +103,6 @@ export class ShopRequestsService {
       request.email,
     );
 
-    // After approval, we can mark it as approved or delete it.
-    // Given the "delete on reject" requirement, I'll mark as approved here but provide the code.
     request.status = RequestStatus.APPROVED;
     await request.save();
 

@@ -38,4 +38,12 @@ export class CreateShopRequestDto {
   @IsString()
   @IsOptional()
   accessCodeUsed?: string; // If applicable
+
+  @IsString()
+  @IsOptional()
+  username?: string;
+
+  @IsString()
+  @IsOptional()
+  password?: string;
 }

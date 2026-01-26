@@ -80,7 +80,7 @@ export class OrdersController {
 
     @Post('request')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.ADMIN, UserRole.DISTRIBUTOR)
+    @Roles(UserRole.ADMIN, UserRole.DISTRIBUTOR, UserRole.SHOP, UserRole.TECHNICIAN)
     createOrderRequest(
         @GetUser('_id') userId: string,
         @Body() createOrderDto: CreateOrderDto,

@@ -21,6 +21,9 @@ export class User {
   @Prop({ unique: true, sparse: true })
   email?: string;
 
+  @Prop({ unique: true, sparse: true })
+  username?: string;
+
   @Prop()
   password?: string;
 
