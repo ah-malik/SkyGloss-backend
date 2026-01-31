@@ -23,16 +23,11 @@ export class Product {
     @Prop({ type: [String], default: [] })
     features: string[];
 
-    @Prop({
-        type: [
-            {
-                label: { type: String, required: true },
-                value: { type: String, required: true },
-            },
-        ],
-        default: [],
-    })
-    specifications: { label: string; value: string }[];
+    @Prop({ required: false })
+    specifications: string;
+
+    @Prop({ required: false })
+    technicalSpecifications: string;
 
     @Prop({ type: [String], default: [] })
     applicationGuide: string[];

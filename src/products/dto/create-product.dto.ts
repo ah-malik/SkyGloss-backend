@@ -56,11 +56,13 @@ export class CreateProductDto {
     @IsOptional()
     features?: string[];
 
-    @IsArray()
-    @ValidateNested({ each: true })
-    @Type(() => SpecificationDto)
+    @IsString()
     @IsOptional()
-    specifications?: SpecificationDto[];
+    specifications?: string;
+
+    @IsString()
+    @IsOptional()
+    technicalSpecifications?: string;
 
     @IsArray()
     @IsString({ each: true })
