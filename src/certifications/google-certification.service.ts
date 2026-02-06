@@ -44,9 +44,7 @@ export class GoogleCertificationService {
             zip: certData.shopZip,
             instagram: certData.shopInstagram || '',
             facebook: certData.shopFacebook || '',
-            website: certData.shopWebsite || '',
-            paymentStatus: status,
-            certificateNumber: certData.certificateNumber || 'PENDING APPROVAL'
+            website: certData.shopWebsite || ''
         };
 
         logEntry(`[GoogleSheet] Attempting port for ${certData.shopName} (Status: ${status}) to ${webappUrl}`);

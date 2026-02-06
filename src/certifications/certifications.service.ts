@@ -137,14 +137,22 @@ export class CertificationsService {
   }
 
   private async confirmPayment(sessionId: string) {
+    // First check if already paid to avoid duplicate processing
+    const existing = await this.certificationModel.findOne({ stripeSessionId: sessionId });
+    if (existing && existing.paymentStatus === PaymentStatus.PAID) {
+      this.logger.log(`Payment already confirmed for session ${sessionId}, skipping...`);
+      return;
+    }
+
     const cert = await this.certificationModel.findOneAndUpdate(
-      { stripeSessionId: sessionId },
+      { stripeSessionId: sessionId, paymentStatus: { $ne: PaymentStatus.PAID } },
       { paymentStatus: PaymentStatus.PAID },
       { new: true }
     );
 
     if (cert) {
-      // Port to Google Sheet as PAID
+      // Port to Google Sheet as PAID - only happens once
+      this.logger.log(`Porting to Google Sheet for ${cert.shopName}`);
       this.googleCertificationService.portToGoogleSheet(cert, 'PAID').catch(err => {
         this.logger.error(`Payment porting failed: ${err.message}`);
       });

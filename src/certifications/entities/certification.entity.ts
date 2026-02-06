@@ -69,9 +69,6 @@ export class Certification {
   @Prop()
   stripeSessionId?: string;
 
-  @Prop()
-  certificateNumber?: string;
-
   @Prop({ default: 25.0 })
   amount: number;
 }

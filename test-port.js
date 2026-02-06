@@ -1,27 +1,29 @@
 const axios = require('axios');
 
-const webappUrl = 'https://script.google.com/macros/s/AKfycbyS5hJD8kn_pq6qKlnBynwBODvJ-3DIbVOefKm8ZPCVRYe9sn1xSa4CKsbhB1Fc40y1Zw/exec';
+// NEW Google Apps Script URL
+const webappUrl = 'https://script.google.com/macros/s/AKfycbzkp7ZcKynIad4V4Juj9YDplfcJUPwjmbI9lijYzfOqemYoixN427hYVft1Pg27CijpIA/exec';
 
 const payload = {
-    requesterName: "ANTIGRAVITY TESTER",
-    distributorName: "GLOBAL DISTRIBUTOR",
-    shopName: "SKYGLOSS ELITE SHOP",
-    shopEmail: "test@skygloss.com",
-    shopPhone: "+1 (555) 000-TEST",
+    requesterName: "CLEAN TEST",
+    distributorName: "NO PENDING",
+    shopName: "FINAL TEST SHOP",
+    shopEmail: "clean@test.com",
+    shopPhone: "+1-555-CLEAN",
     country: "USA",
-    streetAddress: "789 Master Way",
-    city: "New York",
-    state: "NY",
-    zip: "10001",
-    instagram: "@skygloss_test",
-    facebook: "SkyGloss Official",
-    website: "www.skygloss-test.com",
-    certificateNumber: "SG-CERT-2026-FINAL-VERIFY"
+    streetAddress: "123 Clean Street",
+    city: "Test City",
+    state: "TX",
+    zip: "77777",
+    instagram: "@cleantest",
+    facebook: "Clean Test",
+    website: "www.cleantest.com"
 };
 
 async function test() {
     try {
-        console.log('Attempting POST to Google Web App...');
+        console.log('Attempting POST to NEW Google Web App...');
+        console.log('URL:', webappUrl);
+        console.log('Payload:', JSON.stringify(payload, null, 2));
         const response = await axios.post(webappUrl, payload, {
             headers: { 'Content-Type': 'application/json' },
             maxRedirects: 10
