@@ -52,20 +52,20 @@ export class SeedService implements OnModuleInit {
         console.log('[SeedService] Distributor created');
       }
 
-      // 3. Seed Static Access Code
-      const staticCode = '12345678';
-      const existingCode = await (
+      // 3. Seed Static Access Codes
+      const shopCode = '71648821';
+      const existingShopCode = await (
         this.accessCodesService as any
-      ).accessCodeModel.findOne({ code: staticCode });
-      if (!existingCode) {
+      ).accessCodeModel.findOne({ code: shopCode });
+      if (!existingShopCode) {
         await (this.accessCodesService as any).accessCodeModel.create({
-          code: staticCode,
-          targetRole: UserRole.TECHNICIAN,
+          code: shopCode,
+          targetRole: UserRole.SHOP,
           generatedBy: admin._id,
           expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1 year
           isUsed: false,
         });
-        console.log('[SeedService] Static test code 12345678 created');
+        console.log('[SeedService] Shop test code 71648821 created');
       }
 
       // 4. Seed Products

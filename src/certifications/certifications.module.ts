@@ -1,11 +1,10 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
-import { CertificationsController } from './certifications.controller';
+import { HttpModule } from '@nestjs/axios';
 import { CertificationsService } from './certifications.service';
-import {
-  Certification,
-  CertificationSchema,
-} from './entities/certification.entity';
+import { CertificationsController } from './certifications.controller';
+import { Certification, CertificationSchema } from './entities/certification.entity';
+import { GoogleCertificationService } from './google-certification.service';
 
 @Module({
   imports: [
@@ -14,7 +13,7 @@ import {
     ]),
   ],
   controllers: [CertificationsController],
-  providers: [CertificationsService],
-  exports: [CertificationsService],
+  providers: [CertificationsService, GoogleCertificationService],
+  exports: [CertificationsService, GoogleCertificationService],
 })
-export class CertificationsModule {}
+export class CertificationsModule { }

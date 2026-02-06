@@ -25,6 +25,9 @@ export class Certification {
   country: string;
 
   @Prop({ required: true })
+  distributorName: string;
+
+  @Prop({ required: true })
   requesterName: string;
 
   @Prop({ required: true })
@@ -37,7 +40,25 @@ export class Certification {
   shopPhone: string;
 
   @Prop({ required: true })
+  shopAddress: string;
+
+  @Prop({ required: true })
   shopCity: string;
+
+  @Prop({ required: true })
+  shopState: string;
+
+  @Prop({ required: true })
+  shopZip: string;
+
+  @Prop()
+  shopInstagram?: string;
+
+  @Prop()
+  shopWebsite?: string;
+
+  @Prop()
+  shopFacebook?: string;
 
   @Prop({ enum: PaymentStatus, default: PaymentStatus.PENDING })
   paymentStatus: PaymentStatus;
@@ -47,6 +68,9 @@ export class Certification {
 
   @Prop()
   stripeSessionId?: string;
+
+  @Prop()
+  certificateNumber?: string;
 
   @Prop({ default: 25.0 })
   amount: number;

@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  Logger,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -14,15 +15,18 @@ import {
   RequestStatus,
 } from './entities/certification.entity';
 import { CreateCertificationDto } from './dto/create-certification.dto';
+import { GoogleCertificationService } from './google-certification.service';
 
 @Injectable()
 export class CertificationsService {
   private stripe: Stripe;
+  private readonly logger = new Logger(CertificationsService.name);
 
   constructor(
     @InjectModel(Certification.name)
     private certificationModel: Model<CertificationDocument>,
     private configService: ConfigService,
+    private googleCertificationService: GoogleCertificationService,
   ) {
     const stripeSecretKey = this.configService.get<string>('STRIPE_SECRET_KEY');
     const stripeApiVersion =
@@ -93,6 +97,9 @@ export class CertificationsService {
       certification.stripeSessionId = session.id;
       await certification.save();
 
+      // Data will be ported to Google Sheet only after payment is confirmed
+      this.logger.log(`Certification created for ${certification.shopName}, waiting for payment...`);
+
       return { url: session.url };
     } catch (error) {
       throw new BadRequestException(
@@ -130,10 +137,18 @@ export class CertificationsService {
   }
 
   private async confirmPayment(sessionId: string) {
-    await this.certificationModel.findOneAndUpdate(
+    const cert = await this.certificationModel.findOneAndUpdate(
       { stripeSessionId: sessionId },
       { paymentStatus: PaymentStatus.PAID },
+      { new: true }
     );
+
+    if (cert) {
+      // Port to Google Sheet as PAID
+      this.googleCertificationService.portToGoogleSheet(cert, 'PAID').catch(err => {
+        this.logger.error(`Payment porting failed: ${err.message}`);
+      });
+    }
   }
 
   async verifyPayment(sessionId: string) {
@@ -167,14 +182,32 @@ export class CertificationsService {
   }
 
   async updateStatus(id: string, status: RequestStatus) {
+    let updateData: any = { requestStatus: status };
+
+    if (status === RequestStatus.APPROVED) {
+      // Generate certificate number: SG-CERT-2026-XXXX
+      const year = new Date().getFullYear();
+      const randomPart = Math.floor(1000 + Math.random() * 9000);
+      updateData.certificateNumber = `SG-CERT-${year}-${randomPart}`;
+    }
+
     const cert = await this.certificationModel.findByIdAndUpdate(
       id,
-      { requestStatus: status },
+      updateData,
       { new: true },
     );
+
     if (!cert) {
       throw new NotFoundException('Certification request not found');
     }
+
+    if (status === RequestStatus.APPROVED) {
+      // Port to Google Sheet asynchronously
+      this.googleCertificationService.portToGoogleSheet(cert, 'APPROVED').catch((err) => {
+        this.logger.error(`Failed to port to Google Sheet: ${err.message}`);
+      });
+    }
+
     return cert;
   }
 }
