@@ -21,6 +21,9 @@ export class Product {
     images: string[];
 
     @Prop({ type: [String], default: [] })
+    shopImages: string[];
+
+    @Prop({ type: [String], default: [] })
     features: string[];
 
     @Prop({ required: false })

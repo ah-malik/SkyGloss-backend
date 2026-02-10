@@ -54,6 +54,11 @@ export class CreateProductDto {
     @IsArray()
     @IsString({ each: true })
     @IsOptional()
+    shopImages?: string[];
+
+    @IsArray()
+    @IsString({ each: true })
+    @IsOptional()
     features?: string[];
 
     @IsString()
