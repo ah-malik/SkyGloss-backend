@@ -35,7 +35,7 @@ const UserModel = mongoose.model('User', UserSchema);
 async function run() {
     console.log('Connecting to MongoDB...');
     try {
-        await mongoose.connect(MONGO_URI);
+        await mongoose.connect(MONGO_URI as string);
         console.log('Connected to MongoDB.');
 
         const jsonPath = path.join(__dirname, '..', 'access_codes.json');
@@ -79,7 +79,7 @@ async function run() {
             const existingDocs = await AccessCodeModel.find({ code: { $in: batchCodes } }).select('code');
             const existingSet = new Set(existingDocs.map(doc => doc.code));
 
-            const operations = [];
+            const operations: any[] = [];
             for (const code of batchCodes) {
                 if (!existingSet.has(code)) {
                     operations.push({
