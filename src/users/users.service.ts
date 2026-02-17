@@ -103,6 +103,10 @@ export class UsersService implements OnModuleInit {
   }
 
   async remove(id: string): Promise<UserDocument | null> {
+    const user = await this.userModel.findById(id);
+    if (user && user.role === UserRole.ADMIN) {
+      throw new BadRequestException('Administrator accounts cannot be deleted');
+    }
     return this.userModel.findByIdAndDelete(id).exec();
   }
 
