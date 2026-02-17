@@ -69,12 +69,26 @@ export class AccessCodesService {
     await this.accessCodeModel.updateOne({ code }, { isUsed: true });
   }
 
-  async findAll(): Promise<AccessCode[]> {
-    return this.accessCodeModel
-      .find()
-      .populate('generatedBy', 'firstName lastName email')
-      .sort({ createdAt: -1 })
-      .exec();
+  async findAll(page: number = 1, limit: number = 20): Promise<{ data: AccessCode[], total: number, page: number, totalPages: number }> {
+    const skip = (page - 1) * limit;
+
+    const [data, total] = await Promise.all([
+      this.accessCodeModel
+        .find()
+        .populate('generatedBy', 'firstName lastName email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .exec(),
+      this.accessCodeModel.countDocuments().exec()
+    ]);
+
+    return {
+      data,
+      total,
+      page,
+      totalPages: Math.ceil(total / limit)
+    };
   }
 
   private generateRandomCode(length: number): string {

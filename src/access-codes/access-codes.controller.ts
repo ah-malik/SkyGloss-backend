@@ -8,6 +8,7 @@ import {
   Delete,
   UseGuards,
   Request,
+  Query,
 } from '@nestjs/common';
 import { AccessCodesService } from './access-codes.service';
 import { CreateAccessCodeDto } from './dto/create-access-code.dto';
@@ -19,7 +20,7 @@ import { UserRole } from '../users/entities/user.entity';
 @Controller('access-codes')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class AccessCodesController {
-  constructor(private readonly accessCodesService: AccessCodesService) {}
+  constructor(private readonly accessCodesService: AccessCodesService) { }
 
   @Post()
   @Roles(UserRole.ADMIN, UserRole.DISTRIBUTOR)
@@ -34,7 +35,7 @@ export class AccessCodesController {
 
   @Get()
   @Roles(UserRole.ADMIN, UserRole.DISTRIBUTOR)
-  findAll() {
-    return this.accessCodesService.findAll();
+  findAll(@Query('page') page: number = 1, @Query('limit') limit: number = 20) {
+    return this.accessCodesService.findAll(+page, +limit);
   }
 }
