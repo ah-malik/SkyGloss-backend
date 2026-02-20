@@ -16,10 +16,12 @@ import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { ProductsService } from './products.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
+import { User, UserRole } from '../users/entities/user.entity';
+import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
-import { UserRole } from '../users/entities/user.entity';
+import { GetUser } from '../common/decorators/get-user.decorator';
 
 @Controller('products')
 export class ProductsController {
@@ -51,16 +53,22 @@ export class ProductsController {
     }
 
     @Get()
+    @UseGuards(OptionalJwtAuthGuard)
     findAll(
         @Query('status') status?: string,
         @Query('targetAudience') targetAudience?: string,
+        @GetUser() user?: User,
     ) {
-        return this.productsService.findAll(status, targetAudience);
+        return this.productsService.findAll(status, targetAudience, user);
     }
 
     @Get(':id')
-    findOne(@Param('id') id: string) {
-        return this.productsService.findOne(id);
+    @UseGuards(OptionalJwtAuthGuard)
+    findOne(
+        @Param('id') id: string,
+        @GetUser() user?: User,
+    ) {
+        return this.productsService.findOne(id, user);
     }
 
     @Patch(':id')
