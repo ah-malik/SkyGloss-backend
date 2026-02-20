@@ -3,12 +3,15 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { ProductGroup, ProductGroupDocument } from './entities/product-group.entity';
 import { CreateProductGroupDto, UpdateProductGroupDto } from './dto/product-group.dto';
+import { User, UserDocument } from '../users/entities/user.entity';
 
 @Injectable()
 export class ProductGroupsService {
     constructor(
         @InjectModel(ProductGroup.name)
         private productGroupModel: Model<ProductGroupDocument>,
+        @InjectModel(User.name)
+        private userModel: Model<UserDocument>,
     ) { }
 
     async create(createProductGroupDto: CreateProductGroupDto): Promise<ProductGroup> {
@@ -16,8 +19,19 @@ export class ProductGroupsService {
         return createdGroup.save();
     }
 
-    async findAll(): Promise<ProductGroup[]> {
-        return this.productGroupModel.find().populate('products.productId').exec();
+    async findAll(): Promise<any[]> {
+        const groups = await this.productGroupModel.find().populate('products.productId').lean().exec();
+
+        // Add user count to each group
+        const groupsWithCounts = await Promise.all(groups.map(async (group) => {
+            const userCount = await this.userModel.countDocuments({ productGroup: group._id as any }).exec();
+            return {
+                ...group,
+                userCount
+            };
+        }));
+
+        return groupsWithCounts;
     }
 
     async findOne(id: string): Promise<ProductGroup> {

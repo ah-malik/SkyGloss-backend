@@ -10,7 +10,7 @@ import { UserRole, UserStatus } from '../entities/user.entity';
 
 export class CreateUserDto {
   @IsEmail()
-  @IsOptional() 
+  @IsOptional()
   email?: string;
 
   @IsString()
@@ -53,4 +53,8 @@ export class CreateUserDto {
   @IsString()
   @IsOptional()
   accessCode?: string;
+
+  @IsString()
+  @IsOptional()
+  productGroup?: string;
 }
