@@ -8,6 +8,9 @@ export class ProductGroup {
     @Prop({ required: true, unique: true })
     name: string;
 
+    @Prop({ required: true, default: 'USD' })
+    currency: string;
+
     @Prop({
         type: [
             {

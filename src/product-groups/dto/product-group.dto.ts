@@ -23,6 +23,9 @@ export class CreateProductGroupDto {
     @IsString()
     name: string;
 
+    @IsString()
+    currency: string;
+
     @IsArray()
     @ValidateNested({ each: true })
     @Type(() => ProductItemDto)
@@ -37,6 +40,10 @@ export class UpdateProductGroupDto {
     @IsOptional()
     @IsString()
     name?: string;
+
+    @IsOptional()
+    @IsString()
+    currency?: string;
 
     @IsOptional()
     @IsArray()
