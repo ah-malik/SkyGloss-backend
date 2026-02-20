@@ -14,6 +14,7 @@ import { CloudinaryModule } from './cloudinary/cloudinary.module';
 import { OrdersModule } from './orders/orders.module';
 import { SupportModule } from './support/support.module';
 import { ChatModule } from './chat/chat.module';
+import { ProductGroupsModule } from './product-groups/product-groups.module';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { ChatModule } from './chat/chat.module';
     OrdersModule,
     SupportModule,
     ChatModule,
+    ProductGroupsModule,
   ],
   controllers: [AppController],
   providers: [AppService, SeedService],
