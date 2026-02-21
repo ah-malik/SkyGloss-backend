@@ -22,9 +22,18 @@ export class ProductsService {
     }
 
     async findAll(status?: string, targetAudience?: string, user?: User): Promise<any[]> {
+        console.log('[ProductsService] findAll called. User:', user ? `${(user as any)._id} (${user.username})` : 'Anonymous');
+        if (user) {
+            console.log('[ProductsService] User ProductGroup ID:', user.productGroup, 'Type:', typeof user.productGroup);
+            if (user.productGroup) {
+                console.log('[ProductsService] Is ObjectId:', (user.productGroup as any) instanceof MongooseSchema.Types.ObjectId);
+            }
+        }
+
         // 1. If user has a product group, restrict visibility and override prices
         if (user && user.productGroup) {
             const group = await this.productGroupModel.findById(user.productGroup).populate('products.productId').exec();
+            console.log('[ProductsService] Group Lookup Result:', group ? `Found: ${group.name} with ${group.products?.length} products` : 'NOT FOUND');
 
             if (group) {
                 // Return only products in the group with group-specific prices

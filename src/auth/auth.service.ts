@@ -49,6 +49,7 @@ export class AuthService {
         country: user.country,
         firstName: user.firstName,
         lastName: user.lastName,
+        productGroup: user.productGroup,
       },
     };
   }
@@ -91,6 +92,7 @@ export class AuthService {
               country: user.country,
               firstName: user.firstName,
               lastName: user.lastName,
+              productGroup: user.productGroup,
             },
           };
         }
@@ -116,6 +118,7 @@ export class AuthService {
           id: user._id.toString(),
           role: user.role,
           country: user.country,
+          productGroup: user.productGroup,
         },
       };
     } catch (err: any) {

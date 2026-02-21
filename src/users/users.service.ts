@@ -64,6 +64,10 @@ export class UsersService implements OnModuleInit {
       delete userData.email;
     }
 
+    if (userData.productGroup === '') {
+      delete userData.productGroup;
+    }
+
     const createdUser = new this.userModel(userData);
     return createdUser.save();
   }
@@ -96,6 +100,9 @@ export class UsersService implements OnModuleInit {
   ): Promise<UserDocument | null> {
     if (updateUserDto.password) {
       updateUserDto.password = await bcrypt.hash(updateUserDto.password, 10);
+    }
+    if (updateUserDto.productGroup === '') {
+      (updateUserDto as any).productGroup = null;
     }
     return this.userModel
       .findByIdAndUpdate(id, updateUserDto, { new: true })
