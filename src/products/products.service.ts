@@ -23,44 +23,41 @@ export class ProductsService {
 
     async findAll(status?: string, targetAudience?: string, user?: User): Promise<any[]> {
         console.log('[ProductsService] findAll called. User:', user ? `${(user as any)._id} (${user.username})` : 'Anonymous');
-        if (user) {
-            console.log('[ProductsService] User ProductGroup ID:', user.productGroup, 'Type:', typeof user.productGroup);
-            if (user.productGroup) {
-                console.log('[ProductsService] Is ObjectId:', (user.productGroup as any) instanceof MongooseSchema.Types.ObjectId);
-            }
-        }
 
-        // 1. If user has a product group, restrict visibility and override prices
+        // 1. If user has a product group, STRICTLY restrict visibility and override prices
         if (user && user.productGroup) {
+            console.log('[ProductsService] User has productGroup:', user.productGroup);
             const group = await this.productGroupModel.findById(user.productGroup).populate('products.productId').exec();
-            console.log('[ProductsService] Group Lookup Result:', group ? `Found: ${group.name} with ${group.products?.length} products` : 'NOT FOUND');
 
-            if (group) {
-                // Return only products in the group with group-specific prices
-                return group.products.map(item => {
-                    const product = item.productId as any;
-                    if (!product) return null;
-
-                    // Deep clone and override
-                    const productObj = product.toObject();
-
-                    // Filter out sizes not in group? Or just override prices?
-                    // The requirement implies "surkh usi group se mutaliq products"
-                    // We'll return the product with sizes/prices overridden by the group data
-                    return {
-                        ...productObj,
-                        sizes: item.sizes.map(s => ({
-                            size: s.size,
-                            price: s.price
-                        })),
-                        currency: group.currency || 'USD',
-                        groupName: group.name
-                    };
-                }).filter(p => p !== null);
+            if (!group) {
+                console.warn(`[ProductsService] Group ${user.productGroup} assigned to user but NOT FOUND in database.`);
+                return []; // Strict: If group assigned but not found, return NO products
             }
+
+            console.log(`[ProductsService] Filtering for group: ${group.name} (${group.products?.length} items)`);
+
+            // Return only products in the group with group-specific prices
+            return group.products.map(item => {
+                const product = item.productId as any;
+                if (!product) return null;
+
+                // Deep clone and override
+                const productObj = product.toObject();
+
+                return {
+                    ...productObj,
+                    sizes: item.sizes.map(s => ({
+                        size: s.size,
+                        price: s.price
+                    })),
+                    currency: group.currency || 'USD',
+                    groupName: group.name
+                };
+            }).filter(p => p !== null);
         }
 
-        // 2. Fallback to standard fetching (for public or users without groups)
+        // 2. Fallback to standard fetching ONLY for users WITHOUT a product group or anonymous users
+        console.log('[ProductsService] Falling back to standard product fetching.');
         const filter: any = {};
         if (status) filter.status = status;
         if (targetAudience) filter.targetAudience = { $in: [targetAudience, 'all'] };
@@ -69,28 +66,37 @@ export class ProductsService {
     }
 
     async findOne(id: string, user?: User): Promise<any> {
+        console.log(`[ProductsService] findOne called for ID: ${id}. User:`, user ? (user as any)._id : 'Anonymous');
+
         // 1. Check if user has a product group and if this product is in it
         if (user && user.productGroup) {
             const group = await this.productGroupModel.findById(user.productGroup).populate('products.productId').exec();
-            if (group) {
-                const groupItem = group.products.find(item =>
-                    (item.productId as any)?._id?.toString() === id ||
-                    (item.productId as any)?.id?.toString() === id
-                );
 
-                if (groupItem) {
-                    const product = groupItem.productId as any;
-                    const productObj = product.toObject();
-                    return {
-                        ...productObj,
-                        sizes: groupItem.sizes.map(s => ({
-                            size: s.size,
-                            price: s.price
-                        })),
-                        currency: group.currency || 'USD',
-                        groupName: group.name
-                    };
-                }
+            if (!group) {
+                console.warn(`[ProductsService] Group ${user.productGroup} assigned to user but NOT FOUND.`);
+                throw new NotFoundException(`Product with ID ${id} not found for your group`);
+            }
+
+            const groupItem = group.products.find(item =>
+                (item.productId as any)?._id?.toString() === id ||
+                (item.productId as any)?.id?.toString() === id
+            );
+
+            if (groupItem) {
+                const product = groupItem.productId as any;
+                const productObj = product.toObject();
+                return {
+                    ...productObj,
+                    sizes: groupItem.sizes.map(s => ({
+                        size: s.size,
+                        price: s.price
+                    })),
+                    currency: group.currency || 'USD',
+                    groupName: group.name
+                };
+            } else {
+                console.warn(`[ProductsService] Product ${id} NOT found in user's group ${group.name}`);
+                throw new NotFoundException(`Product with ID ${id} not found in your assigned group`);
             }
         }
 
