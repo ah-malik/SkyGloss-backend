@@ -124,10 +124,7 @@ export class UsersService implements OnModuleInit {
       role: UserRole.DISTRIBUTOR,
     });
     const shop = await this.userModel.countDocuments({ role: UserRole.SHOP });
-    const technician = await this.userModel.countDocuments({
-      role: UserRole.TECHNICIAN,
-    });
 
-    return { total, admin, distributor, shop, technician };
+    return { total, admin, distributor, shop };
   }
 }

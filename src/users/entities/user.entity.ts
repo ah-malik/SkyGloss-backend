@@ -7,7 +7,6 @@ export enum UserRole {
   ADMIN = 'admin',
   DISTRIBUTOR = 'distributor',
   SHOP = 'shop',
-  TECHNICIAN = 'technician',
 }
 
 export enum UserStatus {
