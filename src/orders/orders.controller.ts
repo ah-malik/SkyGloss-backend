@@ -14,7 +14,7 @@ export class OrdersController {
 
     @Post('checkout-session')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.SHOP, UserRole.TECHNICIAN)
+    @Roles(UserRole.SHOP)
     createCheckoutSession(
         @GetUser('_id') userId: string,
         @GetUser('role') role: string,
@@ -25,21 +25,21 @@ export class OrdersController {
 
     @Get('my-orders')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.SHOP, UserRole.TECHNICIAN)
+    @Roles(UserRole.SHOP)
     getMyOrders(@GetUser('_id') userId: string) {
         return this.ordersService.getMyOrders(userId);
     }
 
     @Get(':id')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.SHOP, UserRole.TECHNICIAN, UserRole.ADMIN)
+    @Roles(UserRole.SHOP, UserRole.ADMIN)
     getOrderById(@Param('id') id: string) {
         return this.ordersService.getOrderById(id);
     }
 
     @Get('verify/:orderId')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.SHOP, UserRole.TECHNICIAN)
+    @Roles(UserRole.SHOP)
     verifyPayment(@Param('orderId') orderId: string) {
         return this.ordersService.verifyPayment(orderId);
     }
@@ -80,7 +80,7 @@ export class OrdersController {
 
     @Post('request')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.ADMIN, UserRole.DISTRIBUTOR, UserRole.SHOP, UserRole.TECHNICIAN)
+    @Roles(UserRole.ADMIN, UserRole.DISTRIBUTOR, UserRole.SHOP)
     createOrderRequest(
         @GetUser('_id') userId: string,
         @Body() createOrderDto: CreateOrderDto,
