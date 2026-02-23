@@ -61,6 +61,12 @@ export class User {
   @Prop()
   accessCode?: string;
 
+  @Prop()
+  address?: string;
+
+  @Prop()
+  city?: string;
+
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'ProductGroup' })
   productGroup?: MongooseSchema.Types.ObjectId;
 }

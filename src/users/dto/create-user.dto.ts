@@ -56,5 +56,13 @@ export class CreateUserDto {
 
   @IsString()
   @IsOptional()
+  address?: string;
+
+  @IsString()
+  @IsOptional()
+  city?: string;
+
+  @IsString()
+  @IsOptional()
   productGroup?: string;
 }
