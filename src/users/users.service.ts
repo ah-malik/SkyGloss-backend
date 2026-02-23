@@ -32,6 +32,7 @@ export class UsersService implements OnModuleInit {
   }
 
   async create(createUserDto: CreateUserDto): Promise<UserDocument> {
+    console.log('[UsersService] Creating user with DTO:', JSON.stringify(createUserDto, null, 2));
     if (createUserDto.email) {
       const existingUser = await this.userModel.findOne({
         email: createUserDto.email,
@@ -98,6 +99,7 @@ export class UsersService implements OnModuleInit {
     id: string,
     updateUserDto: UpdateUserDto,
   ): Promise<UserDocument | null> {
+    console.log(`[UsersService] Updating user ${id} with DTO:`, JSON.stringify(updateUserDto, null, 2));
     if (updateUserDto.password) {
       updateUserDto.password = await bcrypt.hash(updateUserDto.password, 10);
     }
