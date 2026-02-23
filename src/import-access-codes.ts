@@ -84,7 +84,7 @@ async function run() {
                 if (!existingSet.has(code)) {
                     operations.push({
                         code: code,
-                        targetRole: 'shop',
+                        targetRole: 'certified_shop',
                         generatedBy: admin._id,
                         expiresAt,
                         isUsed: false,
