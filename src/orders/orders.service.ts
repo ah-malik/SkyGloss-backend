@@ -52,10 +52,10 @@ export class OrdersService {
         const baseUrl = this.configService.get<string>('FRONTEND_URL') || 'https://skygloss-frontend.netlify.app';
         // Determine redirect path based on role
         let dashboardPath = '/dashboard/shop';
-        if (role === 'technician') {
-            dashboardPath = '/dashboard/technician';
-        } else if (role === 'distributor') {
+        if (role === 'master_distributor' || role === 'regional_distributor') {
             dashboardPath = '/dashboard/distributor';
+        } else if (role === 'certified_shop') {
+            dashboardPath = '/dashboard/shop';
         }
 
         try {

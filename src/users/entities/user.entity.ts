@@ -5,8 +5,9 @@ export type UserDocument = User & Document;
 
 export enum UserRole {
   ADMIN = 'admin',
-  DISTRIBUTOR = 'distributor',
-  SHOP = 'shop',
+  MASTER_DISTRIBUTOR = 'master_distributor',
+  REGIONAL_DISTRIBUTOR = 'regional_distributor',
+  CERTIFIED_SHOP = 'certified_shop',
 }
 
 export enum UserStatus {

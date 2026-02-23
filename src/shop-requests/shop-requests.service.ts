@@ -73,7 +73,7 @@ export class ShopRequestsService {
           email: request.email,
           username: request.username,
           password: request.password,
-          role: UserRole.SHOP,
+          role: UserRole.CERTIFIED_SHOP,
           status: UserStatus.ACTIVE,
           country: request.country,
           phoneNumber: request.phoneNumber,
@@ -97,7 +97,7 @@ export class ShopRequestsService {
 
     // International Flow: Generate Access Code
     const accessCode = await this.accessCodesService.generateCode(
-      UserRole.SHOP,
+      UserRole.CERTIFIED_SHOP,
       adminId,
       30, // 30 days validity
       request.email,

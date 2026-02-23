@@ -9,7 +9,7 @@ export class AccessCode {
   @Prop({ required: true, unique: true })
   code: string; // 8-digit
 
-  @Prop({ required: true, enum: [UserRole.SHOP] })
+  @Prop({ required: true, enum: [UserRole.CERTIFIED_SHOP] })
   targetRole: UserRole;
 
   @Prop({ default: false })

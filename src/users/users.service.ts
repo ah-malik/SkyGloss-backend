@@ -120,11 +120,16 @@ export class UsersService implements OnModuleInit {
   async getStats() {
     const total = await this.userModel.countDocuments();
     const admin = await this.userModel.countDocuments({ role: UserRole.ADMIN });
-    const distributor = await this.userModel.countDocuments({
-      role: UserRole.DISTRIBUTOR,
+    const master_distributor = await this.userModel.countDocuments({
+      role: UserRole.MASTER_DISTRIBUTOR,
     });
-    const shop = await this.userModel.countDocuments({ role: UserRole.SHOP });
+    const regional_distributor = await this.userModel.countDocuments({
+      role: UserRole.REGIONAL_DISTRIBUTOR,
+    });
+    const certified_shop = await this.userModel.countDocuments({
+      role: UserRole.CERTIFIED_SHOP,
+    });
 
-    return { total, admin, distributor, shop };
+    return { total, admin, master_distributor, regional_distributor, certified_shop };
   }
 }

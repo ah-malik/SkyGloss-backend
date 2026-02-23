@@ -52,7 +52,7 @@ export class Product {
     @Prop({ default: 'published', enum: ['published', 'draft'] })
     status: string;
 
-    @Prop({ default: 'all', enum: ['shop', 'technician', 'all'] })
+    @Prop({ default: 'all', enum: ['certified_shop', 'all'] })
     targetAudience: string;
 
     @Prop({ default: 0 })

@@ -42,7 +42,7 @@ export class SeedService implements OnModuleInit {
         distributor = await this.usersService.create({
           email: distEmail,
           password: 'distpassword123',
-          role: UserRole.DISTRIBUTOR,
+          role: UserRole.MASTER_DISTRIBUTOR,
           firstName: 'Global',
           lastName: 'Distributor',
           status: UserStatus.ACTIVE,
@@ -60,7 +60,7 @@ export class SeedService implements OnModuleInit {
       if (!existingShopCode) {
         await (this.accessCodesService as any).accessCodeModel.create({
           code: shopCode,
-          targetRole: UserRole.SHOP,
+          targetRole: UserRole.CERTIFIED_SHOP,
           generatedBy: admin._id,
           expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1 year
           isUsed: false,
