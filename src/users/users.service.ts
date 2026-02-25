@@ -134,4 +134,22 @@ export class UsersService implements OnModuleInit {
 
     return { total, admin, master_distributor, regional_distributor, certified_shop };
   }
+
+  async completeCourse(userId: string, courseName: string): Promise<UserDocument | null> {
+    return this.userModel.findByIdAndUpdate(
+      userId,
+      { $addToSet: { completedCourses: courseName } },
+      { new: true },
+    ).exec();
+  }
+  async updateCourseProgress(userId: string, courseName: string, stepId: string): Promise<UserDocument | null> {
+    const update: any = {};
+    update[`courseProgress.${courseName}`] = stepId;
+
+    return this.userModel.findByIdAndUpdate(
+      userId,
+      { $addToSet: update },
+      { new: true },
+    ).exec();
+  }
 }

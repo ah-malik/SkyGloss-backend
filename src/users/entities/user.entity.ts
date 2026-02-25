@@ -69,6 +69,12 @@ export class User {
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'ProductGroup' })
   productGroup?: MongooseSchema.Types.ObjectId;
+
+  @Prop({ type: [String], default: [] })
+  completedCourses: string[];
+
+  @Prop({ type: MongooseSchema.Types.Map, of: [String], default: {} })
+  courseProgress: Map<string, string[]>;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

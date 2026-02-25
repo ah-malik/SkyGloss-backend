@@ -65,4 +65,7 @@ export class CreateUserDto {
   @IsString()
   @IsOptional()
   productGroup?: string;
+  @IsString({ each: true })
+  @IsOptional()
+  completedCourses?: string[];
 }

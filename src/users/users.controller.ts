@@ -14,12 +14,14 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
-import { UserRole } from './entities/user.entity';
+import { UserRole, UserDocument } from './entities/user.entity';
+import { GetUser } from '../common/decorators/get-user.decorator';
+import { Request } from 'express';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(private readonly usersService: UsersService) { }
 
   @Post()
   @Roles(UserRole.ADMIN)
@@ -55,5 +57,22 @@ export class UsersController {
   @Roles(UserRole.ADMIN)
   remove(@Param('id') id: string) {
     return this.usersService.remove(id);
+  }
+
+  @Patch('me/complete-course')
+  completeCourse(
+    @GetUser() user: UserDocument,
+    @Body('courseName') courseName: string,
+  ) {
+    return this.usersService.completeCourse(user._id.toString(), courseName);
+  }
+
+  @Patch('me/course-progress')
+  updateCourseProgress(
+    @GetUser() user: UserDocument,
+    @Body('courseName') courseName: string,
+    @Body('stepId') stepId: string,
+  ) {
+    return this.usersService.updateCourseProgress(user._id.toString(), courseName, stepId);
   }
 }
