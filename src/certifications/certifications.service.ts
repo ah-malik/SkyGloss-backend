@@ -16,6 +16,9 @@ import {
 } from './entities/certification.entity';
 import { CreateCertificationDto } from './dto/create-certification.dto';
 import { GoogleCertificationService } from './google-certification.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationsGateway } from '../notifications/notifications.gateway';
+import { NotificationType } from '../notifications/entities/notification.entity';
 
 @Injectable()
 export class CertificationsService {
@@ -27,6 +30,8 @@ export class CertificationsService {
     private certificationModel: Model<CertificationDocument>,
     private configService: ConfigService,
     private googleCertificationService: GoogleCertificationService,
+    private notificationsService: NotificationsService,
+    private notificationsGateway: NotificationsGateway,
   ) {
     const stripeSecretKey = this.configService.get<string>('STRIPE_SECRET_KEY');
     const stripeApiVersion =
@@ -97,6 +102,17 @@ export class CertificationsService {
       certification.stripeSessionId = session.id;
       await certification.save();
 
+      // Create notification for admin
+      const notification = await this.notificationsService.create({
+        type: NotificationType.CERT_REQUEST,
+        title: 'New Certification Request',
+        message: `New certificate request from ${certification.shopName}.`,
+        metadata: { certificationId: certification._id, shopName: certification.shopName },
+        user: userId,
+        link: `/certification-requests`
+      });
+      this.notificationsGateway.broadcastNotification(notification);
+
       // Data will be ported to Google Sheet only after payment is confirmed
       this.logger.log(`Certification created for ${certification.shopName}, waiting for payment...`);
 
@@ -156,6 +172,17 @@ export class CertificationsService {
       this.googleCertificationService.portToGoogleSheet(cert, 'PAID').catch(err => {
         this.logger.error(`Payment porting failed: ${err.message}`);
       });
+
+      // Create notification for admin
+      const notification = await this.notificationsService.create({
+        type: NotificationType.CERT_PAID,
+        title: 'Certification Paid',
+        message: `Certification for ${cert.shopName} has been paid.`,
+        metadata: { certificationId: cert._id, shopName: cert.shopName },
+        user: cert.distributor as any,
+        link: `/certification-requests`
+      });
+      this.notificationsGateway.broadcastNotification(notification);
     }
   }
 

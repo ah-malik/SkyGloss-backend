@@ -5,6 +5,9 @@ import { ConfigService } from '@nestjs/config';
 import Stripe from 'stripe';
 import { Order, OrderDocument, OrderStatus } from './entities/order.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationsGateway } from '../notifications/notifications.gateway';
+import { NotificationType } from '../notifications/entities/notification.entity';
 
 @Injectable()
 export class OrdersService {
@@ -13,6 +16,8 @@ export class OrdersService {
     constructor(
         @InjectModel(Order.name) private orderModel: Model<OrderDocument>,
         private configService: ConfigService,
+        private notificationsService: NotificationsService,
+        private notificationsGateway: NotificationsGateway,
     ) {
         const stripeSecretKey = this.configService.get<string>('STRIPE_SECRET_KEY');
         const stripeApiVersion = this.configService.get<string>('STRIPE_API_VERSION') || '2022-11-15';
@@ -183,10 +188,21 @@ export class OrdersService {
         const orderId = session.client_reference_id || session.metadata?.orderId;
 
         if (event.type === 'checkout.session.completed') {
-            if (orderId) {
-                await this.orderModel.findByIdAndUpdate(orderId, {
-                    status: OrderStatus.PAID
+            const updatedOrder = await this.orderModel.findByIdAndUpdate(orderId, {
+                status: OrderStatus.PAID
+            }, { new: true }).populate('user', 'firstName lastName');
+
+            if (updatedOrder) {
+                // Create notification for admin
+                const notification = await this.notificationsService.create({
+                    type: NotificationType.ORDER_PAID,
+                    title: 'Order Paid',
+                    message: `Order ${updatedOrder.orderNumber} has been paid by ${updatedOrder.user ? (updatedOrder.user as any).firstName : 'a user'}.`,
+                    metadata: { orderId: updatedOrder._id, orderNumber: updatedOrder.orderNumber },
+                    user: (updatedOrder.user as any)?._id,
+                    link: `/orders/${updatedOrder._id}`
                 });
+                this.notificationsGateway.broadcastNotification(notification);
             }
         } else if (event.type === 'checkout.session.async_payment_failed' || event.type === 'checkout.session.expired') {
             if (orderId) {
@@ -226,7 +242,20 @@ export class OrdersService {
             orderNumber: `REQ-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
         });
 
-        return order.save();
+        const savedOrder = await order.save();
+
+        // Create notification for admin
+        const notification = await this.notificationsService.create({
+            type: NotificationType.ORDER_PLACED,
+            title: 'New Order Request',
+            message: `A new order request ${savedOrder.orderNumber} has been submitted.`,
+            metadata: { orderId: savedOrder._id, orderNumber: savedOrder.orderNumber },
+            user: userId,
+            link: `/orders/${savedOrder._id}`
+        });
+        this.notificationsGateway.broadcastNotification(notification);
+
+        return savedOrder;
     }
 
     async getDashboardStats() {
