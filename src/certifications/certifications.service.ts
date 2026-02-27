@@ -86,13 +86,13 @@ export class CertificationsService {
       const session = await this.stripe.checkout.sessions.create({
         line_items: [
           {
-            price: 'price_1ShyVv2LCzOLfpYpDkE7JN6P',
+            price: 'price_1T5CuRGx4jZwvOVN0WsbjUgw',
             quantity: 1,
           },
         ],
         mode: 'payment',
-        success_url: `${this.configService.get<string>('FRONTEND_URL') || 'https://skygloss-frontend.netlify.app/'}/dashboard/distributor?success=true&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${this.configService.get<string>('FRONTEND_URL') || 'https://skygloss-frontend.netlify.app/'}/dashboard/distributor?canceled=true`,
+        success_url: `${this.configService.get<string>('FRONTEND_URL') || 'https://skygloss-frontend.netlify.app'}/dashboard/distributor?success=true&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${this.configService.get<string>('FRONTEND_URL') || 'https://skygloss-frontend.netlify.app'}/dashboard/distributor?canceled=true`,
         client_reference_id: certification._id.toString(),
         metadata: {
           certificationId: certification._id.toString(),
