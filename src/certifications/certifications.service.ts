@@ -76,23 +76,34 @@ export class CertificationsService {
     }
     const amount = 2500; // $25.00 in cents
 
-    // Create a pending certification request
+    // 1. Save record FIRST to guarantee it exists in DB before Stripe/Webhook/Verification hits
     const certification = new this.certificationModel({
       ...createDto,
       distributor: userId,
       amount: amount / 100,
+      paymentStatus: PaymentStatus.PENDING,
+      requestStatus: RequestStatus.PENDING
     });
+    await certification.save();
+
+    const baseUrl = this.configService.get<string>('FRONTEND_URL') || 'https://skygloss-frontend.netlify.app';
+    this.logger.log(`Creating Checkout Session for ${certification.shopName}, baseUrl: ${baseUrl}`);
+
     try {
       const session = await this.stripe.checkout.sessions.create({
         line_items: [
           {
-            price: 'price_1T5CuRGx4jZwvOVN0WsbjUgw',
+            price_data: {
+              currency: 'usd',
+              product: 'prod_U4nSmaaZP83BMv',
+              unit_amount: amount,
+            },
             quantity: 1,
           },
         ],
         mode: 'payment',
-        success_url: `${this.configService.get<string>('FRONTEND_URL') || 'https://skygloss-frontend.netlify.app'}/dashboard/distributor?success=true&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${this.configService.get<string>('FRONTEND_URL') || 'https://skygloss-frontend.netlify.app'}/dashboard/distributor?canceled=true`,
+        success_url: `${baseUrl}/dashboard/distributor?success=true&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${baseUrl}/dashboard/distributor?canceled=true`,
         client_reference_id: certification._id.toString(),
         metadata: {
           certificationId: certification._id.toString(),
@@ -145,24 +156,40 @@ export class CertificationsService {
     }
 
     if (event.type === 'checkout.session.completed') {
-      const session = event.data.object;
-      await this.confirmPayment(session.id);
+      const session = event.data.object as Stripe.Checkout.Session;
+      const certificationId = session.client_reference_id || session.metadata?.certificationId;
+      await this.confirmPayment(session.id, certificationId);
     }
 
     return { received: true };
   }
 
-  private async confirmPayment(sessionId: string) {
-    // First check if already paid to avoid duplicate processing
-    const existing = await this.certificationModel.findOne({ stripeSessionId: sessionId });
-    if (existing && existing.paymentStatus === PaymentStatus.PAID) {
-      this.logger.log(`Payment already confirmed for session ${sessionId}, skipping...`);
+  private async confirmPayment(sessionId: string, certificationId?: string) {
+    this.logger.log(`[confirmPayment] session: ${sessionId}, certId: ${certificationId}`);
+
+    let existing;
+    if (certificationId) {
+      existing = await this.certificationModel.findById(certificationId);
+    }
+
+    if (!existing) {
+      existing = await this.certificationModel.findOne({ stripeSessionId: sessionId });
+    }
+
+    if (!existing) {
+      this.logger.warn(`[confirmPayment] FAILED: Record not found for session ${sessionId} / cert ${certificationId}`);
       return;
     }
 
-    const cert = await this.certificationModel.findOneAndUpdate(
-      { stripeSessionId: sessionId, paymentStatus: { $ne: PaymentStatus.PAID } },
-      { paymentStatus: PaymentStatus.PAID },
+    if (existing.paymentStatus === PaymentStatus.PAID) {
+      this.logger.warn(`[confirmPayment] SKIPPED: Already PAID for ${existing._id}`);
+      return;
+    }
+
+    this.logger.log(`[confirmPayment] SUCCESS: Updating ${existing._id} (Shop: ${existing.shopName}) to PAID`);
+    const cert = await this.certificationModel.findByIdAndUpdate(
+      existing._id,
+      { $set: { paymentStatus: PaymentStatus.PAID } },
       { new: true }
     );
 
@@ -187,18 +214,22 @@ export class CertificationsService {
   }
 
   async verifyPayment(sessionId: string) {
+    this.logger.log(`Verifying payment for session: ${sessionId}`);
     if (!this.stripe) {
       throw new BadRequestException('Stripe is not configured');
     }
 
     try {
       const session = await this.stripe.checkout.sessions.retrieve(sessionId);
+      this.logger.log(`Stripe session status: ${session.payment_status}`);
       if (session.payment_status === 'paid') {
-        await this.confirmPayment(sessionId);
+        const certId = session.client_reference_id || session.metadata?.certificationId;
+        await this.confirmPayment(sessionId, certId);
         return { success: true, status: 'paid' };
       }
       return { success: false, status: session.payment_status };
     } catch (error) {
+      this.logger.error(`Verification failed for session ${sessionId}: ${error.message}`);
       throw new BadRequestException(`Verification failed: ${error.message}`);
     }
   }

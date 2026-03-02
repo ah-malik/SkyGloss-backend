@@ -17,10 +17,11 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { UserRole } from '../users/entities/user.entity';
+import { GetUser } from '../common/decorators/get-user.decorator';
 
 @Controller('shop-requests')
 export class ShopRequestsController {
-  constructor(private readonly shopRequestsService: ShopRequestsService) {}
+  constructor(private readonly shopRequestsService: ShopRequestsService) { }
 
   @Post()
   create(@Body() createShopRequestDto: CreateShopRequestDto) {
@@ -44,8 +45,8 @@ export class ShopRequestsController {
   @Post(':id/approve')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
-  approve(@Param('id') id: string, @Request() req) {
-    return this.shopRequestsService.approve(id, req.user.sub);
+  approve(@Param('id') id: string, @GetUser('_id') adminId: string) {
+    return this.shopRequestsService.approve(id, adminId);
   }
 
   @Post(':id/reject')
