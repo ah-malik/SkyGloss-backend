@@ -75,6 +75,12 @@ export class User {
 
   @Prop({ type: MongooseSchema.Types.Map, of: [String], default: {} })
   courseProgress: Map<string, string[]>;
+
+  @Prop()
+  latitude?: number;
+
+  @Prop()
+  longitude?: number;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

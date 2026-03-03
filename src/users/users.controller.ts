@@ -36,7 +36,7 @@ export class UsersController {
   }
 
   @Get()
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MASTER_DISTRIBUTOR, UserRole.REGIONAL_DISTRIBUTOR)
   findAll() {
     return this.usersService.findAll();
   }
