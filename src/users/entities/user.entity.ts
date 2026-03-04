@@ -39,7 +39,7 @@ export class User {
   @Prop()
   lastName: string;
 
-  @Prop()
+  @Prop({ required: true })
   country: string;
 
   @Prop()
@@ -61,11 +61,11 @@ export class User {
   @Prop()
   accessCode?: string;
 
-  @Prop()
-  address?: string;
+  @Prop({ required: true })
+  address: string;
 
-  @Prop()
-  city?: string;
+  @Prop({ required: true })
+  city: string;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'ProductGroup' })
   productGroup?: MongooseSchema.Types.ObjectId;

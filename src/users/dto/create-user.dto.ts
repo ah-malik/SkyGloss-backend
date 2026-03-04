@@ -40,8 +40,8 @@ export class CreateUserDto {
   lastName?: string;
 
   @IsString()
-  @IsOptional()
-  country?: string;
+  @IsNotEmpty()
+  country: string;
 
   @IsString()
   @IsOptional()
@@ -56,12 +56,12 @@ export class CreateUserDto {
   accessCode?: string;
 
   @IsString()
-  @IsOptional()
-  address?: string;
+  @IsNotEmpty()
+  address: string;
 
   @IsString()
-  @IsOptional()
-  city?: string;
+  @IsNotEmpty()
+  city: string;
 
   @IsString()
   @IsOptional()
