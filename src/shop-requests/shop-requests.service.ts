@@ -78,6 +78,8 @@ export class ShopRequestsService {
           country: request.country,
           phoneNumber: request.phoneNumber,
           companyName: request.shopName,
+          address: request.address || 'Pending Address',
+          city: request.city || 'Pending City',
         });
       } catch (error) {
         console.error(`[Approve] Failed to create user: ${error.message}`);

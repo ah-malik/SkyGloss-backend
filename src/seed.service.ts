@@ -31,6 +31,9 @@ export class SeedService implements OnModuleInit {
           lastName: 'Admin',
           status: UserStatus.ACTIVE,
           phoneNumber: '0000000000',
+          country: 'USA',
+          address: 'System HQ',
+          city: 'Phoenix',
         });
         console.log('[SeedService] Admin created');
       }
@@ -48,6 +51,9 @@ export class SeedService implements OnModuleInit {
           status: UserStatus.ACTIVE,
           phoneNumber: '1112223333',
           companyName: 'SkyGloss Distribution Co.',
+          country: 'USA',
+          address: '123 Dist Way',
+          city: 'Los Angeles',
         });
         console.log('[SeedService] Distributor created');
       }

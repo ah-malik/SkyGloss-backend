@@ -33,6 +33,9 @@ export class ShopRequest {
   address: string;
 
   @Prop()
+  city: string;
+
+  @Prop()
   accessCodeUsed: string; // The code they used to verify initially (if non-USA)
 
   @Prop({ enum: RequestStatus, default: RequestStatus.PENDING })

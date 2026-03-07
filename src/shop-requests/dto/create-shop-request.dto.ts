@@ -32,8 +32,12 @@ export class CreateShopRequestDto {
   website?: string;
 
   @IsString()
-  @IsOptional()
-  address?: string;
+  @IsNotEmpty()
+  address: string;
+
+  @IsString()
+  @IsNotEmpty()
+  city: string;
 
   @IsString()
   @IsOptional()
