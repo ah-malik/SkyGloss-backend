@@ -1,11 +1,11 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Post, Req, Res } from '@nestjs/common';
+import { Request, Response } from 'express';
 import { AppService } from './app.service';
 
 @Controller()
 export class AppController {
-  constructor(private readonly appService: AppService) { }
+  constructor(private readonly appService: AppService) {}
 
-  
   @Post('stripe/webhook')
   handleStripeWebhook(@Req() req: Request, @Res() res: Response) {
 
@@ -19,6 +19,7 @@ export class AppController {
 
     return res.status(200).send('Webhook received');
   }
+
   @Get()
   getHello(): string {
     return this.appService.getHello();
