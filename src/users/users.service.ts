@@ -8,7 +8,7 @@ import { UpdateUserDto } from './dto/update-user.dto';
 
 @Injectable()
 export class UsersService implements OnModuleInit {
-  constructor(@InjectModel(User.name) private userModel: Model<UserDocument>) {}
+  constructor(@InjectModel(User.name) private userModel: Model<UserDocument>) { }
 
   async onModuleInit() {
     // One-time cleanup to remove null emails that cause duplicate key errors with sparse index
@@ -173,6 +173,19 @@ export class UsersService implements OnModuleInit {
 
     return this.userModel
       .findByIdAndUpdate(userId, { $addToSet: update }, { new: true })
+      .exec();
+  }
+
+  async updateCertificationVideoUrl(
+    userId: string,
+    videoUrl: string,
+  ): Promise<UserDocument | null> {
+    return this.userModel
+      .findByIdAndUpdate(
+        userId,
+        { certificationVideoUrl: videoUrl },
+        { new: true },
+      )
       .exec();
   }
 }

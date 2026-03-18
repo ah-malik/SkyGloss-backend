@@ -7,8 +7,16 @@ import {
   Param,
   Delete,
   UseGuards,
+  UseInterceptors,
+  UploadedFile,
+  BadRequestException,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { UsersService } from './users.service';
+import { CloudinaryService } from '../cloudinary/cloudinary.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationsGateway } from '../notifications/notifications.gateway';
+import { NotificationType } from '../notifications/entities/notification.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -21,7 +29,12 @@ import { Request } from 'express';
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly cloudinaryService: CloudinaryService,
+    private readonly notificationsService: NotificationsService,
+    private readonly notificationsGateway: NotificationsGateway,
+  ) { }
 
   @Post()
   @Roles(UserRole.ADMIN)
@@ -82,5 +95,73 @@ export class UsersController {
       courseName,
       stepId,
     );
+  }
+
+  @Post('upload-certification-video')
+  @UseInterceptors(FileInterceptor('video', { limits: { fileSize: 100 * 1024 * 1024 } }))
+  async uploadCertificationVideo(
+    @GetUser() user: UserDocument,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) {
+      throw new BadRequestException('Please provide a video file.');
+    }
+    if (!user.isSelfRegistered) {
+      throw new BadRequestException('Only self-registered distributors can upload a certification video.');
+    }
+
+    const COURSE_STEPS = {
+      UNDERSTANDING_SKYGLOSS: 9,
+      FUSION: 13,
+      RESIN_FILM: 4,
+      SHINE: 3,
+      MATTE: 3,
+      SEAL: 3,
+    };
+
+    let completedCount = 0;
+    const legacyCount = user.completedCourses?.length || 0;
+
+    if (user.courseProgress) {
+      const progressMap = JSON.parse(JSON.stringify(user.courseProgress || {}));
+      Object.entries(COURSE_STEPS).forEach(([courseKey, totalSteps]) => {
+        const progress = progressMap[courseKey] || progressMap[courseKey.replace('_', ' ')] || [];
+        if (progress && progress.length >= totalSteps) {
+          completedCount++;
+        }
+      });
+    }
+
+    completedCount = Math.max(completedCount, legacyCount);
+
+    if (completedCount < 6) {
+      throw new BadRequestException('You must complete all 6 courses before uploading a certification video.');
+    }
+
+    // Upload to Cloudinary
+    const result = await this.cloudinaryService.uploadVideo(file);
+    const updatedUser = await this.usersService.updateCertificationVideoUrl(user._id.toString(), result.secure_url);
+
+    // Notify Admins
+    if (updatedUser) {
+      const notificationMessage = `${updatedUser.firstName} ${updatedUser.lastName} has submitted their final certification video for review.`;
+      await this.notificationsService.create({
+        type: NotificationType.CERT_VIDEO_UPLOADED,
+        title: 'New Certification Video',
+        message: notificationMessage,
+        user: updatedUser._id.toString() as any, // Mongoose schema compatibility
+      });
+
+      this.notificationsGateway.broadcastNotification({
+        title: 'New Certification Video',
+        message: notificationMessage,
+        type: NotificationType.CERT_VIDEO_UPLOADED,
+      });
+    }
+
+    return {
+      message: 'Video uploaded successfully',
+      videoUrl: updatedUser?.certificationVideoUrl,
+    };
   }
 }

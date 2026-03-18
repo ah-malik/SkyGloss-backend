@@ -53,6 +53,41 @@ export class CloudinaryService {
     });
   }
 
+  uploadVideo(file: Express.Multer.File): Promise<CloudinaryResponse> {
+    return new Promise((resolve, reject) => {
+      console.log(
+        `[CloudinaryService] Starting VIDEO upload for file: ${file.originalname} (${file.size} bytes)`,
+      );
+
+      const upload = cloudinary.uploader.upload_stream(
+        { resource_type: 'video' },
+        (error, result) => {
+          if (error) {
+            console.error(
+              '[CloudinaryService] Video upload error details:',
+              JSON.stringify(error, null, 2),
+            );
+            return reject(error);
+          }
+          if (!result) {
+            console.error(
+              '[CloudinaryService] Video upload failed: No result returned from Cloudinary',
+            );
+            return reject(
+              new Error('Cloudinary video upload failed: No result returned'),
+            );
+          }
+          console.log(
+            `[CloudinaryService] Successfully uploaded VIDEO: ${file.originalname} -> ${result.secure_url}`,
+          );
+          resolve(result);
+        },
+      );
+
+      toStream(file.buffer).pipe(upload);
+    });
+  }
+
   async uploadImages(files: Express.Multer.File[]): Promise<string[]> {
     if (!files || files.length === 0) {
       console.warn('[CloudinaryService] No files provided for upload');

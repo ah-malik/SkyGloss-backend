@@ -81,6 +81,12 @@ export class User {
 
   @Prop()
   longitude?: number;
+
+  @Prop({ default: false })
+  isSelfRegistered: boolean;
+
+  @Prop()
+  certificationVideoUrl?: string;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

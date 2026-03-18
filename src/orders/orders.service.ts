@@ -12,6 +12,9 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
 import { NotificationType } from '../notifications/entities/notification.entity';
+import { UsersService } from '../users/users.service';
+import { MailService } from '../mail/mail.service';
+import { UserStatus } from '../users/entities/user.entity';
 
 @Injectable()
 export class OrdersService {
@@ -22,6 +25,8 @@ export class OrdersService {
     private configService: ConfigService,
     private notificationsService: NotificationsService,
     private notificationsGateway: NotificationsGateway,
+    private usersService: UsersService,
+    private mailService: MailService,
   ) {
     const stripeSecretKey = this.configService.get<string>('STRIPE_SECRET_KEY');
     const stripeApiVersion =
@@ -34,6 +39,48 @@ export class OrdersService {
       this.stripe = new Stripe(stripeSecretKey, {
         apiVersion: stripeApiVersion as Stripe.LatestApiVersion,
       });
+    }
+  }
+
+  async createDistributorFeeCheckoutSession(userId: string, email: string) {
+    if (!this.stripe) {
+      throw new BadRequestException('Stripe is not configured on the server.');
+    }
+
+    const baseUrl =
+      this.configService.get<string>('FRONTEND_URL') ||
+      'https://portal.skygloss.com';
+
+    try {
+      const session = await this.stripe.checkout.sessions.create({
+        payment_method_types: ['card'],
+        line_items: [
+          {
+            price_data: {
+              currency: 'usd',
+              product: 'prod_UAmPnV6O8z42Dq',
+              unit_amount: 25000, // $250.00
+            },
+            quantity: 1,
+          },
+        ],
+        mode: 'payment',
+        success_url: `${baseUrl}/login/distributor?payment_success=true`,
+        cancel_url: `${baseUrl}/register/distributor?payment_canceled=true`,
+        client_reference_id: userId,
+        customer_email: email,
+        metadata: {
+          type: 'distributor_registration',
+          userId: userId,
+        },
+      });
+
+      return { url: session.url };
+    } catch (error) {
+      console.error('Stripe session creation error:', error);
+      throw new BadRequestException(
+        `Stripe session creation failed: ${error.message}`,
+      );
     }
   }
 
@@ -213,6 +260,35 @@ export class OrdersService {
     const orderId = session.client_reference_id || session.metadata?.orderId;
 
     if (event.type === 'checkout.session.completed') {
+      const metadata = session.metadata;
+
+      // Handle Distributor Registration Payment
+      if (metadata && metadata.type === 'distributor_registration') {
+        const userId = metadata.userId;
+        const updatedUser = await this.usersService.update(userId, { status: UserStatus.ACTIVE } as any);
+
+        if (updatedUser) {
+          // Send Admin Notification Email
+          const adminUsers = await this.usersService.findAll();
+          const adminEmails = adminUsers.filter(u => u.role === 'admin' && u.email).map(u => u.email as string);
+          await this.mailService.sendDistributorPaymentCompletedAdminNotification(adminEmails, updatedUser);
+
+          // Create notification for admin via system
+          const notification = await this.notificationsService.create({
+            type: NotificationType.ORDER_PAID, // Re-using existing type or assume it is handled
+            title: 'Distributor Registration Paid',
+            message: `User ${updatedUser.firstName} ${updatedUser.lastName} has paid the registration fee and is now active.`,
+            metadata: {
+              userId: updatedUser._id,
+            },
+            user: updatedUser._id as any,
+            link: `/dashboard/distributor`, // Admins can check users list in dashboard or similar
+          });
+          this.notificationsGateway.broadcastNotification(notification);
+        }
+        return { received: true };
+      }
+
       const updatedOrder = await this.orderModel
         .findByIdAndUpdate(
           orderId,

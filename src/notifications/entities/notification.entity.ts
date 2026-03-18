@@ -12,6 +12,7 @@ export enum NotificationType {
   CHAT_MESSAGE = 'CHAT_MESSAGE',
   NEW_USER = 'NEW_USER',
   SUPPORT_TICKET = 'SUPPORT_TICKET',
+  CERT_VIDEO_UPLOADED = 'CERT_VIDEO_UPLOADED',
 }
 
 @Schema({ timestamps: true })

@@ -19,7 +19,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(private readonly authService: AuthService) { }
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
@@ -43,6 +43,11 @@ export class AuthController {
   @Post('register')
   async register(@Body() createUserDto: CreateUserDto) {
     return this.authService.register(createUserDto);
+  }
+
+  @Post('register-distributor')
+  async registerDistributor(@Body() createUserDto: CreateUserDto) {
+    return this.authService.registerDistributor(createUserDto);
   }
 
   @UseGuards(JwtAuthGuard)

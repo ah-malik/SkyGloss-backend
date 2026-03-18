@@ -16,6 +16,10 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import * as crypto from 'crypto';
 import { MailService } from '../mail/mail.service';
+import { OrdersService } from '../orders/orders.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationsGateway } from '../notifications/notifications.gateway';
+import { NotificationType } from '../notifications/entities/notification.entity';
 
 @Injectable()
 export class AuthService {
@@ -24,7 +28,10 @@ export class AuthService {
     private jwtService: JwtService,
     private accessCodesService: AccessCodesService,
     private mailService: MailService,
-  ) {}
+    private ordersService: OrdersService,
+    private notificationsService: NotificationsService,
+    private notificationsGateway: NotificationsGateway,
+  ) { }
 
   async validateUser(identifier: string, pass: string): Promise<any> {
     console.log(`[Auth] Validating user: ${identifier}`);
@@ -139,6 +146,63 @@ export class AuthService {
 
   async register(createUserDto: CreateUserDto) {
     return this.usersService.create(createUserDto);
+  }
+
+  async registerDistributor(createUserDto: CreateUserDto) {
+    // Override role and status for a new distributor registration
+    const distributorDto = {
+      ...createUserDto,
+      role: UserRole.REGIONAL_DISTRIBUTOR, // Assuming Regional Distributor by default for this flow
+      status: UserStatus.PENDING,
+      isSelfRegistered: true,
+    };
+
+    const user = await this.usersService.create(distributorDto as CreateUserDto);
+
+    // Send Emails asynchronously
+    if (user.email) {
+      this.mailService.sendDistributorRegistrationUserConfirmation(user.email, user).catch(err => console.error(err));
+
+      this.usersService.findAll().then(users => {
+        const adminEmails = users.filter(u => u.role === UserRole.ADMIN && u.email).map(u => u.email as string);
+        if (adminEmails.length > 0) {
+          this.mailService.sendDistributorRegistrationAdminNotification(adminEmails, user).catch(err => console.error(err));
+        }
+      }).catch(err => console.error(err));
+    }
+
+    try {
+      const notification = await this.notificationsService.create({
+        type: NotificationType.NEW_USER,
+        title: 'New Distributor Registration',
+        message: `A new distributor (${user.firstName} ${user.lastName}) has registered and is pending payment.`,
+        metadata: {
+          userId: user._id.toString(),
+          email: user.email,
+          role: user.role,
+        },
+      });
+      this.notificationsGateway.broadcastNotification(notification);
+    } catch (err) {
+      console.error('Failed to create admin notification for new distributor', err);
+    }
+
+    // Create Stripe Checkout Session
+    const stripeSession = await this.ordersService.createDistributorFeeCheckoutSession(
+      user._id.toString(),
+      user.email || ''
+    );
+
+    return {
+      message: 'Registration successful. Redirecting to payment...',
+      stripeUrl: stripeSession.url,
+      user: {
+        id: user._id,
+        email: user.email,
+        role: user.role,
+        status: user.status,
+      }
+    };
   }
 
   async forgotPassword(forgotPasswordDto: ForgotPasswordDto) {

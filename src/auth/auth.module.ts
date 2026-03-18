@@ -8,11 +8,15 @@ import { UsersModule } from '../users/users.module';
 import { AccessCodesModule } from '../access-codes/access-codes.module';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { MailModule } from '../mail/mail.module';
+import { OrdersModule } from '../orders/orders.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
     UsersModule,
     AccessCodesModule,
+    OrdersModule,
+    NotificationsModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -31,4 +35,4 @@ import { MailModule } from '../mail/mail.module';
   controllers: [AuthController],
   exports: [AuthService],
 })
-export class AuthModule {}
+export class AuthModule { }
