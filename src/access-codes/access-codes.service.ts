@@ -13,7 +13,7 @@ export class AccessCodesService {
   constructor(
     @InjectModel(AccessCode.name)
     private accessCodeModel: Model<AccessCodeDocument>,
-  ) { }
+  ) {}
 
   async generateCode(
     targetRole: UserRole,
@@ -69,7 +69,15 @@ export class AccessCodesService {
     await this.accessCodeModel.updateOne({ code }, { isUsed: true });
   }
 
-  async findAll(page: number = 1, limit: number = 20): Promise<{ data: AccessCode[], total: number, page: number, totalPages: number }> {
+  async findAll(
+    page: number = 1,
+    limit: number = 20,
+  ): Promise<{
+    data: AccessCode[];
+    total: number;
+    page: number;
+    totalPages: number;
+  }> {
     const skip = (page - 1) * limit;
 
     const [data, total] = await Promise.all([
@@ -80,14 +88,14 @@ export class AccessCodesService {
         .skip(skip)
         .limit(limit)
         .exec(),
-      this.accessCodeModel.countDocuments().exec()
+      this.accessCodeModel.countDocuments().exec(),
     ]);
 
     return {
       data,
       total,
       page,
-      totalPages: Math.ceil(total / limit)
+      totalPages: Math.ceil(total / limit),
     };
   }
 

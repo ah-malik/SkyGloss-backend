@@ -82,12 +82,16 @@ export class CertificationsService {
       distributor: userId,
       amount: amount / 100,
       paymentStatus: PaymentStatus.PENDING,
-      requestStatus: RequestStatus.PENDING
+      requestStatus: RequestStatus.PENDING,
     });
     await certification.save();
 
-    const baseUrl = this.configService.get<string>('FRONTEND_URL') || 'https://skygloss-frontend.netlify.app';
-    this.logger.log(`Creating Checkout Session for ${certification.shopName}, baseUrl: ${baseUrl}`);
+    const baseUrl =
+      this.configService.get<string>('FRONTEND_URL') ||
+      'https://portal.skygloss.com';
+    this.logger.log(
+      `Creating Checkout Session for ${certification.shopName}, baseUrl: ${baseUrl}`,
+    );
 
     try {
       const session = await this.stripe.checkout.sessions.create({
@@ -118,14 +122,19 @@ export class CertificationsService {
         type: NotificationType.CERT_REQUEST,
         title: 'New Certification Request',
         message: `New certificate request from ${certification.shopName}.`,
-        metadata: { certificationId: certification._id, shopName: certification.shopName },
+        metadata: {
+          certificationId: certification._id,
+          shopName: certification.shopName,
+        },
         user: userId,
-        link: `/certification-requests`
+        link: `/certification-requests`,
       });
       this.notificationsGateway.broadcastNotification(notification);
 
       // Data will be ported to Google Sheet only after payment is confirmed
-      this.logger.log(`Certification created for ${certification.shopName}, waiting for payment...`);
+      this.logger.log(
+        `Certification created for ${certification.shopName}, waiting for payment...`,
+      );
 
       return { url: session.url };
     } catch (error) {
@@ -156,8 +165,9 @@ export class CertificationsService {
     }
 
     if (event.type === 'checkout.session.completed') {
-      const session = event.data.object as Stripe.Checkout.Session;
-      const certificationId = session.client_reference_id || session.metadata?.certificationId;
+      const session = event.data.object;
+      const certificationId =
+        session.client_reference_id || session.metadata?.certificationId;
       await this.confirmPayment(session.id, certificationId);
     }
 
@@ -165,7 +175,9 @@ export class CertificationsService {
   }
 
   private async confirmPayment(sessionId: string, certificationId?: string) {
-    this.logger.log(`[confirmPayment] session: ${sessionId}, certId: ${certificationId}`);
+    this.logger.log(
+      `[confirmPayment] session: ${sessionId}, certId: ${certificationId}`,
+    );
 
     let existing;
     if (certificationId) {
@@ -173,32 +185,42 @@ export class CertificationsService {
     }
 
     if (!existing) {
-      existing = await this.certificationModel.findOne({ stripeSessionId: sessionId });
+      existing = await this.certificationModel.findOne({
+        stripeSessionId: sessionId,
+      });
     }
 
     if (!existing) {
-      this.logger.warn(`[confirmPayment] FAILED: Record not found for session ${sessionId} / cert ${certificationId}`);
+      this.logger.warn(
+        `[confirmPayment] FAILED: Record not found for session ${sessionId} / cert ${certificationId}`,
+      );
       return;
     }
 
     if (existing.paymentStatus === PaymentStatus.PAID) {
-      this.logger.warn(`[confirmPayment] SKIPPED: Already PAID for ${existing._id}`);
+      this.logger.warn(
+        `[confirmPayment] SKIPPED: Already PAID for ${existing._id}`,
+      );
       return;
     }
 
-    this.logger.log(`[confirmPayment] SUCCESS: Updating ${existing._id} (Shop: ${existing.shopName}) to PAID`);
+    this.logger.log(
+      `[confirmPayment] SUCCESS: Updating ${existing._id} (Shop: ${existing.shopName}) to PAID`,
+    );
     const cert = await this.certificationModel.findByIdAndUpdate(
       existing._id,
       { $set: { paymentStatus: PaymentStatus.PAID } },
-      { new: true }
+      { new: true },
     );
 
     if (cert) {
       // Port to Google Sheet as PAID - only happens once
       this.logger.log(`Porting to Google Sheet for ${cert.shopName}`);
-      this.googleCertificationService.portToGoogleSheet(cert, 'PAID').catch(err => {
-        this.logger.error(`Payment porting failed: ${err.message}`);
-      });
+      this.googleCertificationService
+        .portToGoogleSheet(cert, 'PAID')
+        .catch((err) => {
+          this.logger.error(`Payment porting failed: ${err.message}`);
+        });
 
       // Create notification for admin
       const notification = await this.notificationsService.create({
@@ -207,7 +229,7 @@ export class CertificationsService {
         message: `Certification for ${cert.shopName} has been paid.`,
         metadata: { certificationId: cert._id, shopName: cert.shopName },
         user: cert.distributor as any,
-        link: `/certification-requests`
+        link: `/certification-requests`,
       });
       this.notificationsGateway.broadcastNotification(notification);
     }
@@ -223,13 +245,16 @@ export class CertificationsService {
       const session = await this.stripe.checkout.sessions.retrieve(sessionId);
       this.logger.log(`Stripe session status: ${session.payment_status}`);
       if (session.payment_status === 'paid') {
-        const certId = session.client_reference_id || session.metadata?.certificationId;
+        const certId =
+          session.client_reference_id || session.metadata?.certificationId;
         await this.confirmPayment(sessionId, certId);
         return { success: true, status: 'paid' };
       }
       return { success: false, status: session.payment_status };
     } catch (error) {
-      this.logger.error(`Verification failed for session ${sessionId}: ${error.message}`);
+      this.logger.error(
+        `Verification failed for session ${sessionId}: ${error.message}`,
+      );
       throw new BadRequestException(`Verification failed: ${error.message}`);
     }
   }
@@ -248,7 +273,7 @@ export class CertificationsService {
   }
 
   async updateStatus(id: string, status: RequestStatus) {
-    let updateData: any = { requestStatus: status };
+    const updateData: any = { requestStatus: status };
 
     if (status === RequestStatus.APPROVED) {
       // Generate certificate number: SG-CERT-2026-XXXX
@@ -269,9 +294,11 @@ export class CertificationsService {
 
     if (status === RequestStatus.APPROVED) {
       // Port to Google Sheet asynchronously
-      this.googleCertificationService.portToGoogleSheet(cert, 'APPROVED').catch((err) => {
-        this.logger.error(`Failed to port to Google Sheet: ${err.message}`);
-      });
+      this.googleCertificationService
+        .portToGoogleSheet(cert, 'APPROVED')
+        .catch((err) => {
+          this.logger.error(`Failed to port to Google Sheet: ${err.message}`);
+        });
     }
 
     return cert;

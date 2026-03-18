@@ -26,7 +26,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly chatService: ChatService,
     private readonly notificationsService: NotificationsService,
     private readonly notificationsGateway: NotificationsGateway,
-  ) { }
+  ) {}
 
   async handleConnection(client: Socket) {
     console.log(`Client connected: ${client.id}`);
@@ -74,13 +74,14 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     // Notify admin panel about new message, ONLY if sender is user
     if (data.senderType === 'user') {
-      const { notification, isNew } = await this.notificationsService.createOrUpdateChatNotification({
-        type: NotificationType.CHAT_MESSAGE,
-        title: 'New Chat Message',
-        message: `New message from ${data.senderName}: ${data.message.substring(0, 50)}${data.message.length > 50 ? '...' : ''}`,
-        metadata: { roomId: data.roomId, senderName: data.senderName },
-        link: `/live-chat?roomId=${data.roomId}`
-      });
+      const { notification, isNew } =
+        await this.notificationsService.createOrUpdateChatNotification({
+          type: NotificationType.CHAT_MESSAGE,
+          title: 'New Chat Message',
+          message: `New message from ${data.senderName}: ${data.message.substring(0, 50)}${data.message.length > 50 ? '...' : ''}`,
+          metadata: { roomId: data.roomId, senderName: data.senderName },
+          link: `/live-chat?roomId=${data.roomId}`,
+        });
 
       this.server.emit('message_notification', {
         roomId: data.roomId,

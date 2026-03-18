@@ -10,7 +10,7 @@ export class SeedService implements OnModuleInit {
     private readonly usersService: UsersService,
     private readonly accessCodesService: AccessCodesService,
     private readonly productsService: ProductsService,
-  ) { }
+  ) {}
 
   async onModuleInit() {
     console.log('[SeedService] Starting auto-seed...');
@@ -80,7 +80,8 @@ export class SeedService implements OnModuleInit {
         const initialProducts = [
           {
             name: 'FUSION',
-            description: 'Complete dual-layer coating system combining Element base coat and Aether top coat. Professional-grade formula delivering unmatched durability, gloss enhancement, and protection.',
+            description:
+              'Complete dual-layer coating system combining Element base coat and Aether top coat. Professional-grade formula delivering unmatched durability, gloss enhancement, and protection.',
             category: 'protection',
             images: ['https://placehold.co/600x400?text=FUSION'],
             features: [
@@ -106,7 +107,8 @@ export class SeedService implements OnModuleInit {
           },
           {
             name: 'RESIN FILM',
-            description: 'Advanced resin & film coating technology providing superior protection and durability.',
+            description:
+              'Advanced resin & film coating technology providing superior protection and durability.',
             category: 'protection',
             images: ['https://placehold.co/600x400?text=RESIN+FILM'],
             features: [
@@ -115,13 +117,18 @@ export class SeedService implements OnModuleInit {
               'Self-healing properties',
             ],
             specifications: [{ label: 'Volume', value: '60ml' }],
-            applicationGuide: ['Prepare surface', 'Apply thin layer', 'Level coating'],
+            applicationGuide: [
+              'Prepare surface',
+              'Apply thin layer',
+              'Level coating',
+            ],
             sizes: [{ size: '60ml', price: 160.99 }],
             status: 'published',
           },
           {
             name: 'EDGE BLADE',
-            description: 'Professional tungsten carbide blade designed for precise clear coating application and leveling.',
+            description:
+              'Professional tungsten carbide blade designed for precise clear coating application and leveling.',
             category: 'tools',
             images: ['https://placehold.co/600x400?text=EDGE+BLADE'],
             features: ['Tungsten carbide construction', 'Ultra-precise edge'],

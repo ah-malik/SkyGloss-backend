@@ -1,100 +1,100 @@
 import {
-    IsString,
-    IsNotEmpty,
-    IsEnum,
-    IsArray,
-    IsOptional,
-    IsNumber,
-    ValidateNested,
+  IsString,
+  IsNotEmpty,
+  IsEnum,
+  IsArray,
+  IsOptional,
+  IsNumber,
+  ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
 class SpecificationDto {
-    @IsString()
-    @IsNotEmpty()
-    label: string;
+  @IsString()
+  @IsNotEmpty()
+  label: string;
 
-    @IsString()
-    @IsNotEmpty()
-    value: string;
+  @IsString()
+  @IsNotEmpty()
+  value: string;
 }
 
 class SizeDto {
-    @IsString()
-    @IsNotEmpty()
-    size: string;
+  @IsString()
+  @IsNotEmpty()
+  size: string;
 
-    @IsNumber()
-    @IsNotEmpty()
-    price: number;
+  @IsNumber()
+  @IsNotEmpty()
+  price: number;
 }
 
 export class CreateProductDto {
-    @IsString()
-    @IsNotEmpty()
-    name: string;
+  @IsString()
+  @IsNotEmpty()
+  name: string;
 
-    @IsString()
-    @IsNotEmpty()
-    description: string;
+  @IsString()
+  @IsNotEmpty()
+  description: string;
 
-    @IsString()
-    @IsNotEmpty()
-    category: string;
+  @IsString()
+  @IsNotEmpty()
+  category: string;
 
-    @IsNumber()
-    @IsOptional()
-    stock?: number;
+  @IsNumber()
+  @IsOptional()
+  stock?: number;
 
-    @IsArray()
-    @IsString({ each: true })
-    @IsNotEmpty()
-    images: string[];
+  @IsArray()
+  @IsString({ each: true })
+  @IsNotEmpty()
+  images: string[];
 
-    @IsArray()
-    @IsString({ each: true })
-    @IsOptional()
-    shopImages?: string[];
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  shopImages?: string[];
 
-    @IsArray()
-    @IsString({ each: true })
-    @IsOptional()
-    features?: string[];
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  features?: string[];
 
-    @IsString()
-    @IsOptional()
-    specifications?: string;
+  @IsString()
+  @IsOptional()
+  specifications?: string;
 
-    @IsString()
-    @IsOptional()
-    technicalSpecifications?: string;
+  @IsString()
+  @IsOptional()
+  technicalSpecifications?: string;
 
-    @IsArray()
-    @IsString({ each: true })
-    @IsOptional()
-    applicationGuide?: string[];
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  applicationGuide?: string[];
 
-    @IsArray()
-    @ValidateNested({ each: true })
-    @Type(() => SizeDto)
-    @IsOptional()
-    sizes?: SizeDto[];
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SizeDto)
+  @IsOptional()
+  sizes?: SizeDto[];
 
-    @IsString()
-    @IsOptional()
-    technicalSheetUrl?: string;
+  @IsString()
+  @IsOptional()
+  technicalSheetUrl?: string;
 
-    @IsString()
-    @IsOptional()
-    @IsEnum(['published', 'draft'])
-    status?: string;
+  @IsString()
+  @IsOptional()
+  @IsEnum(['published', 'draft'])
+  status?: string;
 
-    @IsString()
-    @IsOptional()
-    @IsEnum(['certified_shop', 'all'])
-    targetAudience?: string;
+  @IsString()
+  @IsOptional()
+  @IsEnum(['certified_shop', 'all'])
+  targetAudience?: string;
 
-    @IsNumber()
-    @IsOptional()
-    displayOrder?: number;
+  @IsNumber()
+  @IsOptional()
+  displayOrder?: number;
 }

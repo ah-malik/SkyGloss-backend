@@ -1,4 +1,13 @@
-import { Controller, Post, Body, UseGuards, Get, Param, Req, BadRequestException } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  UseGuards,
+  Get,
+  Param,
+  Req,
+  BadRequestException,
+} from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -10,81 +19,82 @@ import type { RawBodyRequest } from '@nestjs/common';
 
 @Controller('orders')
 export class OrdersController {
-    constructor(private readonly ordersService: OrdersService) { }
+  constructor(private readonly ordersService: OrdersService) {}
 
-    @Post('checkout-session')
-    @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.CERTIFIED_SHOP)
-    createCheckoutSession(
-        @GetUser('_id') userId: string,
-        @GetUser('role') role: string,
-        @Body() createOrderDto: CreateOrderDto,
-    ) {
-        return this.ordersService.createCheckoutSession(userId, createOrderDto, role);
-    }
+  @Post('checkout-session')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.CERTIFIED_SHOP)
+  createCheckoutSession(
+    @GetUser('_id') userId: string,
+    @GetUser('role') role: string,
+    @Body() createOrderDto: CreateOrderDto,
+  ) {
+    return this.ordersService.createCheckoutSession(
+      userId,
+      createOrderDto,
+      role,
+    );
+  }
 
-    @Get('my-orders')
-    @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.CERTIFIED_SHOP)
-    getMyOrders(@GetUser('_id') userId: string) {
-        return this.ordersService.getMyOrders(userId);
-    }
+  @Get('my-orders')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.CERTIFIED_SHOP)
+  getMyOrders(@GetUser('_id') userId: string) {
+    return this.ordersService.getMyOrders(userId);
+  }
 
-    @Get(':id')
-    @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.CERTIFIED_SHOP, UserRole.ADMIN)
-    getOrderById(@Param('id') id: string) {
-        return this.ordersService.getOrderById(id);
-    }
+  @Get(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.CERTIFIED_SHOP, UserRole.ADMIN)
+  getOrderById(@Param('id') id: string) {
+    return this.ordersService.getOrderById(id);
+  }
 
-    @Get('verify/:orderId')
-    @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.CERTIFIED_SHOP)
-    verifyPayment(@Param('orderId') orderId: string) {
-        return this.ordersService.verifyPayment(orderId);
-    }
+  @Get('verify/:orderId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.CERTIFIED_SHOP)
+  verifyPayment(@Param('orderId') orderId: string) {
+    return this.ordersService.verifyPayment(orderId);
+  }
 
-    @Get('admin/all')
-    @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.ADMIN)
-    getAllOrders() {
-        return this.ordersService.getAllOrders();
-    }
+  @Get('admin/all')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  getAllOrders() {
+    return this.ordersService.getAllOrders();
+  }
 
-    @Post('admin/:id/status')
-    @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.ADMIN)
-    updateStatus(
-        @Param('id') id: string,
-        @Body('status') status: any,
-    ) {
-        return this.ordersService.updateStatus(id, status);
-    }
+  @Post('admin/:id/status')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  updateStatus(@Param('id') id: string, @Body('status') status: any) {
+    return this.ordersService.updateStatus(id, status);
+  }
 
-    @Get('admin/stats')
-    @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.ADMIN)
-    getDashboardStats() {
-        return this.ordersService.getDashboardStats();
-    }
+  @Get('admin/stats')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  getDashboardStats() {
+    return this.ordersService.getDashboardStats();
+  }
 
-    // Not guarding webhook as it comes from Stripe server
-    @Post('webhook')
-    async handleWebhook(@Req() req: RawBodyRequest<any>) {
-        const sig = req.headers['stripe-signature'];
-        if (typeof sig !== 'string') {
-            throw new BadRequestException('Missing stripe-signature header');
-        }
-        return this.ordersService.handleWebhook(sig as string, req.rawBody);
+  // Not guarding webhook as it comes from Stripe server
+  @Post('webhook')
+  async handleWebhook(@Req() req: RawBodyRequest<any>) {
+    const sig = req.headers['stripe-signature'];
+    if (typeof sig !== 'string') {
+      throw new BadRequestException('Missing stripe-signature header');
     }
+    return this.ordersService.handleWebhook(sig, req.rawBody);
+  }
 
-    @Post('request')
-    @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.ADMIN, UserRole.MASTER_DISTRIBUTOR, UserRole.CERTIFIED_SHOP)
-    createOrderRequest(
-        @GetUser('_id') userId: string,
-        @Body() createOrderDto: CreateOrderDto,
-    ) {
-        return this.ordersService.createOrderRequest(userId, createOrderDto);
-    }
+  @Post('request')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.MASTER_DISTRIBUTOR, UserRole.CERTIFIED_SHOP)
+  createOrderRequest(
+    @GetUser('_id') userId: string,
+    @Body() createOrderDto: CreateOrderDto,
+  ) {
+    return this.ordersService.createOrderRequest(userId, createOrderDto);
+  }
 }

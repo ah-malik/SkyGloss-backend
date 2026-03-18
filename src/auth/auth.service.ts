@@ -24,7 +24,7 @@ export class AuthService {
     private jwtService: JwtService,
     private accessCodesService: AccessCodesService,
     private mailService: MailService,
-  ) { }
+  ) {}
 
   async validateUser(identifier: string, pass: string): Promise<any> {
     console.log(`[Auth] Validating user: ${identifier}`);
@@ -101,7 +101,7 @@ export class AuthService {
 
       // If we reach here, it's a fresh (unused) code
       const user = await this.usersService.create({
-        email: (code as any).generatedForEmail,
+        email: code.generatedForEmail,
         role: code.targetRole,
         status: 'active',
         country: loginAccessCodeDto.country,
@@ -161,13 +161,14 @@ export class AuthService {
       try {
         await this.mailService.sendPasswordResetEmail(user.email, token);
       } catch (error) {
-        throw new BadRequestException('Failed to send reset email. The mail server might be down or credentials incorrect.');
+        throw new BadRequestException(
+          'Failed to send reset email. The mail server might be down or credentials incorrect.',
+        );
       }
     }
 
     return {
-      message:
-        'Password reset link has been sent to your email',
+      message: 'Password reset link has been sent to your email',
     };
   }
 

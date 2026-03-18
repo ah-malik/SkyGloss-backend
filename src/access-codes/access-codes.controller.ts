@@ -20,7 +20,7 @@ import { UserRole } from '../users/entities/user.entity';
 @Controller('access-codes')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class AccessCodesController {
-  constructor(private readonly accessCodesService: AccessCodesService) { }
+  constructor(private readonly accessCodesService: AccessCodesService) {}
 
   @Post()
   @Roles(UserRole.ADMIN, UserRole.MASTER_DISTRIBUTOR)

@@ -8,10 +8,12 @@ import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
-    MongooseModule.forFeature([{ name: SupportTicket.name, schema: SupportTicketSchema }]),
+    MongooseModule.forFeature([
+      { name: SupportTicket.name, schema: SupportTicketSchema },
+    ]),
     NotificationsModule,
   ],
   controllers: [SupportController],
   providers: [SupportService],
 })
-export class SupportModule { }
+export class SupportModule {}

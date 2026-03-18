@@ -21,7 +21,7 @@ import { RequestStatus } from './entities/certification.entity';
 
 @Controller('certifications')
 export class CertificationsController {
-  constructor(private readonly certificationsService: CertificationsService) { }
+  constructor(private readonly certificationsService: CertificationsService) {}
 
   @Post('checkout-session')
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -30,7 +30,6 @@ export class CertificationsController {
     @GetUser('_id') userId: string,
     @Body() createDto: CreateCertificationDto,
   ) {
-
     return this.certificationsService.createCheckoutSession(userId, createDto);
   }
 
@@ -61,7 +60,6 @@ export class CertificationsController {
   async verifyPayment(@Param('sessionId') sessionId: string) {
     return this.certificationsService.verifyPayment(sessionId);
   }
-
 
   @Get('admin/verify-payment/:sessionId')
   @UseGuards(JwtAuthGuard, RolesGuard)

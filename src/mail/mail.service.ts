@@ -26,7 +26,7 @@ export class MailService {
   }
 
   async sendPasswordResetEmail(to: string, token: string) {
-    const resetLink = `https://skygloss-frontend.netlify.app/reset-password?token=${token}`;
+    const resetLink = `https://portal.skygloss.com/reset-password?token=${token}`;
 
     const mailOptions = {
       from: `"SkyGloss Support" <${this.configService.get<string>('MAIL_USER')}>`,
@@ -54,7 +54,10 @@ export class MailService {
       await this.transporter.sendMail(mailOptions);
       this.logger.log(`Password reset email sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send password reset email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send password reset email to ${to}`,
+        error.stack,
+      );
       throw error;
     }
   }

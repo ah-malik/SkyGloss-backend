@@ -22,7 +22,7 @@ export class ShopRequestsService {
     private shopRequestModel: Model<ShopRequestDocument>,
     private usersService: UsersService,
     private accessCodesService: AccessCodesService,
-  ) { }
+  ) {}
 
   async create(
     createShopRequestDto: CreateShopRequestDto,
@@ -62,7 +62,9 @@ export class ShopRequestsService {
       throw new BadRequestException('Request is not pending');
     }
 
-    console.log(`[Approve] Processing Shop Request ${id}. Username: ${request.username}, Password present: ${!!request.password}`);
+    console.log(
+      `[Approve] Processing Shop Request ${id}. Username: ${request.username}, Password present: ${!!request.password}`,
+    );
 
     // Check if request has credentials (USA Flow)
     if (request.username && request.password) {
@@ -83,7 +85,9 @@ export class ShopRequestsService {
         });
       } catch (error) {
         console.error(`[Approve] Failed to create user: ${error.message}`);
-        throw new BadRequestException(`Failed to create user: ${error.message}`);
+        throw new BadRequestException(
+          `Failed to create user: ${error.message}`,
+        );
       }
 
       request.status = RequestStatus.APPROVED;
@@ -92,7 +96,8 @@ export class ShopRequestsService {
       console.log(`[Approve] Created User for Shop Request ${id}`);
 
       return {
-        message: 'Shop request approved and new user account created successfully.',
+        message:
+          'Shop request approved and new user account created successfully.',
         accessCode: null,
       };
     }

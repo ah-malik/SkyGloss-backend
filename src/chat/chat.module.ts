@@ -17,4 +17,4 @@ import { ChatMessage, ChatMessageSchema } from './entities/chat-message.entity';
   providers: [ChatService, ChatGateway],
   exports: [ChatService],
 })
-export class ChatModule { }
+export class ChatModule {}

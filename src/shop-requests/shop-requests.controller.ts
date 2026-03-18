@@ -21,7 +21,7 @@ import { GetUser } from '../common/decorators/get-user.decorator';
 
 @Controller('shop-requests')
 export class ShopRequestsController {
-  constructor(private readonly shopRequestsService: ShopRequestsService) { }
+  constructor(private readonly shopRequestsService: ShopRequestsService) {}
 
   @Post()
   create(@Body() createShopRequestDto: CreateShopRequestDto) {

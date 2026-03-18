@@ -6,12 +6,12 @@ import { Order, OrderSchema } from './entities/order.entity';
 import { ConfigModule } from '@nestjs/config';
 
 @Module({
-    imports: [
-        MongooseModule.forFeature([{ name: Order.name, schema: OrderSchema }]),
-        ConfigModule,
-    ],
-    controllers: [OrdersController],
-    providers: [OrdersService],
-    exports: [OrdersService],
+  imports: [
+    MongooseModule.forFeature([{ name: Order.name, schema: OrderSchema }]),
+    ConfigModule,
+  ],
+  controllers: [OrdersController],
+  providers: [OrdersService],
+  exports: [OrdersService],
 })
-export class OrdersModule { }
+export class OrdersModule {}

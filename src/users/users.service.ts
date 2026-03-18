@@ -8,7 +8,7 @@ import { UpdateUserDto } from './dto/update-user.dto';
 
 @Injectable()
 export class UsersService implements OnModuleInit {
-  constructor(@InjectModel(User.name) private userModel: Model<UserDocument>) { }
+  constructor(@InjectModel(User.name) private userModel: Model<UserDocument>) {}
 
   async onModuleInit() {
     // One-time cleanup to remove null emails that cause duplicate key errors with sparse index
@@ -32,7 +32,10 @@ export class UsersService implements OnModuleInit {
   }
 
   async create(createUserDto: CreateUserDto): Promise<UserDocument> {
-    console.log('[UsersService] Creating user with DTO:', JSON.stringify(createUserDto, null, 2));
+    console.log(
+      '[UsersService] Creating user with DTO:',
+      JSON.stringify(createUserDto, null, 2),
+    );
     if (createUserDto.email) {
       const existingUser = await this.userModel.findOne({
         email: createUserDto.email,
@@ -85,10 +88,14 @@ export class UsersService implements OnModuleInit {
     return this.userModel.findOne({ email }).exec();
   }
 
-  async findByUsernameOrEmail(identifier: string): Promise<UserDocument | null> {
-    return this.userModel.findOne({
-      $or: [{ email: identifier }, { username: identifier }]
-    }).exec();
+  async findByUsernameOrEmail(
+    identifier: string,
+  ): Promise<UserDocument | null> {
+    return this.userModel
+      .findOne({
+        $or: [{ email: identifier }, { username: identifier }],
+      })
+      .exec();
   }
 
   async findByAccessCode(accessCode: string): Promise<UserDocument | null> {
@@ -99,7 +106,10 @@ export class UsersService implements OnModuleInit {
     id: string,
     updateUserDto: UpdateUserDto,
   ): Promise<UserDocument | null> {
-    console.log(`[UsersService] Updating user ${id} with DTO:`, JSON.stringify(updateUserDto, null, 2));
+    console.log(
+      `[UsersService] Updating user ${id} with DTO:`,
+      JSON.stringify(updateUserDto, null, 2),
+    );
     if (updateUserDto.password) {
       updateUserDto.password = await bcrypt.hash(updateUserDto.password, 10);
     }
@@ -132,24 +142,37 @@ export class UsersService implements OnModuleInit {
       role: UserRole.CERTIFIED_SHOP,
     });
 
-    return { total, admin, master_distributor, regional_distributor, certified_shop };
+    return {
+      total,
+      admin,
+      master_distributor,
+      regional_distributor,
+      certified_shop,
+    };
   }
 
-  async completeCourse(userId: string, courseName: string): Promise<UserDocument | null> {
-    return this.userModel.findByIdAndUpdate(
-      userId,
-      { $addToSet: { completedCourses: courseName } },
-      { new: true },
-    ).exec();
+  async completeCourse(
+    userId: string,
+    courseName: string,
+  ): Promise<UserDocument | null> {
+    return this.userModel
+      .findByIdAndUpdate(
+        userId,
+        { $addToSet: { completedCourses: courseName } },
+        { new: true },
+      )
+      .exec();
   }
-  async updateCourseProgress(userId: string, courseName: string, stepId: string): Promise<UserDocument | null> {
+  async updateCourseProgress(
+    userId: string,
+    courseName: string,
+    stepId: string,
+  ): Promise<UserDocument | null> {
     const update: any = {};
     update[`courseProgress.${courseName}`] = stepId;
 
-    return this.userModel.findByIdAndUpdate(
-      userId,
-      { $addToSet: update },
-      { new: true },
-    ).exec();
+    return this.userModel
+      .findByIdAndUpdate(userId, { $addToSet: update }, { new: true })
+      .exec();
   }
 }

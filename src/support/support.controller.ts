@@ -1,4 +1,14 @@
-import { Controller, Get, Post, Body, Param, Delete, Put, Patch, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  Delete,
+  Put,
+  Patch,
+  UseGuards,
+} from '@nestjs/common';
 import { SupportService } from './support.service';
 import { CreateSupportDto } from './dto/create-support.dto';
 import { UpdateSupportDto } from './dto/update-support.dto';
@@ -9,7 +19,7 @@ import { UserRole } from '../users/entities/user.entity';
 
 @Controller('support')
 export class SupportController {
-  constructor(private readonly supportService: SupportService) { }
+  constructor(private readonly supportService: SupportService) {}
 
   @Post()
   create(@Body() createSupportDto: CreateSupportDto) {

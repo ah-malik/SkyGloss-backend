@@ -21,7 +21,7 @@ import { Request } from 'express';
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class UsersController {
-  constructor(private readonly usersService: UsersService) { }
+  constructor(private readonly usersService: UsersService) {}
 
   @Post()
   @Roles(UserRole.ADMIN)
@@ -36,7 +36,11 @@ export class UsersController {
   }
 
   @Get()
-  @Roles(UserRole.ADMIN, UserRole.MASTER_DISTRIBUTOR, UserRole.REGIONAL_DISTRIBUTOR)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.MASTER_DISTRIBUTOR,
+    UserRole.REGIONAL_DISTRIBUTOR,
+  )
   findAll() {
     return this.usersService.findAll();
   }
@@ -73,6 +77,10 @@ export class UsersController {
     @Body('courseName') courseName: string,
     @Body('stepId') stepId: string,
   ) {
-    return this.usersService.updateCourseProgress(user._id.toString(), courseName, stepId);
+    return this.usersService.updateCourseProgress(
+      user._id.toString(),
+      courseName,
+      stepId,
+    );
   }
 }
