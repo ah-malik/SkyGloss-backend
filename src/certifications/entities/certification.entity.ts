@@ -60,6 +60,15 @@ export class Certification {
   @Prop()
   shopFacebook?: string;
 
+  @Prop()
+  shopTikTok?: string;
+
+  @Prop()
+  shopLinkedIn?: string;
+
+  @Prop()
+  shopYouTube?: string;
+
   @Prop({ enum: PaymentStatus, default: PaymentStatus.PENDING })
   paymentStatus: PaymentStatus;
 

@@ -48,6 +48,9 @@ export class GoogleCertificationService {
       instagram: certData.shopInstagram || '',
       facebook: certData.shopFacebook || '',
       website: certData.shopWebsite || '',
+      tiktok: certData.shopTikTok || '',
+      linkedin: certData.shopLinkedIn || '',
+      youtube: certData.shopYouTube || '',
     };
 
     logEntry(

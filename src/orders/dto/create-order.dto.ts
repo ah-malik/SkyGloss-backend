@@ -48,6 +48,10 @@ class ShippingAddressDto {
   lastName: string;
 
   @IsString()
+  @IsOptional()
+  companyName: string;
+
+  @IsString()
   @IsNotEmpty()
   address: string;
 

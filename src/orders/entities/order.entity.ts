@@ -45,6 +45,9 @@ export class ShippingAddress {
   @Prop({ required: true })
   lastName: string;
 
+  @Prop()
+  companyName: string;
+
   @Prop({ required: true })
   address: string;
 

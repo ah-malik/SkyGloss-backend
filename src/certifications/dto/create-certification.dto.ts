@@ -52,4 +52,16 @@ export class CreateCertificationDto {
   @IsOptional()
   @IsString()
   shopFacebook?: string;
+
+  @IsOptional()
+  @IsString()
+  shopTikTok?: string;
+
+  @IsOptional()
+  @IsString()
+  shopLinkedIn?: string;
+
+  @IsOptional()
+  @IsString()
+  shopYouTube?: string;
 }
