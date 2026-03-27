@@ -58,8 +58,9 @@ export class OrdersService {
           {
             price_data: {
               currency: 'usd',
-              product: 'prod_UAmPnV6O8z42Dq',
-              unit_amount: 25000, // $250.00
+              // product: 'prod_UAmPnV6O8z42Dq',
+              product: 'prod_UE6uhCVVgziNAF',
+              unit_amount: 50, // $250.00
             },
             quantity: 1,
           },
@@ -253,14 +254,17 @@ export class OrdersService {
     try {
       event = this.stripe.webhooks.constructEvent(payload, sig, endpointSecret);
     } catch (err) {
+      console.error(`[Stripe Webhook] Verification Failed: ${err.message}`);
       throw new BadRequestException(`Webhook Error: ${err.message}`);
     }
 
     const session = event.data.object as Stripe.Checkout.Session;
+    console.log(`[Stripe Webhook] Received event: ${event.type}`);
+    const metadata = session.metadata;
+    console.log('[Stripe Webhook] Session Metadata:', metadata);
     const orderId = session.client_reference_id || session.metadata?.orderId;
 
     if (event.type === 'checkout.session.completed') {
-      const metadata = session.metadata;
 
       // Handle Distributor Registration Payment
       if (metadata && metadata.type === 'distributor_registration') {

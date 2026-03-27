@@ -81,8 +81,10 @@ export class OrdersController {
   // Not guarding webhook as it comes from Stripe server
   @Post('webhook')
   async handleWebhook(@Req() req: RawBodyRequest<any>) {
+    console.log('[Stripe Webhook] Received request at /orders/webhook');
     const sig = req.headers['stripe-signature'];
     if (typeof sig !== 'string') {
+      console.error('[Stripe Webhook] Missing signature');
       throw new BadRequestException('Missing stripe-signature header');
     }
     return this.ordersService.handleWebhook(sig, req.rawBody);

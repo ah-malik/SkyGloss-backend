@@ -11,7 +11,7 @@ async function bootstrap() {
 
   // Enable CORS
   app.enableCors();
-  app.use('/webhooks/stripe', bodyParser.raw({ type: 'application/json' }));
+  app.use('/orders/webhook', bodyParser.raw({ type: 'application/json' }));
   app.use(bodyParser.json());
 
   // Global Config
