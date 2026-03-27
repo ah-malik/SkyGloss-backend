@@ -4,6 +4,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import * as bodyParser from 'body-parser';
 
 async function bootstrap() {
   // rawBody: true lets NestJS capture raw body for Stripe webhook verification
@@ -12,6 +13,9 @@ async function bootstrap() {
 
   // Enable CORS
   app.enableCors();
+  // JSON body parser for all normal routes (checkout, auth, etc.)
+  // NOTE: Do NOT add bodyParser.raw() for /orders/webhook — rawBody: true handles it
+  app.use(bodyParser.json());
 
   // Global Config
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
