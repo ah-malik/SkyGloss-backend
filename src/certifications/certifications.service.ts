@@ -86,9 +86,8 @@ export class CertificationsService {
     });
     await certification.save();
 
-    const baseUrl =
-      this.configService.get<string>('FRONTEND_URL') ||
-      'https://portal.skygloss.com';
+    let baseUrl = (this.configService.get<string>('FRONTEND_URL') || '').replace(/\/+$/, '');
+    if (!baseUrl) baseUrl = 'https://portal.skygloss.com';
     this.logger.log(
       `Creating Checkout Session for ${certification.shopName}, baseUrl: ${baseUrl}`,
     );

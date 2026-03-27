@@ -170,18 +170,21 @@ export class OrdersService {
           quantity: 1,
         });
       }
+    let baseUrl = (this.configService.get<string>('FRONTEND_URL') || '').replace(/\/+$/, '');
+    if (!baseUrl) baseUrl = 'https://portal.skygloss.com';
 
       // Metadata limits: 50 keys, 500 chars values.
       const session = await this.stripe.checkout.sessions.create({
         payment_method_types: ['card'],
-        line_items,
+        line_items: line_items,
         mode: 'payment',
-        success_url: `${baseUrl}${dashboardPath}?success=true&order_id=${order._id}`,
-        cancel_url: `${baseUrl}${dashboardPath}?canceled=true`,
-        client_reference_id: order._id.toString(),
+        success_url: `${baseUrl}/shop/orders?success=true&orderId=${order._id}`,
+        cancel_url: `${baseUrl}/shop/cart?canceled=true`,
+        client_reference_id: userId,
         customer_email: shippingAddress.email,
         metadata: {
           orderId: order._id.toString(),
+          type: 'shop_order',
         },
       });
 
