@@ -46,6 +46,24 @@ export class AuthService {
 
   async login(user: any) {
     const userId = user._id.toString();
+
+    // Enforce payment for self-registered regional distributors
+    if (
+      user.role === UserRole.REGIONAL_DISTRIBUTOR &&
+      user.isSelfRegistered &&
+      !user.isDistributorPaid
+    ) {
+      const stripeSession = await this.ordersService.createDistributorFeeCheckoutSession(
+        userId,
+        user.email || '',
+      );
+      return {
+        paymentRequired: true,
+        message: 'Payment of $250 registration fee is required to access the dashboard.',
+        stripeUrl: stripeSession.url,
+      };
+    }
+
     const payload = { email: user.email, sub: userId, role: user.role };
     return {
       access_token: this.jwtService.sign(payload),
@@ -57,6 +75,7 @@ export class AuthService {
         firstName: user.firstName,
         lastName: user.lastName,
         productGroup: user.productGroup,
+        isDistributorPaid: user.isDistributorPaid,
       },
     };
   }

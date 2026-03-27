@@ -76,10 +76,12 @@ export class MailService {
           <p>Thank you for registering as a SkyGloss Distributor. We have successfully received your registration details:</p>
           <ul>
             <li><strong>Name:</strong> ${userDetails.firstName} ${userDetails.lastName}</li>
-            <li><strong>Company:</strong> ${userDetails.companyName || 'N/A'}</li>
+            <li><strong>Email:</strong> ${userDetails.email}</li>
             <li><strong>Location:</strong> ${userDetails.city}, ${userDetails.country}</li>
+            <li><strong>Address:</strong> ${userDetails.address}</li>
+            <li><strong>Phone:</strong> ${userDetails.phoneNumber}</li>
           </ul>
-          <p>Once your payment is successfully processed, you will be able to access the Distributor Portal.</p>
+          <p>Once your payment of **$250** is successfully processed, you will be able to access the Distributor Portal.</p>
           <div style="text-align: center; margin: 30px 0;">
             <a href="${loginLink}" style="background-color: #0EA0DC; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold;">Login to Portal</a>
           </div>
@@ -114,7 +116,6 @@ export class MailService {
           <ul>
             <li><strong>Name:</strong> ${userDetails.firstName} ${userDetails.lastName}</li>
             <li><strong>Email:</strong> ${userDetails.email}</li>
-            <li><strong>Company:</strong> ${userDetails.companyName || 'N/A'}</li>
             <li><strong>Phone:</strong> ${userDetails.phoneNumber || 'N/A'}</li>
             <li><strong>Address:</strong> ${userDetails.address}, ${userDetails.city}, ${userDetails.country}</li>
           </ul>

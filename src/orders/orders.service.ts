@@ -265,7 +265,10 @@ export class OrdersService {
       // Handle Distributor Registration Payment
       if (metadata && metadata.type === 'distributor_registration') {
         const userId = metadata.userId;
-        const updatedUser = await this.usersService.update(userId, { status: UserStatus.ACTIVE } as any);
+        const updatedUser = await this.usersService.update(userId, {
+          status: UserStatus.ACTIVE,
+          isDistributorPaid: true,
+        } as any);
 
         if (updatedUser) {
           // Send Admin Notification Email

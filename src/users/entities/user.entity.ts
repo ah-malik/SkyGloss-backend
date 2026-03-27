@@ -85,6 +85,9 @@ export class User {
   @Prop({ default: false })
   isSelfRegistered: boolean;
 
+  @Prop({ default: false })
+  isDistributorPaid: boolean;
+
   @Prop()
   certificationVideoUrl?: string;
 }
