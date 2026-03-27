@@ -60,10 +60,11 @@ export class OrdersService {
           {
             price_data: {
               currency: 'usd',
-              // product: 'prod_UAmPnV6O8z42Dq',
-              // product: 'prod_UE6uhCVVgziNAF',
-              product: 'prod_UEARU9uN5zCMsm',
-              unit_amount: 2500, // $250.00
+              product_data: {
+                name: 'Distributor Registration Fee',
+                description: 'One-time fee to activate your SkyGloss distributor account.',
+              },
+              unit_amount: 25000, // $250.00
             },
             quantity: 1,
           },
