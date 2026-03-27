@@ -47,9 +47,8 @@ export class OrdersService {
       throw new BadRequestException('Stripe is not configured on the server.');
     }
 
-    const baseUrl =
-      this.configService.get<string>('FRONTEND_URL') ||
-      'https://portal.skygloss.com';
+    let baseUrl = (this.configService.get<string>('FRONTEND_URL') || '').replace(/\/+$/, '');
+    if (!baseUrl) baseUrl = 'https://portal.skygloss.com';
 
     try {
       const session = await this.stripe.checkout.sessions.create({
