@@ -47,9 +47,12 @@ export class OrdersService {
       throw new BadRequestException('Stripe is not configured on the server.');
     }
 
+    // let baseUrl = (this.configService.get<string>('FRONTEND_URL') || '').replace(/\/+$/, '');
+    // if (!baseUrl) baseUrl = 'https://portal.skygloss.com';
     let baseUrl = (this.configService.get<string>('FRONTEND_URL') || '').replace(/\/+$/, '');
-    if (!baseUrl) baseUrl = 'https://portal.skygloss.com';
-
+    if (process.env.NODE_ENV === 'production') {
+      baseUrl = 'https://portal.skygloss.com';
+    }
     try {
       const session = await this.stripe.checkout.sessions.create({
         payment_method_types: ['card'],
@@ -58,8 +61,9 @@ export class OrdersService {
             price_data: {
               currency: 'usd',
               // product: 'prod_UAmPnV6O8z42Dq',
-              product: 'prod_UE6uhCVVgziNAF',
-              unit_amount: 50, // $250.00
+              // product: 'prod_UE6uhCVVgziNAF',
+              product: 'prod_UEARU9uN5zCMsm',
+              unit_amount: 2500, // $250.00
             },
             quantity: 1,
           },
@@ -170,8 +174,8 @@ export class OrdersService {
           quantity: 1,
         });
       }
-    let baseUrl = (this.configService.get<string>('FRONTEND_URL') || '').replace(/\/+$/, '');
-    if (!baseUrl) baseUrl = 'https://portal.skygloss.com';
+      let baseUrl = (this.configService.get<string>('FRONTEND_URL') || '').replace(/\/+$/, '');
+      if (!baseUrl) baseUrl = 'https://portal.skygloss.com';
 
       // Metadata limits: 50 keys, 500 chars values.
       const session = await this.stripe.checkout.sessions.create({
@@ -263,71 +267,98 @@ export class OrdersService {
     const session = event.data.object as Stripe.Checkout.Session;
     console.log(`[Stripe Webhook] Received event: ${event.type}`);
     const metadata = session.metadata;
-    console.log('[Stripe Webhook] Session Metadata:', metadata);
-    const orderId = session.client_reference_id || session.metadata?.orderId;
+    console.log('[Stripe Webhook] Session Metadata:', JSON.stringify(metadata));
+    console.log('[Stripe Webhook] client_reference_id:', session.client_reference_id);
+    console.log('[Stripe Webhook] payment_status:', session.payment_status);
 
     if (event.type === 'checkout.session.completed') {
 
       // Handle Distributor Registration Payment
       if (metadata && metadata.type === 'distributor_registration') {
-        const userId = metadata.userId;
+        const userId = session.client_reference_id || metadata.userId;
+        console.log(`[Stripe Webhook] Processing distributor_registration for userId: ${userId}`);
+
         const updatedUser = await this.usersService.update(userId, {
           status: UserStatus.ACTIVE,
           isDistributorPaid: true,
         } as any);
 
         if (updatedUser) {
+          console.log(`[Stripe Webhook] User ${userId} activated as distributor.`);
           // Send Admin Notification Email
           const adminUsers = await this.usersService.findAll();
-          const adminEmails = adminUsers.filter(u => u.role === 'admin' && u.email).map(u => u.email as string);
-          await this.mailService.sendDistributorPaymentCompletedAdminNotification(adminEmails, updatedUser);
+          const adminEmails = adminUsers
+            .filter((u) => u.role === 'admin' && u.email)
+            .map((u) => u.email as string);
+          await this.mailService.sendDistributorPaymentCompletedAdminNotification(
+            adminEmails,
+            updatedUser,
+          );
 
-          // Create notification for admin via system
           const notification = await this.notificationsService.create({
-            type: NotificationType.ORDER_PAID, // Re-using existing type or assume it is handled
+            type: NotificationType.ORDER_PAID,
             title: 'Distributor Registration Paid',
             message: `User ${updatedUser.firstName} ${updatedUser.lastName} has paid the registration fee and is now active.`,
-            metadata: {
-              userId: updatedUser._id,
-            },
+            metadata: { userId: updatedUser._id },
             user: updatedUser._id as any,
-            link: `/dashboard/distributor`, // Admins can check users list in dashboard or similar
+            link: `/dashboard/distributor`,
           });
           this.notificationsGateway.broadcastNotification(notification);
+        } else {
+          console.error(`[Stripe Webhook] Could not find/update user ${userId} for distributor_registration.`);
         }
         return { received: true };
       }
 
-      const updatedOrder = await this.orderModel
-        .findByIdAndUpdate(
-          orderId,
-          {
-            status: OrderStatus.PAID,
-          },
-          { new: true },
-        )
-        .populate('user', 'firstName lastName');
+      // Handle Shop Order Payment
+      if (metadata && metadata.type === 'shop_order') {
+        // IMPORTANT: client_reference_id = userId, NOT orderId.
+        // The orderId is stored in metadata.orderId.
+        const orderId = metadata.orderId;
+        console.log(`[Stripe Webhook] Processing shop_order for orderId: ${orderId}`);
 
-      if (updatedOrder) {
-        // Create notification for admin
-        const notification = await this.notificationsService.create({
-          type: NotificationType.ORDER_PAID,
-          title: 'Order Paid',
-          message: `Order ${updatedOrder.orderNumber} has been paid by ${updatedOrder.user ? (updatedOrder.user as any).firstName : 'a user'}.`,
-          metadata: {
-            orderId: updatedOrder._id,
-            orderNumber: updatedOrder.orderNumber,
-          },
-          user: (updatedOrder.user as any)?._id,
-          link: `/orders/${updatedOrder._id}`,
-        });
-        this.notificationsGateway.broadcastNotification(notification);
+        if (!orderId) {
+          console.error('[Stripe Webhook] No orderId found in metadata for shop_order event.');
+          return { received: true };
+        }
+
+        const updatedOrder = await this.orderModel
+          .findByIdAndUpdate(
+            orderId,
+            { status: OrderStatus.PAID },
+            { new: true },
+          )
+          .populate('user', 'firstName lastName');
+
+        if (updatedOrder) {
+          console.log(`[Stripe Webhook] Order ${updatedOrder.orderNumber} status updated to PAID.`);
+          const notification = await this.notificationsService.create({
+            type: NotificationType.ORDER_PAID,
+            title: 'Order Paid',
+            message: `Order ${updatedOrder.orderNumber} has been paid by ${updatedOrder.user ? (updatedOrder.user as any).firstName : 'a user'}.`,
+            metadata: {
+              orderId: updatedOrder._id,
+              orderNumber: updatedOrder.orderNumber,
+            },
+            user: (updatedOrder.user as any)?._id,
+            link: `/orders/${updatedOrder._id}`,
+          });
+          this.notificationsGateway.broadcastNotification(notification);
+        } else {
+          console.error(`[Stripe Webhook] Order with id ${orderId} not found in DB.`);
+        }
+        return { received: true };
       }
+
+      console.warn('[Stripe Webhook] checkout.session.completed received but no matching type in metadata:', metadata);
+
     } else if (
       event.type === 'checkout.session.async_payment_failed' ||
       event.type === 'checkout.session.expired'
     ) {
+      const orderId = metadata?.orderId;
       if (orderId) {
+        console.log(`[Stripe Webhook] Marking order ${orderId} as FAILED due to event: ${event.type}`);
         await this.orderModel.findByIdAndUpdate(orderId, {
           status: OrderStatus.FAILED,
         });
