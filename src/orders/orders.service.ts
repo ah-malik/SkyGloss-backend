@@ -183,7 +183,7 @@ export class OrdersService {
         payment_method_types: ['card'],
         line_items: line_items,
         mode: 'payment',
-        success_url: `${baseUrl}/shop/orders?success=true&orderId=${order._id}`,
+        success_url: `${baseUrl}/dashboard/shop?success=true&order_id=${order._id}`,
         cancel_url: `${baseUrl}/shop/cart?canceled=true`,
         client_reference_id: userId,
         customer_email: shippingAddress.email,
@@ -268,9 +268,9 @@ export class OrdersService {
     const session = event.data.object as Stripe.Checkout.Session;
     console.log(`[Stripe Webhook] Received event: ${event.type}`);
     const metadata = session.metadata;
-    console.log('[Stripe Webhook] Session Metadata:', JSON.stringify(metadata));
-    console.log('[Stripe Webhook] client_reference_id:', session.client_reference_id);
-    console.log('[Stripe Webhook] payment_status:', session.payment_status);
+    console.log(`[Stripe Webhook] Event ID: ${event.id}`);
+    console.log(`[Stripe Webhook] Metadata: ${JSON.stringify(metadata)}`);
+    console.log(`[Stripe Webhook] Payment Status: ${session.payment_status}`);
 
     if (event.type === 'checkout.session.completed') {
 

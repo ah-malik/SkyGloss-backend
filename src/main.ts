@@ -13,10 +13,6 @@ async function bootstrap() {
 
   // Enable CORS
   app.enableCors();
-  // JSON body parser for all normal routes (checkout, auth, etc.)
-  // NOTE: Do NOT add bodyParser.raw() for /orders/webhook — rawBody: true handles it
-  app.use(bodyParser.json());
-
   // Global Config
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   app.useGlobalFilters(new HttpExceptionFilter());
