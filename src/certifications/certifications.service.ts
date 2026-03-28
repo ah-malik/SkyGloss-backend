@@ -98,7 +98,10 @@ export class CertificationsService {
           {
             price_data: {
               currency: 'usd',
-              product: 'prod_U4nSmaaZP83BMv',
+              product_data: {
+                name: 'Certification Request Fee',
+                description: `Shop Certification Request for ${certification.shopName}`,
+              },
               unit_amount: amount,
             },
             quantity: 1,
