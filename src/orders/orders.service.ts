@@ -118,35 +118,41 @@ export class OrdersService {
       orderNumber: `ORD-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
     });
 
-    const baseUrl =
-      this.configService.get<string>('FRONTEND_URL') ||
-      'https://portal.skygloss.com';
-    // Determine redirect path based on role
-    let dashboardPath = '/dashboard/shop';
-    if (role === 'master_distributor' || role === 'regional_distributor') {
-      dashboardPath = '/dashboard/distributor';
-    } else if (role === 'certified_shop') {
-      dashboardPath = '/dashboard/shop';
-    }
-
     try {
-      // Create Stripe Line Items
+      // Determine baseUrl once
+      let baseUrl = (this.configService.get<string>('FRONTEND_URL') || '').replace(/\/+$/, '');
+      if (!baseUrl) {
+        baseUrl = process.env.NODE_ENV === 'production' 
+          ? 'https://portal.skygloss.com' 
+          : 'http://localhost:3000'; // Default for local
+      }
+
+      // Create Stripe Line Items with aggressive sanitization
       const line_items: Stripe.Checkout.SessionCreateParams.LineItem[] =
-        items.map((item) => ({
-          price_data: {
-            currency: 'usd',
-            product_data: {
-              name: item.name,
-              images: item.image ? [item.image] : [],
-              metadata: {
-                size: item.size,
-                productId: item.product,
+        items.map((item) => {
+          // Stripe images must be publicly accessible URLs. 
+          // Base64 or local paths will cause errors.
+          const images: string[] = [];
+          if (item.image && typeof item.image === 'string' && item.image.startsWith('http')) {
+            images.push(item.image);
+          }
+
+          return {
+            price_data: {
+              currency: 'usd',
+              product_data: {
+                name: String(item.name || 'Product'),
+                images: images,
+                metadata: {
+                  size: String(item.size || ''),
+                  productId: String(item.product || ''),
+                },
               },
+              unit_amount: Math.round(Number(item.price || 0) * 100), // cents
             },
-            unit_amount: Math.round(item.price * 100), // cents
-          },
-          quantity: item.quantity,
-        }));
+            quantity: Math.max(1, Number(item.quantity || 1)),
+          };
+        });
 
       // Add shipping cost (flat rate $15 for now, matching frontend)
       const shippingRate = 1500;
@@ -175,28 +181,29 @@ export class OrdersService {
           quantity: 1,
         });
       }
-      let baseUrl = (this.configService.get<string>('FRONTEND_URL') || '').replace(/\/+$/, '');
-      if (!baseUrl) baseUrl = 'https://portal.skygloss.com';
 
-      // Metadata limits: 50 keys, 500 chars values.
+      // Prepare metadata carefully (max 50 keys, 500 chars per value)
+      const sessionMetadata = {
+        orderId: String(order._id),
+        type: 'shop_order',
+      };
+
+      console.log('[Stripe Session] Creating with metadata:', JSON.stringify(sessionMetadata));
+      console.log('[Stripe Session] Line items count:', line_items.length);
+
       const session = await this.stripe.checkout.sessions.create({
         payment_method_types: ['card'],
         line_items: line_items,
         mode: 'payment',
         success_url: `${baseUrl}/dashboard/shop?success=true&order_id=${order._id}`,
-        cancel_url: `${baseUrl}/shop/cart?canceled=true`,
-        client_reference_id: userId,
-        customer_email: shippingAddress.email,
-        metadata: {
-          orderId: order._id.toString(),
-          type: 'shop_order',
-        },
+        cancel_url: `${baseUrl}/dashboard/shop?canceled=true`, // Fixed to match shop path
+        client_reference_id: String(userId),
+        customer_email: String(shippingAddress.email || ''),
+        metadata: sessionMetadata,
       });
 
       order.stripeSessionId = session.id;
-      // Update total to include shipping/tax if we want DB to match potential charge,
-      // but usually we want to know what the cart subtotal was.
-      // Let's store the FINAL charge amount in the order for reconciliation.
+      // Update total to include shipping/tax
       order.totalAmount = (totalAmount * 100 + shippingRate + taxAmount) / 100;
 
       await order.save();
