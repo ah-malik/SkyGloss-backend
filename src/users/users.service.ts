@@ -5,6 +5,7 @@ import * as bcrypt from 'bcrypt';
 import { User, UserDocument, UserRole } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import axios from 'axios';
 
 @Injectable()
 export class UsersService implements OnModuleInit {
@@ -29,6 +30,39 @@ export class UsersService implements OnModuleInit {
     } catch (err) {
       console.error('[UsersService] Database initialization failed:', err);
     }
+  }
+
+  private async fetchCoordinates(address: string, city: string, country: string): Promise<{ latitude: number, longitude: number } | null> {
+    const fetchWithQuery = async (query: string) => {
+      try {
+        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`;
+        const res = await axios.get(url, {
+          headers: {
+            'User-Agent': 'SkyGloss-Backend',
+          },
+        });
+        const data = res.data;
+        if (data && data[0]) {
+          return {
+            latitude: parseFloat(data[0].lat),
+            longitude: parseFloat(data[0].lon),
+          };
+        }
+      } catch (err) {
+        console.error(`[Geocoding] Failed for query "${query}":`, err);
+      }
+      return null;
+    };
+
+    // Try 1: Full Address
+    let coords = await fetchWithQuery(`${address}, ${city}, ${country}`);
+
+    // Try 2: City and Country fallback (if address search fails)
+    if (!coords && (city || country)) {
+      coords = await fetchWithQuery(`${city}, ${country}`);
+    }
+
+    return coords;
   }
 
   async create(createUserDto: CreateUserDto): Promise<UserDocument> {
@@ -62,6 +96,18 @@ export class UsersService implements OnModuleInit {
       ...createUserDto,
       password: hashedPassword,
     };
+
+    // Auto-geocode if coordinates are missing
+    if (!userData.latitude || !userData.longitude) {
+      if (userData.address && userData.city && userData.country) {
+        const coords = await this.fetchCoordinates(userData.address, userData.city, userData.country);
+        if (coords) {
+          userData.latitude = coords.latitude;
+          userData.longitude = coords.longitude;
+          console.log(`[Geocoding] Automatically detected coordinates for ${userData.email}:`, coords);
+        }
+      }
+    }
 
     // Remove email if it's null/undefined to avoid duplicate key errors with sparse index
     if (!userData.email) {
@@ -110,14 +156,41 @@ export class UsersService implements OnModuleInit {
       `[UsersService] Updating user ${id} with DTO:`,
       JSON.stringify(updateUserDto, null, 2),
     );
-    if (updateUserDto.password) {
-      updateUserDto.password = await bcrypt.hash(updateUserDto.password, 10);
+
+    const updatePayload: any = { ...updateUserDto };
+
+    if (updatePayload.password) {
+      updatePayload.password = await bcrypt.hash(updatePayload.password, 10);
     }
-    if (updateUserDto.productGroup === '') {
-      (updateUserDto as any).productGroup = null;
+    if (updatePayload.productGroup === '') {
+      updatePayload.productGroup = null;
     }
+
+    // Capture location related fields to see if geocoding is needed
+    const { address, city, country, latitude, longitude } = updatePayload;
+
+    // If address changed and coordinates are NOT manually provided in this update, re-geocode
+    if ((address || city || country) && (!latitude && !longitude)) {
+      // Get current user data to merge with update for geocoding query
+      const currentUser = await this.userModel.findById(id);
+      if (currentUser) {
+        const qAddress = address || currentUser.address;
+        const qCity = city || currentUser.city;
+        const qCountry = country || currentUser.country;
+
+        if (qAddress && qCity && qCountry) {
+          const coords = await this.fetchCoordinates(qAddress, qCity, qCountry);
+          if (coords) {
+            updatePayload.latitude = coords.latitude;
+            updatePayload.longitude = coords.longitude;
+            console.log(`[Geocoding] Updated coordinates for ${currentUser.email}:`, coords);
+          }
+        }
+      }
+    }
+
     return this.userModel
-      .findByIdAndUpdate(id, updateUserDto, { new: true })
+      .findByIdAndUpdate(id, updatePayload, { new: true })
       .exec();
   }
 
