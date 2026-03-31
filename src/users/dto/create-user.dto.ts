@@ -77,4 +77,14 @@ export class CreateUserDto {
   @IsNumber()
   @IsOptional()
   longitude?: number;
+
+  @IsString()
+  @IsOptional()
+  @MinLength(6)
+  @MinLength(6, { message: 'Partner Code must be exactly 6 characters' })
+  partnerCode?: string;
+  @IsString()
+  @IsOptional()
+  @MinLength(6)
+  referredByPartnerCode?: string;
 }

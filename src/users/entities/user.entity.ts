@@ -5,8 +5,9 @@ export type UserDocument = User & Document;
 
 export enum UserRole {
   ADMIN = 'admin',
-  MASTER_DISTRIBUTOR = 'master_distributor',
-  REGIONAL_DISTRIBUTOR = 'regional_distributor',
+  MASTER_PARTNER = 'master_partner',
+  REGIONAL_PARTNER = 'regional_partner',
+  PARTNER = 'partner',
   CERTIFIED_SHOP = 'certified_shop',
 }
 
@@ -85,11 +86,20 @@ export class User {
   @Prop({ default: false })
   isSelfRegistered: boolean;
 
-  @Prop({ default: false })
-  isDistributorPaid: boolean;
+  @Prop({ default: false, name: 'isDistributorPaid' })
+  isPartnerPaid: boolean;
+
+  @Prop({ unique: true, sparse: true })
+  partnerCode?: string;
+
+  @Prop({ sparse: true })
+  referredByPartnerCode?: string;
 
   @Prop()
   certificationVideoUrl?: string;
+
+  @Prop()
+  stripeSessionId?: string;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

@@ -25,7 +25,7 @@ export class CertificationsController {
 
   @Post('checkout-session')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.MASTER_DISTRIBUTOR, UserRole.REGIONAL_DISTRIBUTOR)
+  @Roles(UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER)
   createCheckoutSession(
     @GetUser('_id') userId: string,
     @Body() createDto: CreateCertificationDto,
@@ -35,7 +35,7 @@ export class CertificationsController {
 
   @Get('my-requests')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.MASTER_DISTRIBUTOR, UserRole.REGIONAL_DISTRIBUTOR)
+  @Roles(UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER)
   getMyRequests(@GetUser('_id') userId: string) {
     return this.certificationsService.getMyRequests(userId);
   }
@@ -56,7 +56,7 @@ export class CertificationsController {
 
   @Get('verify-payment/:sessionId')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.MASTER_DISTRIBUTOR, UserRole.REGIONAL_DISTRIBUTOR)
+  @Roles(UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER)
   async verifyPayment(@Param('sessionId') sessionId: string) {
     return this.certificationsService.verifyPayment(sessionId);
   }

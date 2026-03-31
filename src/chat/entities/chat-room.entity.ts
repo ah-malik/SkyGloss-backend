@@ -15,7 +15,7 @@ export class ChatRoom {
   userEmail: string;
 
   @Prop({ default: 'guest' })
-  userType: string; // 'certified_shop', 'master_distributor', 'regional_distributor', 'guest'
+  userType: string; // 'certified_shop', 'MASTER_PARTNER', 'REGIONAL_PARTNER', 'guest'
 
   @Prop({ default: 'active' })
   status: string; // 'active', 'closed'

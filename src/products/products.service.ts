@@ -194,4 +194,42 @@ export class ProductsService {
       )
       .exec();
   }
+
+  async migrateImagePaths(): Promise<void> {
+    const products = await this.productModel.find().exec();
+    for (const product of products) {
+      let updated = false;
+
+      // Update images
+      const newImages = product.images.map((img) => {
+        if (img.includes('Master_Distributor_Dashboard')) {
+          updated = true;
+          return img.replace(
+            'Master_Distributor_Dashboard',
+            'Master_Partner_Dashboard',
+          );
+        }
+        return img;
+      });
+
+      // Update shopImages
+      const newShopImages = product.shopImages.map((img) => {
+        if (img.includes('Master_Distributor_Dashboard')) {
+          updated = true;
+          return img.replace(
+            'Master_Distributor_Dashboard',
+            'Master_Partner_Dashboard',
+          );
+        }
+        return img;
+      });
+
+      if (updated) {
+        product.images = newImages;
+        product.shopImages = newShopImages;
+        await product.save();
+        console.log(`[ProductsService] Migrated image paths for product: ${product.name}`);
+      }
+    }
+  }
 }

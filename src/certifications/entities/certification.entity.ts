@@ -18,14 +18,14 @@ export enum RequestStatus {
 
 @Schema({ timestamps: true })
 export class Certification {
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
-  distributor: User;
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true, name: 'distributor' })
+  partner: User;
 
   @Prop({ required: true })
   country: string;
 
-  @Prop({ required: true })
-  distributorName: string;
+  @Prop({ required: true, name: 'distributorName' })
+  partnerName: string;
 
   @Prop({ required: true })
   requesterName: string;

@@ -19,7 +19,7 @@ export class SupportTicket {
   email: string;
 
   @Prop({ required: true })
-  userType: string; // 'certified_shop', 'master_distributor', 'regional_distributor', 'other'
+  userType: string; // 'certified_shop', 'MASTER_PARTNER', 'REGIONAL_PARTNER', 'other'
 
   @Prop({ required: true })
   issueCategory: string; // 'login', 'product', 'training', 'order', 'other'

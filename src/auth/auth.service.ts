@@ -49,9 +49,9 @@ export class AuthService {
 
     // Enforce payment for self-registered regional distributors
     if (
-      user.role === UserRole.REGIONAL_DISTRIBUTOR &&
+      user.role === UserRole.REGIONAL_PARTNER &&
       user.isSelfRegistered &&
-      !user.isDistributorPaid
+      !user.isPartnerPaid
     ) {
       const stripeSession = await this.ordersService.createDistributorFeeCheckoutSession(
         userId,
@@ -75,7 +75,8 @@ export class AuthService {
         firstName: user.firstName,
         lastName: user.lastName,
         productGroup: user.productGroup,
-        isDistributorPaid: user.isDistributorPaid,
+        isPartnerPaid: user.isPartnerPaid,
+        partnerCode: user.partnerCode,
       },
     };
   }
@@ -119,6 +120,7 @@ export class AuthService {
               firstName: user.firstName,
               lastName: user.lastName,
               productGroup: user.productGroup,
+              partnerCode: user.partnerCode,
             },
           };
         }
@@ -145,6 +147,7 @@ export class AuthService {
           role: user.role,
           country: user.country,
           productGroup: user.productGroup,
+          partnerCode: user.partnerCode,
         },
       };
     } catch (err: any) {
@@ -167,16 +170,26 @@ export class AuthService {
     return this.usersService.create(createUserDto);
   }
 
-  async registerDistributor(createUserDto: CreateUserDto) {
-    // Override role and status for a new distributor registration
-    const distributorDto = {
+  async registerPartner(createUserDto: CreateUserDto) {
+    // Generate a unique 6-digit partner code for self-registration
+    let partnerCode = '';
+    let isUnique = false;
+    while (!isUnique) {
+      partnerCode = Math.floor(100000 + Math.random() * 900000).toString();
+      const existing = await (this.usersService as any).userModel.findOne({ partnerCode });
+      if (!existing) isUnique = true;
+    }
+
+    // Override role and status for a new partner registration
+    const partnerDto = {
       ...createUserDto,
-      role: UserRole.REGIONAL_DISTRIBUTOR, // Assuming Regional Distributor by default for this flow
+      role: UserRole.REGIONAL_PARTNER, // Assuming Regional Partner by default for this flow
       status: UserStatus.PENDING,
       isSelfRegistered: true,
+      partnerCode,
     };
 
-    const user = await this.usersService.create(distributorDto as CreateUserDto);
+    const user = await this.usersService.create(partnerDto as CreateUserDto);
 
     // Send Emails asynchronously
     if (user.email) {
@@ -193,8 +206,8 @@ export class AuthService {
     try {
       const notification = await this.notificationsService.create({
         type: NotificationType.NEW_USER,
-        title: 'New Distributor Registration',
-        message: `A new distributor (${user.firstName} ${user.lastName}) has registered and is pending payment.`,
+        title: 'New Partner Registration',
+        message: `A new partner (${user.firstName} ${user.lastName}) has registered and is pending payment.`,
         metadata: {
           userId: user._id.toString(),
           email: user.email,
@@ -203,7 +216,7 @@ export class AuthService {
       });
       this.notificationsGateway.broadcastNotification(notification);
     } catch (err) {
-      console.error('Failed to create admin notification for new distributor', err);
+      console.error('Failed to create admin notification for new partner', err);
     }
 
     // Create Stripe Checkout Session
@@ -220,6 +233,80 @@ export class AuthService {
         email: user.email,
         role: user.role,
         status: user.status,
+        partnerCode: user.partnerCode,
+      }
+    };
+  }
+
+  async registerShop(createUserDto: CreateUserDto) {
+    if (!createUserDto.referredByPartnerCode) {
+      throw new BadRequestException('Partner ID is required for shop registration');
+    }
+
+    // Validate Partner ID exists and belongs to a partner
+    const partner = await (this.usersService as any).userModel.findOne({
+      partnerCode: createUserDto.referredByPartnerCode,
+      role: { $in: [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER] }
+    });
+
+    if (!partner) {
+      throw new BadRequestException('Invalid Partner ID. Please check and try again.');
+    }
+
+    // Force role and status for a new shop registration
+    const shopDto = {
+      ...createUserDto,
+      role: UserRole.CERTIFIED_SHOP,
+      status: UserStatus.PENDING,
+      isSelfRegistered: true,
+    };
+
+    const user = await this.usersService.create(shopDto as CreateUserDto);
+
+    // Send Emails
+    if (user.email) {
+      this.mailService.sendDistributorRegistrationUserConfirmation(user.email, user).catch(err => console.error(err));
+    }
+
+    try {
+      const notification = await this.notificationsService.create({
+        type: NotificationType.NEW_USER,
+        title: 'New Shop Registration',
+        message: `A new shop (${user.firstName} ${user.lastName}) has registered under Partner ${partner.firstName} ${partner.lastName}.`,
+        metadata: {
+          userId: user._id.toString(),
+          email: user.email,
+          role: user.role,
+          referredBy: partner.partnerCode,
+        },
+      });
+      this.notificationsGateway.broadcastNotification(notification);
+    } catch (err) {
+      console.error('Failed to create admin notification for new shop', err);
+    }
+
+    // Create Stripe Checkout Session (using same fee as partner for now as requested)
+    const stripeSession = await this.ordersService.createDistributorFeeCheckoutSession(
+      user._id.toString(),
+      user.email || '',
+      { 
+        type: 'shop_registration', 
+        referredByPartnerCode: user.referredByPartnerCode 
+      }
+    );
+
+    // Store session ID for manual verification fallback
+    await this.usersService.update(user._id.toString(), { stripeSessionId: (stripeSession as any).id });
+
+    return {
+      message: 'Registration successful. Redirecting to payment...',
+      stripeUrl: stripeSession.url,
+      user: {
+        id: user._id,
+        email: user.email,
+        role: user.role,
+        status: user.status,
+        referredByPartnerCode: user.referredByPartnerCode,
       }
     };
   }
@@ -274,5 +361,9 @@ export class AuthService {
     await user.save();
 
     return { message: 'Password has been reset successfully' };
+  }
+
+  async verifyRegistrationPayment(userId: string) {
+    return this.ordersService.verifyRegistrationPayment(userId);
   }
 }

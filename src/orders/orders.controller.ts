@@ -40,8 +40,8 @@ export class OrdersController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
     UserRole.CERTIFIED_SHOP,
-    UserRole.REGIONAL_DISTRIBUTOR,
-    UserRole.MASTER_DISTRIBUTOR,
+    UserRole.REGIONAL_PARTNER,
+    UserRole.MASTER_PARTNER,
   )
   getMyOrders(@GetUser('_id') userId: string) {
     return this.ordersService.getMyOrders(userId);
@@ -51,8 +51,8 @@ export class OrdersController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
     UserRole.CERTIFIED_SHOP,
-    UserRole.REGIONAL_DISTRIBUTOR,
-    UserRole.MASTER_DISTRIBUTOR,
+    UserRole.REGIONAL_PARTNER,
+    UserRole.MASTER_PARTNER,
     UserRole.ADMIN,
   )
   getOrderById(@Param('id') id: string) {
@@ -63,8 +63,8 @@ export class OrdersController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
     UserRole.CERTIFIED_SHOP,
-    UserRole.REGIONAL_DISTRIBUTOR,
-    UserRole.MASTER_DISTRIBUTOR,
+    UserRole.REGIONAL_PARTNER,
+    UserRole.MASTER_PARTNER,
   )
   verifyPayment(@Param('orderId') orderId: string) {
     return this.ordersService.verifyPayment(orderId);
@@ -114,8 +114,8 @@ export class OrdersController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
     UserRole.ADMIN,
-    UserRole.MASTER_DISTRIBUTOR,
-    UserRole.REGIONAL_DISTRIBUTOR,
+    UserRole.MASTER_PARTNER,
+    UserRole.REGIONAL_PARTNER,
     UserRole.CERTIFIED_SHOP,
   )
   createOrderRequest(

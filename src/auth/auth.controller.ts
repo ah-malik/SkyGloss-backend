@@ -45,15 +45,26 @@ export class AuthController {
     return this.authService.register(createUserDto);
   }
 
-  @Post('register-distributor')
-  async registerDistributor(@Body() createUserDto: CreateUserDto) {
-    return this.authService.registerDistributor(createUserDto);
+  @Post('register-partner')
+  async registerPartner(@Body() createUserDto: CreateUserDto) {
+    return this.authService.registerPartner(createUserDto);
+  }
+
+  @Post('register-shop')
+  async registerShop(@Body() createUserDto: CreateUserDto) {
+    return this.authService.registerShop(createUserDto);
   }
 
   @UseGuards(JwtAuthGuard)
   @Get('profile')
   getProfile(@Request() req) {
     return req.user;
+  }
+
+  @Get('verify-payment/:userId')
+  async verifyPayment(@Request() req) {
+    const userId = req.params.userId;
+    return this.authService.verifyRegistrationPayment(userId);
   }
 
   @Post('forgot-password')

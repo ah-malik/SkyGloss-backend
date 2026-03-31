@@ -51,11 +51,17 @@ export class UsersController {
   @Get()
   @Roles(
     UserRole.ADMIN,
-    UserRole.MASTER_DISTRIBUTOR,
-    UserRole.REGIONAL_DISTRIBUTOR,
+    UserRole.MASTER_PARTNER,
+    UserRole.REGIONAL_PARTNER,
   )
   findAll() {
     return this.usersService.findAll();
+  }
+
+  @Get('referred-shops')
+  @Roles(UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER)
+  async getReferredShops(@GetUser() user: UserDocument) {
+    return this.usersService.findReferredShops(user.partnerCode || '');
   }
 
   @Get(':id')

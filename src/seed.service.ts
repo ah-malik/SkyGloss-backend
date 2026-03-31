@@ -15,9 +15,10 @@ export class SeedService implements OnModuleInit {
   async onModuleInit() {
     console.log('[SeedService] Starting auto-seed...');
     try {
-      // 0. Migrate existing product statuses
+      // 0. Migrate existing product statuses and image paths
       await this.productsService.migrateStatuses();
-      console.log('[SeedService] Product statuses migrated to new enum');
+      await this.productsService.migrateImagePaths();
+      console.log('[SeedService] Product statuses and image paths migrated');
 
       // 1. Seed Admin
       const adminEmail = 'admin@example.com';
@@ -45,7 +46,7 @@ export class SeedService implements OnModuleInit {
         distributor = await this.usersService.create({
           email: distEmail,
           password: 'distpassword123',
-          role: UserRole.MASTER_DISTRIBUTOR,
+          role: UserRole.MASTER_PARTNER,
           firstName: 'Global',
           lastName: 'Distributor',
           status: UserStatus.ACTIVE,

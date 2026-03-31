@@ -79,7 +79,8 @@ export class CertificationsService {
     // 1. Save record FIRST to guarantee it exists in DB before Stripe/Webhook/Verification hits
     const certification = new this.certificationModel({
       ...createDto,
-      distributor: userId,
+      partner: userId,
+      partnerName: createDto.distributorName, // Keep DTO as is for now or update DTO later
       amount: amount / 100,
       paymentStatus: PaymentStatus.PENDING,
       requestStatus: RequestStatus.PENDING,
@@ -108,8 +109,8 @@ export class CertificationsService {
           },
         ],
         mode: 'payment',
-        success_url: `${baseUrl}/dashboard/distributor?success=true&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${baseUrl}/dashboard/distributor?canceled=true`,
+        success_url: `${baseUrl}/dashboard/partner?success=true&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${baseUrl}/dashboard/partner?canceled=true`,
         client_reference_id: certification._id.toString(),
         metadata: {
           certificationId: certification._id.toString(),
@@ -230,7 +231,7 @@ export class CertificationsService {
         title: 'Certification Paid',
         message: `Certification for ${cert.shopName} has been paid.`,
         metadata: { certificationId: cert._id, shopName: cert.shopName },
-        user: cert.distributor as any,
+        user: cert.partner as any,
         link: `/certification-requests`,
       });
       this.notificationsGateway.broadcastNotification(notification);
@@ -260,17 +261,16 @@ export class CertificationsService {
       throw new BadRequestException(`Verification failed: ${error.message}`);
     }
   }
-
   async getMyRequests(userId: string) {
     return this.certificationModel
-      .find({ distributor: userId as any })
+      .find({ partner: userId as any })
       .sort({ createdAt: -1 });
   }
 
   async getAllRequests() {
     return this.certificationModel
       .find()
-      .populate('distributor', 'firstName lastName email')
+      .populate('partner', 'firstName lastName email')
       .sort({ createdAt: -1 });
   }
 

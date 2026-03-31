@@ -6,4 +6,8 @@ export class UpdateUserDto extends PartialType(CreateUserDto) {
   @IsString()
   @IsOptional()
   refreshTokenHash?: string;
+
+  @IsString()
+  @IsOptional()
+  stripeSessionId?: string;
 }

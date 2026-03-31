@@ -97,6 +97,33 @@ export class UsersService implements OnModuleInit {
       password: hashedPassword,
     };
 
+    // Validate Partner Code for partner roles
+    const partnerRoles = [
+      UserRole.MASTER_PARTNER,
+      UserRole.REGIONAL_PARTNER,
+      UserRole.PARTNER,
+    ];
+
+    if (partnerRoles.includes(userData.role)) {
+      if (!userData.partnerCode) {
+        throw new BadRequestException('Partner Code is required for this role');
+      }
+
+      if (!/^\d{6}$/.test(userData.partnerCode)) {
+        throw new BadRequestException('Partner Code must be exactly 6 digits');
+      }
+
+      const existingCode = await this.userModel.findOne({
+        partnerCode: userData.partnerCode,
+      });
+      if (existingCode) {
+        throw new BadRequestException('Partner Code already exists');
+      }
+    } else {
+      // Clear partnerCode if NOT a partner role (optional but consistency is good)
+      delete userData.partnerCode;
+    }
+
     // Auto-geocode if coordinates are missing
     if (!userData.latitude || !userData.longitude) {
       if (userData.address && userData.city && userData.country) {
@@ -159,6 +186,9 @@ export class UsersService implements OnModuleInit {
 
     const updatePayload: any = { ...updateUserDto };
 
+    // Prevent partnerCode from being updated
+    delete updatePayload.partnerCode;
+
     if (updatePayload.password) {
       updatePayload.password = await bcrypt.hash(updatePayload.password, 10);
     }
@@ -205,11 +235,14 @@ export class UsersService implements OnModuleInit {
   async getStats() {
     const total = await this.userModel.countDocuments();
     const admin = await this.userModel.countDocuments({ role: UserRole.ADMIN });
-    const master_distributor = await this.userModel.countDocuments({
-      role: UserRole.MASTER_DISTRIBUTOR,
+    const master_partner = await this.userModel.countDocuments({
+      role: UserRole.MASTER_PARTNER,
     });
-    const regional_distributor = await this.userModel.countDocuments({
-      role: UserRole.REGIONAL_DISTRIBUTOR,
+    const regional_partner = await this.userModel.countDocuments({
+      role: UserRole.REGIONAL_PARTNER,
+    });
+    const partner = await this.userModel.countDocuments({
+      role: UserRole.PARTNER,
     });
     const certified_shop = await this.userModel.countDocuments({
       role: UserRole.CERTIFIED_SHOP,
@@ -218,8 +251,9 @@ export class UsersService implements OnModuleInit {
     return {
       total,
       admin,
-      master_distributor,
-      regional_distributor,
+      master_partner,
+      regional_partner,
+      partner,
       certified_shop,
     };
   }
@@ -260,5 +294,14 @@ export class UsersService implements OnModuleInit {
         { new: true },
       )
       .exec();
+  }
+
+  async findReferredShops(partnerCode: string): Promise<UserDocument[]> {
+    if (!partnerCode) return [];
+    return this.userModel.find({
+      referredByPartnerCode: partnerCode,
+      role: UserRole.CERTIFIED_SHOP,
+      isPartnerPaid: true, // Only show shops that have completed payment
+    }).exec();
   }
 }

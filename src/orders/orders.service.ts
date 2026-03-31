@@ -42,17 +42,20 @@ export class OrdersService {
     }
   }
 
-  async createDistributorFeeCheckoutSession(userId: string, email: string) {
+  async createDistributorFeeCheckoutSession(userId: string, email: string, additionalMetadata: any = {}) {
     if (!this.stripe) {
       throw new BadRequestException('Stripe is not configured on the server.');
     }
 
-    // let baseUrl = (this.configService.get<string>('FRONTEND_URL') || '').replace(/\/+$/, '');
-    // if (!baseUrl) baseUrl = 'https://portal.skygloss.com';
     let baseUrl = (this.configService.get<string>('FRONTEND_URL') || '').replace(/\/+$/, '');
-    if (process.env.NODE_ENV === 'production') {
+    if (process.env.NODE_ENV === 'production' || !baseUrl) {
       baseUrl = 'https://portal.skygloss.com';
     }
+
+    const type = additionalMetadata.type || 'partner_registration';
+    const success_path = type === 'shop_registration' ? '/login/shop?payment_success=true' : '/login/partner?payment_success=true';
+    const cancel_path = type === 'shop_registration' ? '/register/shop?payment_canceled=true' : '/register/partner?payment_canceled=true';
+
     try {
       const session = await this.stripe.checkout.sessions.create({
         payment_method_types: ['card'],
@@ -61,8 +64,10 @@ export class OrdersService {
             price_data: {
               currency: 'usd',
               product_data: {
-                name: 'Distributor Registration Fee',
-                description: 'One-time fee to activate your SkyGloss distributor account.',
+                name: type === 'shop_registration' ? 'Shop Registration Fee' : 'Partner Registration Fee',
+                description: type === 'shop_registration' 
+                  ? 'One-time fee to activate your SkyGloss Shop account.' 
+                  : 'One-time fee to activate your SkyGloss partner account.',
               },
               unit_amount: 25000, // $250.00
             },
@@ -70,17 +75,18 @@ export class OrdersService {
           },
         ],
         mode: 'payment',
-        success_url: `${baseUrl}/login/distributor?payment_success=true`,
-        cancel_url: `${baseUrl}/register/distributor?payment_canceled=true`,
+        success_url: `${baseUrl}${success_path}&user_id=${userId}`,
+        cancel_url: `${baseUrl}${cancel_path}&user_id=${userId}`,
         client_reference_id: userId,
         customer_email: email,
         metadata: {
-          type: 'distributor_registration',
+          type,
           userId: userId,
+          ...additionalMetadata,
         },
       });
 
-      return { url: session.url };
+      return { url: session.url, id: session.id };
     } catch (error) {
       console.error('Stripe session creation error:', error);
       throw new BadRequestException(
@@ -257,6 +263,64 @@ export class OrdersService {
     return order;
   }
 
+  async verifyRegistrationPayment(userId: string): Promise<any> {
+    const user = await this.usersService.findOne(userId);
+    if (!user) throw new NotFoundException('User not found');
+    if (user.isPartnerPaid) return { status: 'already_paid', user };
+
+    if (!user.stripeSessionId) {
+      throw new BadRequestException('No registration payment session found for this user.');
+    }
+
+    const session = await this.stripe.checkout.sessions.retrieve(user.stripeSessionId);
+
+    if (session.payment_status === 'paid') {
+      console.log(`[Manual Verify] Payment confirmed for user ${userId}. Activating...`);
+
+      const updatedUser = await this.usersService.update(userId, {
+        isPartnerPaid: true,
+        status: UserStatus.ACTIVE,
+      } as any);
+
+      // Trigger Notifications (Same logic as webhook)
+      if (updatedUser) {
+        // 1. Notify Admin
+        const adminUsers = await this.usersService.findAll();
+        const adminEmails = adminUsers
+          .filter((u) => u.role === 'admin' && u.email)
+          .map((u) => u.email as string);
+
+        await this.mailService.sendDistributorPaymentCompletedAdminNotification(
+          adminEmails,
+          updatedUser,
+        );
+
+        // 2. Notify Referring Partner
+        const metadata: any = session.metadata || {};
+        const partnerCode = metadata.referredByPartnerCode || updatedUser.referredByPartnerCode;
+
+        if (partnerCode) {
+          const partner = await (this.usersService as any).userModel.findOne({ partnerCode });
+          if (partner) {
+            const partnerNotification = await this.notificationsService.create({
+              type: NotificationType.ORDER_PAID,
+              title: 'New Shop Referral Active (Verified)',
+              message: `Shop "${updatedUser.firstName} ${updatedUser.lastName}" has completed registration and is now part of your network.`,
+              metadata: { shopId: updatedUser._id, shopName: `${updatedUser.firstName} ${updatedUser.lastName}` },
+              user: partner._id,
+              link: `/dashboard/partner/network`,
+            });
+            this.notificationsGateway.broadcastNotification(partnerNotification);
+          }
+        }
+
+        return { status: 'success', user: updatedUser };
+      }
+    }
+
+    return { status: 'pending', user };
+  }
+
   async handleWebhook(sig: string, payload: Buffer) {
     const endpointSecret = this.configService.get<string>(
       'STRIPE_WEBHOOK_SECRET',
@@ -281,18 +345,18 @@ export class OrdersService {
 
     if (event.type === 'checkout.session.completed') {
 
-      // Handle Distributor Registration Payment
-      if (metadata && metadata.type === 'distributor_registration') {
+      // Handle Partner Registration Payment
+      if (metadata && (metadata.type === 'partner_registration' || metadata.type === 'distributor_registration')) {
         const userId = session.client_reference_id || metadata.userId;
-        console.log(`[Stripe Webhook] Processing distributor_registration for userId: ${userId}`);
+        console.log(`[Stripe Webhook] Processing partner_registration for userId: ${userId}`);
 
         const updatedUser = await this.usersService.update(userId, {
           status: UserStatus.ACTIVE,
-          isDistributorPaid: true,
+          isPartnerPaid: true,
         } as any);
 
         if (updatedUser) {
-          console.log(`[Stripe Webhook] User ${userId} activated as distributor.`);
+          console.log(`[Stripe Webhook] User ${userId} activated as partner.`);
           // Send Admin Notification Email
           const adminUsers = await this.usersService.findAll();
           const adminEmails = adminUsers
@@ -305,15 +369,71 @@ export class OrdersService {
 
           const notification = await this.notificationsService.create({
             type: NotificationType.ORDER_PAID,
-            title: 'Distributor Registration Paid',
+            title: 'Partner Registration Paid',
             message: `User ${updatedUser.firstName} ${updatedUser.lastName} has paid the registration fee and is now active.`,
             metadata: { userId: updatedUser._id },
             user: updatedUser._id as any,
-            link: `/dashboard/distributor`,
+            link: `/dashboard/partner`,
           });
           this.notificationsGateway.broadcastNotification(notification);
         } else {
-          console.error(`[Stripe Webhook] Could not find/update user ${userId} for distributor_registration.`);
+          console.error(`[Stripe Webhook] Could not find/update user ${userId} for partner_registration.`);
+        }
+        return { received: true };
+      }
+
+      // Handle Shop Registration Payment
+      if (metadata && metadata.type === 'shop_registration') {
+        const userId = session.client_reference_id || metadata.userId;
+        const partnerCode = metadata.referredByPartnerCode;
+        console.log(`[Stripe Webhook] Processing shop_registration for userId: ${userId}, referredBy: ${partnerCode}`);
+
+        const updatedUser = await this.usersService.update(userId, {
+          status: UserStatus.ACTIVE,
+          isPartnerPaid: true,
+        } as any);
+
+        if (updatedUser) {
+          console.log(`[Stripe Webhook] Shop ${userId} activated.`);
+
+          // 1. Notify Admin
+          const adminUsers = await this.usersService.findAll();
+          const adminEmails = adminUsers
+            .filter((u) => u.role === 'admin' && u.email)
+            .map((u) => u.email as string);
+
+          await this.mailService.sendDistributorPaymentCompletedAdminNotification(
+            adminEmails,
+            updatedUser,
+          );
+
+          // 2. Notify Referring Partner
+          if (partnerCode) {
+            const partner = await (this.usersService as any).userModel.findOne({ partnerCode });
+            if (partner) {
+              const partnerNotification = await this.notificationsService.create({
+                type: NotificationType.ORDER_PAID,
+                title: 'New Shop Referral Active',
+                message: `Shop "${updatedUser.firstName} ${updatedUser.lastName}" has completed registration and is now part of your network.`,
+                metadata: { shopId: updatedUser._id, shopName: `${updatedUser.firstName} ${updatedUser.lastName}` },
+                user: partner._id,
+                link: `/dashboard/partner/network`,
+              });
+              this.notificationsGateway.broadcastNotification(partnerNotification);
+            }
+          }
+
+          const notification = await this.notificationsService.create({
+            type: NotificationType.ORDER_PAID,
+            title: 'Shop Registration Paid',
+            message: `Shop ${updatedUser.firstName} ${updatedUser.lastName} has paid the registration fee and is now active.`,
+            metadata: { userId: updatedUser._id },
+            user: updatedUser._id as any,
+            link: `/dashboard/shop`,
+          });
+          this.notificationsGateway.broadcastNotification(notification);
+        } else {
+          console.error(`[Stripe Webhook] Could not find/update shop ${userId} for shop_registration.`);
         }
         return { received: true };
       }
