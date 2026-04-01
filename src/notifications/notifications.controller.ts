@@ -5,6 +5,7 @@ import {
   Param,
   UseGuards,
   Delete,
+  Req,
 } from '@nestjs/common';
 import { NotificationsService } from './notifications.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -29,7 +30,21 @@ export class NotificationsController {
     return this.notificationsService.getUnreadCount();
   }
 
+  @Get('my-unread')
+  getMyUnreadCount(@Req() req: any) {
+    return this.notificationsService.getUnreadCountForUser(req.user.id);
+  }
+
+  @Patch('mark-my-chat-read')
+  markMyChatRead(@Req() req: any) {
+    return this.notificationsService.markChatNotificationsAsReadForUser(
+      req.user.id,
+    );
+  }
+
   @Patch(':id/read')
+
+
   @Roles(UserRole.ADMIN)
   markAsRead(@Param('id') id: string) {
     return this.notificationsService.markAsRead(id);

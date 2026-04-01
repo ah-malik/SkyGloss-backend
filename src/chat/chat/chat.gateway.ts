@@ -50,6 +50,15 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     console.log(`Client ${client.id} joined room ${data.roomId}`);
   }
 
+  @SubscribeMessage('join_user_room')
+  async handleJoinUserRoom(
+    @MessageBody() data: { userId: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    client.join(data.userId);
+    console.log(`Client ${client.id} joined personal room ${data.userId}`);
+  }
+
   @SubscribeMessage('send_message')
   async handleMessage(
     @MessageBody()
@@ -69,7 +78,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       data.message,
     );
 
-    // Broadcast message to all clients in the room
+    // Broadcast message to all clients in the room (e.g. if they have the chat open)
     this.server.to(data.roomId).emit('new_message', savedMessage);
 
     // Notify admin panel about new message, ONLY if sender is user
@@ -93,8 +102,34 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.notificationsGateway.broadcastNotification(notification);
     }
 
+    // IF sender is admin, notify the specific user
+    if (data.senderType === 'admin') {
+      const room = await this.chatService.getRoomById(data.roomId);
+      if (room && room.userId) {
+        const userId = room.userId.toString();
+        
+        // Notify the specific user via their personal room (for toast/global alert)
+        this.server.to(userId).emit('new_admin_message', {
+          roomId: data.roomId,
+          message: data.message,
+          senderName: data.senderName,
+        });
+
+        // Create database notification for the user
+        await this.notificationsService.create({
+          user: userId,
+          type: NotificationType.CHAT_MESSAGE,
+          title: 'New message from Partner',
+          message: data.message.substring(0, 50) + (data.message.length > 50 ? '...' : ''),
+          metadata: { roomId: data.roomId, senderName: data.senderName },
+          link: '/support', // Assuming chat is located here for users
+        });
+      }
+    }
+
     return savedMessage;
   }
+
 
   @SubscribeMessage('typing')
   handleTyping(

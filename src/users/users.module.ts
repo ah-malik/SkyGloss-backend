@@ -6,12 +6,14 @@ import { User, UserSchema } from './entities/user.entity';
 
 import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { ChatModule } from '../chat/chat.module';
 
 @Module({
   imports: [
     MongooseModule.forFeature([{ name: User.name, schema: UserSchema }]),
     CloudinaryModule,
     NotificationsModule,
+    ChatModule,
   ],
   controllers: [UsersController],
   providers: [UsersService],

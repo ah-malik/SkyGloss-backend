@@ -16,6 +16,7 @@ import { UsersService } from './users.service';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
+import { ChatService } from '../chat/chat.service';
 import { NotificationType } from '../notifications/entities/notification.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -34,6 +35,7 @@ export class UsersController {
     private readonly cloudinaryService: CloudinaryService,
     private readonly notificationsService: NotificationsService,
     private readonly notificationsGateway: NotificationsGateway,
+    private readonly chatService: ChatService,
   ) { }
 
   @Post()
@@ -169,5 +171,49 @@ export class UsersController {
       message: 'Video uploaded successfully',
       videoUrl: updatedUser?.certificationVideoUrl,
     };
+  }
+
+  @Post('me/training-complete')
+  async completeTraining(@GetUser() user: UserDocument) {
+    if (user.isTrainingComplete) {
+      return { message: 'Training already marked as complete' };
+    }
+
+    const updatedUser = await this.usersService.update(user._id.toString(), {
+      isTrainingComplete: true,
+    } as any);
+
+    // Ensure they have an active chat room implicitly connected to them
+    const existingRoom = await this.chatService.createOrGetRoom({
+      userId: user._id.toString(),
+      userName: `${user.firstName} ${user.lastName}`,
+      userEmail: user.email || 'no-email@skygloss.com',
+      userType: user.role,
+    });
+
+    const notificationMessage = `${user.firstName} ${user.lastName} has 100% completed all available SkyGloss training courses.`;
+
+    // Notify Admins
+    if (updatedUser) {
+      await this.notificationsService.create({
+        type: NotificationType.TRAINING_COMPLETED,
+        title: 'Network Training Completed',
+        message: notificationMessage,
+        user: user._id.toString() as any,
+      });
+
+      this.notificationsGateway.broadcastNotification({
+        title: 'Network Training Completed',
+        message: notificationMessage,
+        type: NotificationType.TRAINING_COMPLETED,
+      });
+    }
+
+    // Try finding Partner to notify them separately, if a logic layer exists
+    if (user.referredByPartnerCode) {
+         // Optionally send targeted websocket event logic here if expanded
+    }
+
+    return { message: 'Training completion submitted successfully.', roomId: (existingRoom as any)._id };
   }
 }

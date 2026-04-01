@@ -13,6 +13,7 @@ export enum NotificationType {
   NEW_USER = 'NEW_USER',
   SUPPORT_TICKET = 'SUPPORT_TICKET',
   CERT_VIDEO_UPLOADED = 'CERT_VIDEO_UPLOADED',
+  TRAINING_COMPLETED = 'TRAINING_COMPLETED',
 }
 
 @Schema({ timestamps: true })

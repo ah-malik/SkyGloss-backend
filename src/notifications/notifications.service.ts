@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import {
   Notification,
   NotificationDocument,
@@ -114,6 +114,28 @@ export class NotificationsService {
   async getUnreadCount(): Promise<number> {
     return this.notificationModel.countDocuments({ isRead: false }).exec();
   }
+
+  async getUnreadCountForUser(userId: string): Promise<number> {
+    return this.notificationModel
+      .countDocuments({ user: userId, isRead: false } as any)
+      .exec();
+  }
+
+  async markChatNotificationsAsReadForUser(userId: string): Promise<void> {
+    await this.notificationModel
+      .updateMany(
+        {
+          user: userId as any,
+          type: NotificationType.CHAT_MESSAGE,
+          isRead: false,
+        },
+        { isRead: true },
+      )
+      .exec();
+  }
+
+
+
 
   async deleteOldNotifications(days: number = 30): Promise<void> {
     const date = new Date();

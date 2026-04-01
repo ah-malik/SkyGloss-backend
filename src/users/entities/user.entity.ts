@@ -98,6 +98,9 @@ export class User {
   @Prop()
   certificationVideoUrl?: string;
 
+  @Prop({ default: false })
+  isTrainingComplete: boolean;
+
   @Prop()
   stripeSessionId?: string;
 }
