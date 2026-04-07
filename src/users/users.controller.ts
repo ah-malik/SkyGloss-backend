@@ -55,10 +55,12 @@ export class UsersController {
     UserRole.ADMIN,
     UserRole.MASTER_PARTNER,
     UserRole.REGIONAL_PARTNER,
+    UserRole.PARTNER,
   )
   findAll() {
     return this.usersService.findAll();
   }
+
 
   @Get('referred-shops')
   @Roles(UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER)
@@ -216,4 +218,23 @@ export class UsersController {
 
     return { message: 'Training completion submitted successfully.', roomId: (existingRoom as any)._id };
   }
+
+  @Patch('referred-shops/:id/visibility')
+  @Roles(UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER)
+  async updateReferredShopVisibility(
+    @Param('id') id: string,
+    @Body('isVisibleOnMap') isVisibleOnMap: boolean,
+    @GetUser() user: UserDocument,
+  ) {
+    const updatedUser = await this.usersService.updateShopVisibility(
+      id,
+      isVisibleOnMap,
+      user.partnerCode || '',
+    );
+    if (!updatedUser) {
+      throw new BadRequestException('Shop not found or logic error');
+    }
+    return updatedUser;
+  }
 }
+

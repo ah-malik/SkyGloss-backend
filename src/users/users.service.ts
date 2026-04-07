@@ -304,4 +304,38 @@ export class UsersService implements OnModuleInit {
       isPartnerPaid: true, // Only show shops that have completed payment
     }).exec();
   }
+
+  async updateShopVisibility(shopId: string, isVisibleOnMap: boolean, partnerCode: string): Promise<UserDocument | null> {
+    const shop = await this.userModel.findOne({
+      _id: shopId,
+      referredByPartnerCode: partnerCode,
+      role: UserRole.CERTIFIED_SHOP
+    });
+
+    if (!shop) return null;
+
+    const updatePayload: any = { isVisibleOnMap };
+
+    // If making visible and coordinates are missing, attempt geocoding
+    if (isVisibleOnMap && (!shop.latitude || !shop.longitude)) {
+      if (shop.address && shop.city && shop.country) {
+        const coords = await this.fetchCoordinates(shop.address, shop.city, shop.country);
+        if (coords) {
+          updatePayload.latitude = coords.latitude;
+          updatePayload.longitude = coords.longitude;
+          console.log(`[Geocoding] Success during visibility toggle for shop ${shop.email}:`, coords);
+        } else {
+          console.warn(`[Geocoding] Failed during visibility toggle for shop ${shop.email}. Shop may not appear on map.`);
+        }
+      }
+    }
+
+    return this.userModel.findByIdAndUpdate(
+      shopId,
+      updatePayload,
+      { new: true },
+    ).exec();
+  }
+
 }
+

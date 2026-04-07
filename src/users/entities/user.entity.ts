@@ -101,8 +101,12 @@ export class User {
   @Prop({ default: false })
   isTrainingComplete: boolean;
 
+  @Prop({ default: false })
+  isVisibleOnMap: boolean;
+
   @Prop()
   stripeSessionId?: string;
 }
+
 
 export const UserSchema = SchemaFactory.createForClass(User);
