@@ -53,6 +53,14 @@ export class CreateUserDto {
 
   @IsString()
   @IsOptional()
+  shopName?: string;
+
+  @IsString()
+  @IsOptional()
+  hearAboutUs?: string;
+
+  @IsString()
+  @IsOptional()
   accessCode?: string;
 
   @IsString()
@@ -62,6 +70,10 @@ export class CreateUserDto {
   @IsString()
   @IsNotEmpty()
   city: string;
+
+  @IsString()
+  @IsOptional()
+  zipCode?: string;
 
   @IsString()
   @IsOptional()
@@ -80,11 +92,9 @@ export class CreateUserDto {
 
   @IsString()
   @IsOptional()
-  @MinLength(6)
-  @MinLength(6, { message: 'Partner Code must be exactly 6 characters' })
   partnerCode?: string;
+
   @IsString()
   @IsOptional()
-  @MinLength(6)
   referredByPartnerCode?: string;
 }

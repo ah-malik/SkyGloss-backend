@@ -1,14 +1,15 @@
-import { Injectable, BadRequestException, OnModuleInit } from '@nestjs/common';
+import { Injectable, BadRequestException, OnModuleInit, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import * as bcrypt from 'bcrypt';
-import { User, UserDocument, UserRole } from './entities/user.entity';
+import { User, UserDocument, UserRole, UserStatus } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import axios from 'axios';
 
 @Injectable()
 export class UsersService implements OnModuleInit {
+  private readonly logger = new Logger(UsersService.name);
   constructor(@InjectModel(User.name) private userModel: Model<UserDocument>) { }
 
   async onModuleInit() {
@@ -26,6 +27,28 @@ export class UsersService implements OnModuleInit {
         console.log(
           `[UsersService] Cleaned up ${result.modifiedCount} users with null emails.`,
         );
+      }
+
+      // Ensure Global Partner exists
+      const globalPartnerCode = 'GLOBAL77';
+      const existingGlobal = await this.userModel.findOne({ partnerCode: globalPartnerCode });
+      if (!existingGlobal) {
+        console.log(`[UsersService] Creating Global Partner (${globalPartnerCode})...`);
+        const hashedPass = await bcrypt.hash('SkyGlossGlobal77!', 10);
+        await this.userModel.create({
+          firstName: 'Global',
+          lastName: 'Partner',
+          email: 'system.global@skygloss.internal',
+          password: hashedPass,
+          role: UserRole.MASTER_PARTNER,
+          status: 'active',
+          country: 'United States',
+          address: 'Main Office',
+          city: 'Global',
+          partnerCode: globalPartnerCode,
+          isSelfRegistered: false,
+        });
+        console.log('[UsersService] Global Partner created successfully.');
       }
     } catch (err) {
       console.error('[UsersService] Database initialization failed:', err);
@@ -109,8 +132,8 @@ export class UsersService implements OnModuleInit {
         throw new BadRequestException('Partner Code is required for this role');
       }
 
-      if (!/^\d{6}$/.test(userData.partnerCode)) {
-        throw new BadRequestException('Partner Code must be exactly 6 digits');
+      if (!/^[a-zA-Z0-9]{4,8}$/.test(userData.partnerCode)) {
+        throw new BadRequestException('Partner Code must be 4-8 alphanumeric characters');
       }
 
       const existingCode = await this.userModel.findOne({
@@ -296,21 +319,41 @@ export class UsersService implements OnModuleInit {
       .exec();
   }
 
-  async findReferredShops(partnerCode: string): Promise<UserDocument[]> {
-    if (!partnerCode) return [];
-    return this.userModel.find({
-      referredByPartnerCode: partnerCode,
+  async findReferredShops(partnerCode: string): Promise<{ shops: UserDocument[], partners: any[] }> {
+    if (!partnerCode) return { shops: [], partners: [] };
+    
+    const query: any = {
       role: UserRole.CERTIFIED_SHOP,
-      isPartnerPaid: true, // Only show shops that have completed payment
-    }).exec();
+      isPartnerPaid: true,
+    };
+
+    // If it's NOT the Global Partner, filter by their specific code
+    if (partnerCode !== 'GLOBAL77') {
+      query.referredByPartnerCode = partnerCode;
+    }
+
+    const shops = await this.userModel.find(query).exec();
+
+    // Include partners list if it's the Global Partner or Admin (simplified logic)
+    let partners = [];
+    if (partnerCode === 'GLOBAL77') {
+      partners = await this.findAllPartners();
+    }
+
+    return { shops, partners };
   }
 
   async updateShopVisibility(shopId: string, isVisibleOnMap: boolean, partnerCode: string): Promise<UserDocument | null> {
-    const shop = await this.userModel.findOne({
+    const query: any = {
       _id: shopId,
-      referredByPartnerCode: partnerCode,
       role: UserRole.CERTIFIED_SHOP
-    });
+    };
+
+    if (partnerCode !== 'GLOBAL77') {
+      query.referredByPartnerCode = partnerCode;
+    }
+
+    const shop = await this.userModel.findOne(query);
 
     if (!shop) return null;
 
@@ -337,5 +380,32 @@ export class UsersService implements OnModuleInit {
     ).exec();
   }
 
+  async findAllPartners() {
+    this.logger.log('Fetching all partners for list...');
+    const partners = await this.userModel.find({
+      role: { $in: [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER] },
+    }).select('firstName lastName partnerCode email status').sort({ firstName: 1 });
+    this.logger.log(`Found ${partners.length} partners.`);
+    return partners;
+  }
+
+  async assignPartner(shopId: string, partnerCode: string) {
+    // 1. Verify Partner exists
+    const partner = await this.userModel.findOne({ 
+      partnerCode, 
+      role: { $in: [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER] } 
+    });
+    if (!partner) throw new BadRequestException('Invalid Partner Code');
+
+    // 2. Update Shop
+    const shop = await this.userModel.findByIdAndUpdate(
+      shopId,
+      { referredByPartnerCode: partnerCode },
+      { new: true }
+    );
+    if (!shop) throw new BadRequestException('Shop not found');
+
+    return shop;
+  }
 }
 

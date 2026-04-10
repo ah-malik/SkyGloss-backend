@@ -239,19 +239,60 @@ export class AuthService {
   }
 
   async registerShop(createUserDto: CreateUserDto) {
-    if (!createUserDto.referredByPartnerCode) {
-      throw new BadRequestException('Partner ID is required for shop registration');
+    let partnerId = createUserDto.referredByPartnerCode;
+
+    // Direct registration logic: if hearAboutUs is present, assign Global Partner
+    if (createUserDto.hearAboutUs && !partnerId) {
+      partnerId = 'GLOBAL77';
+      createUserDto.referredByPartnerCode = partnerId;
+    }
+
+    if (!partnerId) {
+      throw new BadRequestException('Partner ID is required unless a hearing source is provided');
+    }
+
+    // Validate Partner ID length and format (4-8 alphanumeric)
+    if (!/^[a-zA-Z0-9]{4,8}$/.test(partnerId)) {
+      throw new BadRequestException('Partner ID must be 4-8 alphanumeric characters');
     }
 
     // Validate Partner ID exists and belongs to a partner
-    const partner = await (this.usersService as any).userModel.findOne({
-      partnerCode: createUserDto.referredByPartnerCode,
+    let partner = await (this.usersService as any).userModel.findOne({
+      partnerCode: partnerId,
       role: { $in: [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER] }
     });
+
+    // Self-healing: If Global Partner is requested but missing, create it
+    if (!partner && partnerId === 'GLOBAL77') {
+      try {
+        console.log('[AuthService] Global Partner missing during registration. Creating...');
+        const hashedPass = await bcrypt.hash('SkyGlossGlobal77!', 10);
+        partner = await (this.usersService as any).userModel.create({
+          firstName: 'Global',
+          lastName: 'Partner',
+          email: 'system.global@skygloss.internal',
+          password: hashedPass,
+          role: UserRole.MASTER_PARTNER,
+          status: 'active',
+          country: 'United States',
+          address: 'Main Office',
+          city: 'Global',
+          partnerCode: 'GLOBAL77',
+          isSelfRegistered: false,
+        });
+        console.log('[AuthService] Global Partner created at system.global@skygloss.internal');
+      } catch (err: any) {
+        console.error('[AuthService] Failed to create Global Partner:', err);
+        // If it failed because it exists now (race condition), try finding it one last time
+        partner = await (this.usersService as any).userModel.findOne({ partnerCode: 'GLOBAL77' });
+        if (!partner) throw err;
+      }
+    }
 
     if (!partner) {
       throw new BadRequestException('Invalid Partner ID. Please check and try again.');
     }
+
 
     // Force role and status for a new shop registration
     const shopDto = {
@@ -261,54 +302,62 @@ export class AuthService {
       isSelfRegistered: true,
     };
 
-    const user = await this.usersService.create(shopDto as CreateUserDto);
-
-    // Send Emails
-    if (user.email) {
-      this.mailService.sendDistributorRegistrationUserConfirmation(user.email, user).catch(err => console.error(err));
-    }
-
     try {
-      const notification = await this.notificationsService.create({
-        type: NotificationType.NEW_USER,
-        title: 'New Shop Registration',
-        message: `A new shop (${user.firstName} ${user.lastName}) has registered under Partner ${partner.firstName} ${partner.lastName}.`,
-        metadata: {
-          userId: user._id.toString(),
+      console.log('[AuthService] Creating Shop user...');
+      const user = await this.usersService.create(shopDto as CreateUserDto);
+      console.log('[AuthService] Shop user created:', user._id);
+
+      // Send Emails
+      if (user.email) {
+        this.mailService.sendDistributorRegistrationUserConfirmation(user.email, user).catch(err => console.error(err));
+      }
+
+      try {
+        const notification = await this.notificationsService.create({
+          type: NotificationType.NEW_USER,
+          title: 'New Shop Registration',
+          message: `A new shop (${user.firstName} ${user.lastName}) has registered under Partner ${partner.firstName} ${partner.lastName}.`,
+          metadata: {
+            userId: user._id.toString(),
+            email: user.email,
+            role: user.role,
+            referredBy: partner.partnerCode,
+          },
+        });
+        this.notificationsGateway.broadcastNotification(notification);
+      } catch (err) {
+        console.error('Failed to create admin notification for new shop', err);
+      }
+
+      // Create Stripe Checkout Session (using same fee as partner for now as requested)
+      const stripeSession = await this.ordersService.createDistributorFeeCheckoutSession(
+        user._id.toString(),
+        user.email || '',
+        { 
+          type: 'shop_registration', 
+          referredByPartnerCode: user.referredByPartnerCode 
+        }
+      );
+
+      // Store session ID for manual verification fallback
+      await this.usersService.update(user._id.toString(), { stripeSessionId: (stripeSession as any).id });
+
+      return {
+        message: 'Registration successful. Redirecting to payment...',
+        stripeUrl: stripeSession.url,
+        user: {
+          id: user._id,
           email: user.email,
           role: user.role,
-          referredBy: partner.partnerCode,
-        },
-      });
-      this.notificationsGateway.broadcastNotification(notification);
-    } catch (err) {
-      console.error('Failed to create admin notification for new shop', err);
+          status: user.status,
+          referredByPartnerCode: user.referredByPartnerCode,
+        }
+      };
+    } catch (err: any) {
+      console.error('[AuthService] CRITICAL: registerShop failed:', err);
+      throw new BadRequestException(`Registration error: ${err.message || 'Unknown server error'}`);
     }
 
-    // Create Stripe Checkout Session (using same fee as partner for now as requested)
-    const stripeSession = await this.ordersService.createDistributorFeeCheckoutSession(
-      user._id.toString(),
-      user.email || '',
-      { 
-        type: 'shop_registration', 
-        referredByPartnerCode: user.referredByPartnerCode 
-      }
-    );
-
-    // Store session ID for manual verification fallback
-    await this.usersService.update(user._id.toString(), { stripeSessionId: (stripeSession as any).id });
-
-    return {
-      message: 'Registration successful. Redirecting to payment...',
-      stripeUrl: stripeSession.url,
-      user: {
-        id: user._id,
-        email: user.email,
-        role: user.role,
-        status: user.status,
-        referredByPartnerCode: user.referredByPartnerCode,
-      }
-    };
   }
 
   async forgotPassword(forgotPasswordDto: ForgotPasswordDto) {

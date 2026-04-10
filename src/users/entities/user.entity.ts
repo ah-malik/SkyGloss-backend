@@ -40,6 +40,12 @@ export class User {
   @Prop()
   lastName: string;
 
+  @Prop()
+  shopName?: string;
+
+  @Prop()
+  hearAboutUs?: string;
+
   @Prop({ required: true })
   country: string;
 
@@ -65,8 +71,14 @@ export class User {
   @Prop({ required: true })
   address: string;
 
+  @Prop()
+  streetAddress?: string;
+
   @Prop({ required: true })
   city: string;
+
+  @Prop()
+  zipCode?: string;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'ProductGroup' })
   productGroup?: MongooseSchema.Types.ObjectId;

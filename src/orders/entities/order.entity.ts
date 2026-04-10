@@ -48,8 +48,12 @@ export class ShippingAddress {
   @Prop()
   companyName: string;
 
+  @Prop()
+  address2: string;
+
   @Prop({ required: true })
   address: string;
+
 
   @Prop({ required: true })
   city: string;

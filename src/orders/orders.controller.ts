@@ -40,6 +40,7 @@ export class OrdersController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
     UserRole.CERTIFIED_SHOP,
+    UserRole.PARTNER,
     UserRole.REGIONAL_PARTNER,
     UserRole.MASTER_PARTNER,
   )
@@ -51,6 +52,7 @@ export class OrdersController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
     UserRole.CERTIFIED_SHOP,
+    UserRole.PARTNER,
     UserRole.REGIONAL_PARTNER,
     UserRole.MASTER_PARTNER,
     UserRole.ADMIN,
@@ -63,6 +65,7 @@ export class OrdersController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
     UserRole.CERTIFIED_SHOP,
+    UserRole.PARTNER,
     UserRole.REGIONAL_PARTNER,
     UserRole.MASTER_PARTNER,
   )
@@ -116,6 +119,7 @@ export class OrdersController {
     UserRole.ADMIN,
     UserRole.MASTER_PARTNER,
     UserRole.REGIONAL_PARTNER,
+    UserRole.PARTNER,
     UserRole.CERTIFIED_SHOP,
   )
   createOrderRequest(

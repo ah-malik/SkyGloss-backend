@@ -10,6 +10,7 @@ import {
   UseInterceptors,
   UploadedFile,
   BadRequestException,
+  Req,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UsersService } from './users.service';
@@ -23,9 +24,15 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
-import { UserRole, UserDocument } from './entities/user.entity';
+import {
+  User,
+  UserDocument,
+  UserRole,
+  UserStatus,
+} from './entities/user.entity';
 import { GetUser } from '../common/decorators/get-user.decorator';
 import { Request } from 'express';
+import { ForbiddenException } from '@nestjs/common';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -235,6 +242,25 @@ export class UsersController {
       throw new BadRequestException('Shop not found or logic error');
     }
     return updatedUser;
+  }
+  @Get('partners-list')
+  @Roles(UserRole.ADMIN, UserRole.MASTER_PARTNER) // Include master_partner for Global Partner check
+  async getPartnersList() {
+    return this.usersService.findAllPartners();
+  }
+
+  @Patch(':id/transfer-shop')
+  @Roles(UserRole.ADMIN, UserRole.MASTER_PARTNER)
+  async transferShop(
+    @Param('id') id: string,
+    @Body('partnerCode') partnerCode: string,
+    @Req() req: any
+  ) {
+    // Extra security: If it's a partner calling, it must be the Global Partner
+    if (req.user.role === UserRole.MASTER_PARTNER && req.user.email !== 'system.global@skygloss.internal') {
+       throw new ForbiddenException('Only the Global Partner can re-assign shops.');
+    }
+    return this.usersService.assignPartner(id, partnerCode);
   }
 }
 

@@ -53,8 +53,18 @@ export class OrdersService {
     }
 
     const type = additionalMetadata.type || 'partner_registration';
+    const country = additionalMetadata.country || '';
     const success_path = type === 'shop_registration' ? '/login/shop?payment_success=true' : '/login/partner?payment_success=true';
     const cancel_path = type === 'shop_registration' ? '/register/shop?payment_canceled=true' : '/register/partner?payment_canceled=true';
+
+    // Pricing logic: Spain is 225 EUR, others $250 USD
+    let currency = 'usd';
+    let unit_amount = 25000;
+
+    if (country.toLowerCase() === 'spain') {
+      currency = 'eur';
+      unit_amount = 22500;
+    }
 
     try {
       const session = await this.stripe.checkout.sessions.create({
@@ -62,14 +72,14 @@ export class OrdersService {
         line_items: [
           {
             price_data: {
-              currency: 'usd',
+              currency,
               product_data: {
                 name: type === 'shop_registration' ? 'Shop Registration Fee' : 'Partner Registration Fee',
                 description: type === 'shop_registration' 
                   ? 'One-time fee to activate your SkyGloss Shop account.' 
                   : 'One-time fee to activate your SkyGloss partner account.',
               },
-              unit_amount: 25000, // $250.00
+              unit_amount,
             },
             quantity: 1,
           },
@@ -295,7 +305,15 @@ export class OrdersService {
           updatedUser,
         );
 
-        // 2. Notify Referring Partner
+        // 2. Notify User
+        if (updatedUser.email) {
+          await this.mailService.sendDistributorPaymentConfirmation(
+            updatedUser.email,
+            updatedUser,
+          );
+        }
+
+        // 3. Notify Referring Partner
         const metadata: any = session.metadata || {};
         const partnerCode = metadata.referredByPartnerCode || updatedUser.referredByPartnerCode;
 
@@ -367,6 +385,14 @@ export class OrdersService {
             updatedUser,
           );
 
+          // Send User Confirmation Email
+          if (updatedUser.email) {
+            await this.mailService.sendDistributorPaymentConfirmation(
+              updatedUser.email,
+              updatedUser,
+            );
+          }
+
           const notification = await this.notificationsService.create({
             type: NotificationType.ORDER_PAID,
             title: 'Partner Registration Paid',
@@ -406,6 +432,14 @@ export class OrdersService {
             adminEmails,
             updatedUser,
           );
+
+          // Send User Confirmation Email
+          if (updatedUser.email) {
+            await this.mailService.sendDistributorPaymentConfirmation(
+              updatedUser.email,
+              updatedUser,
+            );
+          }
 
           // 2. Notify Referring Partner
           if (partnerCode) {
