@@ -242,9 +242,21 @@ export class UsersService implements OnModuleInit {
       }
     }
 
-    return this.userModel
+    const updatedUser = await this.userModel
       .findByIdAndUpdate(id, updatePayload, { new: true })
       .exec();
+
+    // IF this was a partner role update AND productGroup was changed, sync to all their shops
+    const partnerRoles = [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER];
+    if (updatedUser && partnerRoles.includes(updatedUser.role) && updatePayload.productGroup !== undefined) {
+      console.log(`[UsersService] Syncing productGroup ${updatePayload.productGroup} to all shops referred by ${updatedUser.partnerCode}`);
+      await this.userModel.updateMany(
+        { referredByPartnerCode: updatedUser.partnerCode, role: UserRole.CERTIFIED_SHOP },
+        { productGroup: updatePayload.productGroup }
+      ).exec();
+    }
+
+    return updatedUser;
   }
 
   async remove(id: string): Promise<UserDocument | null> {
@@ -328,18 +340,20 @@ export class UsersService implements OnModuleInit {
     };
 
     // If it's NOT the Global Partner, filter by their specific code
-    if (partnerCode !== 'GLOBAL77') {
+    const isGlobal = partnerCode === 'GLOBAL77';
+    
+    if (!isGlobal) {
       query.referredByPartnerCode = partnerCode;
     }
-
+    
     const shops = await this.userModel.find(query).exec();
-
-    // Include partners list if it's the Global Partner or Admin (simplified logic)
-    let partners = [];
-    if (partnerCode === 'GLOBAL77') {
+    
+    // Include partners list if it's the Global Partner
+    let partners: any[] = [];
+    if (isGlobal) {
       partners = await this.findAllPartners();
     }
-
+    
     return { shops, partners };
   }
 
@@ -397,10 +411,13 @@ export class UsersService implements OnModuleInit {
     });
     if (!partner) throw new BadRequestException('Invalid Partner Code');
 
-    // 2. Update Shop
+    // 2. Update Shop with partner's code and inherit their productGroup
     const shop = await this.userModel.findByIdAndUpdate(
       shopId,
-      { referredByPartnerCode: partnerCode },
+      { 
+        referredByPartnerCode: partnerCode,
+        productGroup: partner.productGroup || undefined
+      },
       { new: true }
     );
     if (!shop) throw new BadRequestException('Shop not found');

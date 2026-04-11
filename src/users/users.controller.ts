@@ -256,9 +256,11 @@ export class UsersController {
     @Body('partnerCode') partnerCode: string,
     @Req() req: any
   ) {
-    // Extra security: If it's a partner calling, it must be the Global Partner
-    if (req.user.role === UserRole.MASTER_PARTNER && req.user.email !== 'system.global@skygloss.internal') {
-       throw new ForbiddenException('Only the Global Partner can re-assign shops.');
+    // Extra security: If it's a partner calling, it must be the Global Partner (GLOBAL77)
+    if (req.user.role === UserRole.MASTER_PARTNER && 
+        req.user.partnerCode !== 'GLOBAL77' && 
+        req.user.email !== 'system.global@skygloss.internal') {
+       throw new ForbiddenException('Only the Global Partner (GLOBAL77) can re-assign shops.');
     }
     return this.usersService.assignPartner(id, partnerCode);
   }

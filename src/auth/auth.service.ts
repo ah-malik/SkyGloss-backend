@@ -300,6 +300,7 @@ export class AuthService {
       role: UserRole.CERTIFIED_SHOP,
       status: UserStatus.PENDING,
       isSelfRegistered: true,
+      productGroup: partner.productGroup || undefined, // Inherit from partner
     };
 
     try {
