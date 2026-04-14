@@ -295,13 +295,9 @@ export class OrdersService {
       // Trigger Notifications (Same logic as webhook)
       if (updatedUser) {
         // 1. Notify Admin
-        const adminUsers = await this.usersService.findAll();
-        const adminEmails = adminUsers
-          .filter((u) => u.role === 'admin' && u.email)
-          .map((u) => u.email as string);
-
+        // Admin notification is now handled internally by MailService for sales@skygloss.com
         await this.mailService.sendDistributorPaymentCompletedAdminNotification(
-          adminEmails,
+          [],
           updatedUser,
         );
 
@@ -375,13 +371,9 @@ export class OrdersService {
 
         if (updatedUser) {
           console.log(`[Stripe Webhook] User ${userId} activated as partner.`);
-          // Send Admin Notification Email
-          const adminUsers = await this.usersService.findAll();
-          const adminEmails = adminUsers
-            .filter((u) => u.role === 'admin' && u.email)
-            .map((u) => u.email as string);
+          // Admin notification is now handled internally by MailService for sales@skygloss.com
           await this.mailService.sendDistributorPaymentCompletedAdminNotification(
-            adminEmails,
+            [],
             updatedUser,
           );
 
@@ -422,14 +414,9 @@ export class OrdersService {
         if (updatedUser) {
           console.log(`[Stripe Webhook] Shop ${userId} activated.`);
 
-          // 1. Notify Admin
-          const adminUsers = await this.usersService.findAll();
-          const adminEmails = adminUsers
-            .filter((u) => u.role === 'admin' && u.email)
-            .map((u) => u.email as string);
-
+          // 1. Notify Admin (Sales Dept)
           await this.mailService.sendDistributorPaymentCompletedAdminNotification(
-            adminEmails,
+            [],
             updatedUser,
           );
 

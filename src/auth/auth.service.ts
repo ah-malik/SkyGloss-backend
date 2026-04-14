@@ -194,13 +194,8 @@ export class AuthService {
     // Send Emails asynchronously
     if (user.email) {
       this.mailService.sendDistributorRegistrationUserConfirmation(user.email, user).catch(err => console.error(err));
-
-      this.usersService.findAll().then(users => {
-        const adminEmails = users.filter(u => u.role === UserRole.ADMIN && u.email).map(u => u.email as string);
-        if (adminEmails.length > 0) {
-          this.mailService.sendDistributorRegistrationAdminNotification(adminEmails, user).catch(err => console.error(err));
-        }
-      }).catch(err => console.error(err));
+      // Admin notification is now handled internally by MailService for sales@skygloss.com
+      this.mailService.sendDistributorRegistrationAdminNotification([], user).catch(err => console.error(err));
     }
 
     try {

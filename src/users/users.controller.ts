@@ -33,6 +33,7 @@ import {
 import { GetUser } from '../common/decorators/get-user.decorator';
 import { Request } from 'express';
 import { ForbiddenException } from '@nestjs/common';
+import { MailService } from 'src/mail/mail.service';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -43,6 +44,7 @@ export class UsersController {
     private readonly notificationsService: NotificationsService,
     private readonly notificationsGateway: NotificationsGateway,
     private readonly chatService: ChatService,
+    private readonly mailService: MailService,
   ) { }
 
   @Post()
@@ -222,6 +224,11 @@ export class UsersController {
     if (user.referredByPartnerCode) {
          // Optionally send targeted websocket event logic here if expanded
     }
+
+    // Send Training Complete Email Notification to user and certified@skygloss.com
+    this.mailService.sendTrainingCompleteNotification(user).catch(err => {
+      console.error('Failed to send training complete email:', err);
+    });
 
     return { message: 'Training completion submitted successfully.', roomId: (existingRoom as any)._id };
   }

@@ -7,6 +7,7 @@ import { User, UserSchema } from './entities/user.entity';
 import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { ChatModule } from '../chat/chat.module';
+import { MailModule } from 'src/mail/mail.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { ChatModule } from '../chat/chat.module';
     CloudinaryModule,
     NotificationsModule,
     ChatModule,
+    MailModule,
   ],
   controllers: [UsersController],
   providers: [UsersService],
