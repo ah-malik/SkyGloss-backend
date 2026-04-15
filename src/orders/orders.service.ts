@@ -57,13 +57,26 @@ export class OrdersService {
     const success_path = type === 'shop_registration' ? '/login/shop?payment_success=true' : '/login/partner?payment_success=true';
     const cancel_path = type === 'shop_registration' ? '/register/shop?payment_canceled=true' : '/register/partner?payment_canceled=true';
 
-    // Pricing logic: Spain is 225 EUR, others $250 USD
+    // PRICING LOGIC
     let currency = 'usd';
-    let unit_amount = 25000;
+    let unit_amount = 25000; // Default $250.00 USD
 
-    if (country.toLowerCase() === 'spain') {
+    const europeanCountries = [
+      'austria', 'belgium', 'bulgaria', 'croatia', 'cyprus', 'czech republic', 'denmark', 
+      'estonia', 'finland', 'france', 'germany', 'greece', 'hungary', 'ireland', 'italy', 
+      'latvia', 'lithuania', 'luxembourg', 'malta', 'netherlands', 'poland', 'portugal', 
+      'romania', 'slovakia', 'slovenia', 'spain', 'sweden', 'united kingdom', 
+      'switzerland', 'norway', 'iceland', 'liechtenstein', 'monaco', 'san marino', 'andorra'
+    ];
+
+    const normalizedCountry = country.toLowerCase().trim();
+
+    if (normalizedCountry === 'australia' || normalizedCountry === 'new zealand') {
+      currency = 'usd';
+      unit_amount = 120000; // $1,200.00 USD
+    } else if (europeanCountries.includes(normalizedCountry)) {
       currency = 'eur';
-      unit_amount = 22500;
+      unit_amount = 25000; // 250.00 EUR
     }
 
     try {

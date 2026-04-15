@@ -217,7 +217,8 @@ export class AuthService {
     // Create Stripe Checkout Session
     const stripeSession = await this.ordersService.createDistributorFeeCheckoutSession(
       user._id.toString(),
-      user.email || ''
+      user.email || '',
+      { country: user.country }
     );
 
     return {
@@ -331,7 +332,8 @@ export class AuthService {
         user.email || '',
         { 
           type: 'shop_registration', 
-          referredByPartnerCode: user.referredByPartnerCode 
+          referredByPartnerCode: user.referredByPartnerCode,
+          country: user.country
         }
       );
 
