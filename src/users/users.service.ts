@@ -38,7 +38,7 @@ export class UsersService implements OnModuleInit {
         await this.userModel.create({
           firstName: 'Global',
           lastName: 'Partner',
-          email: 'system.global@skygloss.internal',
+          email: 'certified@skygloss.com',
           password: hashedPass,
           role: UserRole.MASTER_PARTNER,
           status: 'active',
@@ -334,7 +334,7 @@ export class UsersService implements OnModuleInit {
 
   async findReferredShops(partnerCode: string): Promise<{ shops: UserDocument[], partners: any[] }> {
     if (!partnerCode) return { shops: [], partners: [] };
-    
+
     const query: any = {
       role: UserRole.CERTIFIED_SHOP,
       isPartnerPaid: true,
@@ -342,19 +342,19 @@ export class UsersService implements OnModuleInit {
 
     // If it's NOT the Global Partner, filter by their specific code
     const isGlobal = partnerCode === 'GLOBAL77';
-    
+
     if (!isGlobal) {
       query.referredByPartnerCode = partnerCode;
     }
-    
+
     const shops = await this.userModel.find(query).exec();
-    
+
     // Include partners list if it's the Global Partner
     let partners: any[] = [];
     if (isGlobal) {
       partners = await this.findAllPartners();
     }
-    
+
     return { shops, partners };
   }
 
@@ -406,16 +406,16 @@ export class UsersService implements OnModuleInit {
 
   async assignPartner(shopId: string, partnerCode: string) {
     // 1. Verify Partner exists
-    const partner = await this.userModel.findOne({ 
-      partnerCode, 
-      role: { $in: [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER] } 
+    const partner = await this.userModel.findOne({
+      partnerCode,
+      role: { $in: [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER] }
     });
     if (!partner) throw new BadRequestException('Invalid Partner Code');
 
     // 2. Update Shop with partner's code and inherit their productGroup
     const shop = await this.userModel.findByIdAndUpdate(
       shopId,
-      { 
+      {
         referredByPartnerCode: partnerCode,
         productGroup: partner.productGroup || undefined
       },

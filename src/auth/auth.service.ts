@@ -132,7 +132,7 @@ export class AuthService {
         email: code.generatedForEmail,
         role: code.targetRole,
         status: 'active',
-        country: loginAccessCodeDto.country,
+        country: loginAccessCodeDto.country || 'Other',
         accessCode: loginAccessCodeDto.accessCode,
       } as CreateUserDto);
 
@@ -266,7 +266,7 @@ export class AuthService {
         partner = await (this.usersService as any).userModel.create({
           firstName: 'Global',
           lastName: 'Partner',
-          email: 'system.global@skygloss.internal',
+          email: 'certified@skygloss.com',
           password: hashedPass,
           role: UserRole.MASTER_PARTNER,
           status: 'active',
@@ -276,7 +276,7 @@ export class AuthService {
           partnerCode: 'GLOBAL77',
           isSelfRegistered: false,
         });
-        console.log('[AuthService] Global Partner created at system.global@skygloss.internal');
+        console.log('[AuthService] Global Partner created at certified@skygloss.com');
       } catch (err: any) {
         console.error('[AuthService] Failed to create Global Partner:', err);
         // If it failed because it exists now (race condition), try finding it one last time
@@ -293,7 +293,7 @@ export class AuthService {
     // Handle Coupon Code Bypass
     const isCouponBypass = createUserDto.couponCode === 'CERTIFICATIONBONUS';
     if (isCouponBypass) {
-        partnerId = 'GLOBAL77';
+      partnerId = 'GLOBAL77';
     }
 
     // Force role and status for a new shop registration
@@ -339,8 +339,8 @@ export class AuthService {
         const stripeSession = await this.ordersService.createDistributorFeeCheckoutSession(
           user._id.toString(),
           user.email || '',
-          { 
-            type: 'shop_registration', 
+          {
+            type: 'shop_registration',
             referredByPartnerCode: user.referredByPartnerCode,
             country: user.country
           }

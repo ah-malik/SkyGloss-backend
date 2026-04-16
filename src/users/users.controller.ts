@@ -222,7 +222,7 @@ export class UsersController {
 
     // Try finding Partner to notify them separately, if a logic layer exists
     if (user.referredByPartnerCode) {
-         // Optionally send targeted websocket event logic here if expanded
+      // Optionally send targeted websocket event logic here if expanded
     }
 
     // Send Training Complete Email Notification to user and certified@skygloss.com
@@ -264,10 +264,10 @@ export class UsersController {
     @Req() req: any
   ) {
     // Extra security: If it's a partner calling, it must be the Global Partner (GLOBAL77)
-    if (req.user.role === UserRole.MASTER_PARTNER && 
-        req.user.partnerCode !== 'GLOBAL77' && 
-        req.user.email !== 'system.global@skygloss.internal') {
-       throw new ForbiddenException('Only the Global Partner (GLOBAL77) can re-assign shops.');
+    if (req.user.role === UserRole.MASTER_PARTNER &&
+      req.user.partnerCode !== 'GLOBAL77' &&
+      req.user.email !== 'certified@skygloss.com') {
+      throw new ForbiddenException('Only the Global Partner (GLOBAL77) can re-assign shops.');
     }
     return this.usersService.assignPartner(id, partnerCode);
   }

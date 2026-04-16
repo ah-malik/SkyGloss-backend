@@ -5,7 +5,7 @@ async function checkAllMessages() {
   try {
     await mongoose.connect(MONGO_URI);
     console.log('Connected to MongoDB');
-    
+
     // Total count of all messages
     const total = await mongoose.connection.collection('chatmessages').countDocuments();
     console.log('Total messages:', total);
@@ -20,8 +20,8 @@ async function checkAllMessages() {
     console.log('Other messages:', otherCount);
 
     if (otherCount > 0) {
-        const others = await mongoose.connection.collection('chatmessages').find({ senderType: { $nin: ['user', 'admin'] } }).limit(5).toArray();
-        console.log('Sample "other" messages:', JSON.stringify(others, null, 2));
+      const others = await mongoose.connection.collection('chatmessages').find({ senderType: { $nin: ['user', 'admin'] } }).limit(5).toArray();
+      console.log('Sample "other" messages:', JSON.stringify(others, null, 2));
     }
 
     process.exit(0);
