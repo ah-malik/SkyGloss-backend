@@ -237,8 +237,8 @@ export class AuthService {
   async registerShop(createUserDto: CreateUserDto) {
     let partnerId = createUserDto.referredByPartnerCode;
 
-    // Direct registration logic: if hearAboutUs is present, assign Global Partner
-    if (createUserDto.hearAboutUs && !partnerId) {
+    // Direct registration logic: if hearAboutUs or couponCode is present, assign Global Partner
+    if ((createUserDto.hearAboutUs || createUserDto.couponCode === 'CERTIFICATIONONUS') && !partnerId) {
       partnerId = 'GLOBAL77';
       createUserDto.referredByPartnerCode = partnerId;
     }
