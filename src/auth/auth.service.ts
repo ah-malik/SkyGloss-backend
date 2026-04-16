@@ -291,7 +291,7 @@ export class AuthService {
 
 
     // Handle Coupon Code Bypass
-    const isCouponBypass = createUserDto.couponCode === 'CERTIFICATIONBONUS';
+    const isCouponBypass = createUserDto.couponCode === 'CERTIFICATIONONUS';
     if (isCouponBypass) {
       partnerId = 'GLOBAL77';
     }
