@@ -72,8 +72,8 @@ export class OrdersService {
     const normalizedCountry = country.toLowerCase().trim();
 
     if (normalizedCountry === 'australia' || normalizedCountry === 'new zealand') {
-      currency = 'usd';
-      unit_amount = 120000; // $1,200.00 USD
+      currency = 'aud';
+      unit_amount = 198000; // 1,980.00 AUD (1800 base + 180 tax)
     } else if (europeanCountries.includes(normalizedCountry)) {
       currency = 'eur';
       unit_amount = 25000; // 250.00 EUR

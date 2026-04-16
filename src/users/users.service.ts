@@ -132,8 +132,8 @@ export class UsersService implements OnModuleInit {
         throw new BadRequestException('Partner Code is required for this role');
       }
 
-      if (!/^[a-zA-Z0-9]{4,8}$/.test(userData.partnerCode)) {
-        throw new BadRequestException('Partner Code must be 4-8 alphanumeric characters');
+      if (!/^[a-zA-Z0-9]{4,10}$/.test(userData.partnerCode)) {
+        throw new BadRequestException('Partner Code must be 4-10 alphanumeric characters');
       }
 
       const existingCode = await this.userModel.findOne({
@@ -209,8 +209,10 @@ export class UsersService implements OnModuleInit {
 
     const updatePayload: any = { ...updateUserDto };
 
-    // Prevent partnerCode from being updated
-    delete updatePayload.partnerCode;
+    // partnerCode is now allowed to be updated by admins via User Management
+    if (updatePayload.partnerCode) {
+      updatePayload.partnerCode = updatePayload.partnerCode.toString().trim();
+    }
 
     if (updatePayload.password) {
       updatePayload.password = await bcrypt.hash(updatePayload.password, 10);
@@ -261,9 +263,8 @@ export class UsersService implements OnModuleInit {
 
   async remove(id: string): Promise<UserDocument | null> {
     const user = await this.userModel.findById(id);
-    if (user && user.role === UserRole.ADMIN) {
-      throw new BadRequestException('Administrator accounts cannot be deleted');
-    }
+    // Role-based deletion blocks removed per user request to allow full management of all accounts
+    return this.userModel.findByIdAndDelete(id).exec();
     return this.userModel.findByIdAndDelete(id).exec();
   }
 

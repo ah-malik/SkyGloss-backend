@@ -97,4 +97,8 @@ export class CreateUserDto {
   @IsString()
   @IsOptional()
   referredByPartnerCode?: string;
+
+  @IsString()
+  @IsOptional()
+  couponCode?: string;
 }

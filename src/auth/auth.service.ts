@@ -247,9 +247,9 @@ export class AuthService {
       throw new BadRequestException('Partner ID is required unless a hearing source is provided');
     }
 
-    // Validate Partner ID length and format (4-8 alphanumeric)
-    if (!/^[a-zA-Z0-9]{4,8}$/.test(partnerId)) {
-      throw new BadRequestException('Partner ID must be 4-8 alphanumeric characters');
+    // Validate Partner ID length and format (4-10 alphanumeric)
+    if (!/^[a-zA-Z0-9]{4,10}$/.test(partnerId)) {
+      throw new BadRequestException('Partner ID must be 4-10 alphanumeric characters');
     }
 
     // Validate Partner ID exists and belongs to a partner
@@ -290,11 +290,19 @@ export class AuthService {
     }
 
 
+    // Handle Coupon Code Bypass
+    const isCouponBypass = createUserDto.couponCode === 'CERTIFICATIONBONUS';
+    if (isCouponBypass) {
+        partnerId = 'GLOBAL77';
+    }
+
     // Force role and status for a new shop registration
     const shopDto = {
       ...createUserDto,
+      referredByPartnerCode: partnerId,
       role: UserRole.CERTIFIED_SHOP,
-      status: UserStatus.PENDING,
+      status: isCouponBypass ? UserStatus.ACTIVE : UserStatus.PENDING,
+      isPartnerPaid: isCouponBypass ? true : false,
       isSelfRegistered: true,
       productGroup: partner.productGroup || undefined, // Inherit from partner
     };
@@ -326,29 +334,41 @@ export class AuthService {
         console.error('Failed to create admin notification for new shop', err);
       }
 
-      // Create Stripe Checkout Session (using same fee as partner for now as requested)
-      const stripeSession = await this.ordersService.createDistributorFeeCheckoutSession(
-        user._id.toString(),
-        user.email || '',
-        { 
-          type: 'shop_registration', 
-          referredByPartnerCode: user.referredByPartnerCode,
-          country: user.country
-        }
-      );
+      // Create Stripe Checkout Session (unless bypassed by coupon)
+      if (!isCouponBypass) {
+        const stripeSession = await this.ordersService.createDistributorFeeCheckoutSession(
+          user._id.toString(),
+          user.email || '',
+          { 
+            type: 'shop_registration', 
+            referredByPartnerCode: user.referredByPartnerCode,
+            country: user.country
+          }
+        );
 
-      // Store session ID for manual verification fallback
-      await this.usersService.update(user._id.toString(), { stripeSessionId: (stripeSession as any).id });
+        // Store session ID for manual verification fallback
+        await this.usersService.update(user._id.toString(), { stripeSessionId: (stripeSession as any).id });
+
+        return {
+          message: 'Registration successful. Redirecting to payment...',
+          stripeUrl: stripeSession.url,
+          user: {
+            id: user._id,
+            email: user.email,
+            role: user.role,
+            status: user.status,
+          }
+        };
+      }
 
       return {
-        message: 'Registration successful. Redirecting to payment...',
-        stripeUrl: stripeSession.url,
+        message: 'Registration successful via Certification Bonus! You can now log in.',
         user: {
           id: user._id,
           email: user.email,
           role: user.role,
           status: user.status,
-          referredByPartnerCode: user.referredByPartnerCode,
+          isPaid: true
         }
       };
     } catch (err: any) {
