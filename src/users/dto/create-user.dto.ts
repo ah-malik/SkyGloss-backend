@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsString,
   MinLength,
+  IsBoolean,
 } from 'class-validator';
 import { UserRole, UserStatus } from '../entities/user.entity';
 
@@ -125,4 +126,16 @@ export class CreateUserDto {
   @IsString()
   @IsOptional()
   linkedin?: string;
+
+  @IsBoolean()
+  @IsOptional()
+  isPartnerPaid?: boolean;
+
+  @IsBoolean()
+  @IsOptional()
+  isSelfRegistered?: boolean;
+
+  @IsBoolean()
+  @IsOptional()
+  isPartnerCertified?: boolean;
 }
