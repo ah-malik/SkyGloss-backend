@@ -108,6 +108,9 @@ export class OrdersService {
           ...additionalMetadata,
         },
       });
+      
+      // Save session ID to user for verification fallback
+      await this.usersService.update(userId, { stripeSessionId: session.id } as any);
 
       return { url: session.url, id: session.id };
     } catch (error) {
@@ -467,7 +470,7 @@ export class OrdersService {
           });
           this.notificationsGateway.broadcastNotification(notification);
         } else {
-          console.error(`[Stripe Webhook] Could not find/update shop ${userId} for shop_registration.`);
+          console.error(`[Stripe Webhook] CRITICAL: Could not find/update shop ${userId} for shop_registration type.`);
         }
         return { received: true };
       }
