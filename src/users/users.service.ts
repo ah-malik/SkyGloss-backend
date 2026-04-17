@@ -228,6 +228,13 @@ export class UsersService implements OnModuleInit {
       updatePayload.productGroup = null;
     }
 
+    // Explicitly sync isPartnerPaid to its DB name isDistributorPaid to ensure persistence during raw updates
+    if (updatePayload.isPartnerPaid !== undefined) {
+      updatePayload.isDistributorPaid = updatePayload.isPartnerPaid;
+    }
+
+    console.log(`[UsersService] Final Update Payload for ${id}:`, JSON.stringify(updatePayload, null, 2));
+
     // Capture location related fields to see if geocoding is needed
     const { address, city, country, latitude, longitude } = updatePayload;
 
