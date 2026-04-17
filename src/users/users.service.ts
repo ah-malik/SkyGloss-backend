@@ -209,10 +209,17 @@ export class UsersService implements OnModuleInit {
 
     const updatePayload: any = { ...updateUserDto };
 
-    // partnerCode is now allowed to be updated by admins via User Management
+    // partnerCode cleanup to avoid duplicate key errors on empty strings (sparse index only allows one "")
     if (updatePayload.partnerCode) {
       updatePayload.partnerCode = updatePayload.partnerCode.toString().trim();
+      if (updatePayload.partnerCode === '') delete updatePayload.partnerCode;
+    } else if (updatePayload.partnerCode === '') {
+      delete updatePayload.partnerCode;
     }
+
+    // Clean up other unique fields if they are empty strings
+    if (updatePayload.email === '') delete updatePayload.email;
+    if (updatePayload.username === '') delete updatePayload.username;
 
     if (updatePayload.password) {
       updatePayload.password = await bcrypt.hash(updatePayload.password, 10);
