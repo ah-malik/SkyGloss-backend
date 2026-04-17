@@ -98,7 +98,7 @@ export class User {
   @Prop({ default: false })
   isSelfRegistered: boolean;
 
-  @Prop({ default: false, name: 'isDistributorPaid', alias: 'isPartnerPaid' })
+  @Prop({ default: false, name: 'isDistributorPaid' })
   isPartnerPaid: boolean;
 
   @Prop({ unique: true, sparse: true })
