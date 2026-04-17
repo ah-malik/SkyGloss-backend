@@ -101,4 +101,28 @@ export class CreateUserDto {
   @IsString()
   @IsOptional()
   couponCode?: string;
+
+  @IsString()
+  @IsOptional()
+  website?: string;
+
+  @IsString()
+  @IsOptional()
+  facebook?: string;
+
+  @IsString()
+  @IsOptional()
+  instagram?: string;
+
+  @IsString()
+  @IsOptional()
+  youtube?: string;
+
+  @IsString()
+  @IsOptional()
+  tiktok?: string;
+
+  @IsString()
+  @IsOptional()
+  linkedin?: string;
 }

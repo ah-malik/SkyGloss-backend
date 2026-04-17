@@ -118,6 +118,24 @@ export class User {
 
   @Prop()
   stripeSessionId?: string;
+
+  @Prop()
+  website?: string;
+
+  @Prop()
+  facebook?: string;
+
+  @Prop()
+  instagram?: string;
+
+  @Prop()
+  youtube?: string;
+
+  @Prop()
+  tiktok?: string;
+
+  @Prop()
+  linkedin?: string;
 }
 
 

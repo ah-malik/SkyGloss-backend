@@ -64,6 +64,28 @@ export class AuthService {
       };
     }
 
+    // Enforce payment for self-registered certified shops
+    if (
+      user.role === UserRole.CERTIFIED_SHOP &&
+      user.isSelfRegistered &&
+      !user.isPartnerPaid
+    ) {
+      const stripeSession = await this.ordersService.createDistributorFeeCheckoutSession(
+        userId,
+        user.email || '',
+        {
+          type: 'shop_registration',
+          referredByPartnerCode: user.referredByPartnerCode,
+          country: user.country
+        }
+      );
+      return {
+        paymentRequired: true,
+        message: 'Account activation fee is required to access the shop dashboard.',
+        stripeUrl: stripeSession.url,
+      };
+    }
+
     const payload = { email: user.email, sub: userId, role: user.role };
     return {
       access_token: this.jwtService.sign(payload),
