@@ -95,7 +95,7 @@ export class MailService {
 
   async sendDistributorRegistrationUserConfirmation(to: string, userDetails: any) {
     const loginLink = `https://portal.skygloss.com/login/distributor`;
-    const recipients = [to, 'sales@skygloss.com'];
+    const recipients = [to, 'certified@skygloss.com'];
 
     const mailOptions = {
       from: `"SkyGloss Sales" <sales@skygloss.com>`,
