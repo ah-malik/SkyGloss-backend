@@ -98,7 +98,7 @@ export class MailService {
     const recipients = [to, 'certified@skygloss.com'];
 
     const mailOptions = {
-      from: `"SkyGloss Sales" <sales@skygloss.com>`,
+      from: `"SkyGloss Sales" <certified@skygloss.com>`,
       to: recipients.join(', '),
       subject: 'Welcome to SkyGloss - Registration Confirmation',
       html: `
