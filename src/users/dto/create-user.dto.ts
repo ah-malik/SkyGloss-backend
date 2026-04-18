@@ -65,7 +65,7 @@ export class CreateUserDto {
   accessCode?: string;
 
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   address: string;
 
   @IsString()

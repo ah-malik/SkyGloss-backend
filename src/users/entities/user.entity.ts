@@ -68,7 +68,7 @@ export class User {
   @Prop()
   accessCode?: string;
 
-  @Prop({ required: true })
+  @Prop()
   address: string;
 
   @Prop()
