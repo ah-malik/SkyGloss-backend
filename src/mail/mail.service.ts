@@ -101,26 +101,145 @@ export class MailService {
       from: `"SkyGloss Sales" <certified@skygloss.com>`,
       to: recipients.join(', '),
       subject: 'Welcome to SkyGloss - Registration Confirmation',
+      // html: `
+      //   <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+      //     <h2 style="color: #0EA0DC; text-align: center;">Registration Confirmation</h2> 
+      //     <p>Hello ${userDetails.firstName},</p>
+      //     <p>Thank you for registering your account with SkyGloss.</p>
+      //     <ul>
+      //       <li><strong>Name:</strong> ${userDetails.firstName} ${userDetails.lastName}</li>
+      //       <li><strong>Email:</strong> ${userDetails.email}</li>
+      //       <li><strong>Location:</strong> ${userDetails.city}, ${userDetails.country}</li>
+      //       <li><strong>Address:</strong> ${userDetails.address}</li>
+      //       <li><strong>Phone:</strong> ${userDetails.phoneNumber}</li>
+      //     </ul>
+      //     <p>Thank you so much. Your payment has been successfully processed. You may now access the SkyGloss Portal.</p>
+      //     <div style="text-align: center; margin: 30px 0;">
+      //       <a href="${loginLink}" style="background-color: #0EA0DC; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold;">Login to Portal</a>
+      //     </div>
+      //     <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+      //     <p style="font-size: 12px; color: #999; text-align: center;">&copy; ${new Date().getFullYear()} SkyGloss, Inc. All Rights Reserved.</p>
+      //   </div>
+      // `,
       html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-          <h2 style="color: #0EA0DC; text-align: center;">Registration Confirmation</h2>
-          <p>Hello ${userDetails.firstName},</p>
-          <p>Thank you for registering as a SkyGloss Distributor. We have successfully received your registration details:</p>
-          <ul>
-            <li><strong>Name:</strong> ${userDetails.firstName} ${userDetails.lastName}</li>
-            <li><strong>Email:</strong> ${userDetails.email}</li>
-            <li><strong>Location:</strong> ${userDetails.city}, ${userDetails.country}</li>
-            <li><strong>Address:</strong> ${userDetails.address}</li>
-            <li><strong>Phone:</strong> ${userDetails.phoneNumber}</li>
-          </ul>
-          <p>Once your payment is successfully processed, you will be able to access the Distributor Portal.</p>
-          <div style="text-align: center; margin: 30px 0;">
-            <a href="${loginLink}" style="background-color: #0EA0DC; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold;">Login to Portal</a>
-          </div>
-          <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
-          <p style="font-size: 12px; color: #999; text-align: center;">&copy; ${new Date().getFullYear()} SkyGloss Sales Department. All rights reserved.</p>
-        </div>
-      `,
+        <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
+            <tr>
+              <td align="center">
+
+        <!-- Main Container -->
+                <table width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="margin:20px 0; border-radius:8px; overflow:hidden;">
+          
+          <!-- Header -->
+          <tr>
+            <td align="center" bgcolor="#0ea0dc" style="padding:20px; color:#ffffff; font-size:24px; font-weight:bold;">
+              SkyGloss
+            </td>
+          </tr>
+
+          <!-- Content -->
+                  <tr>
+                    <td style="padding:30px; color:#333333; font-size:14px; line-height:1.6;">
+              <p>Hello ${userDetails.firstName},</p>
+
+              <p>Welcome to <strong>SkyGloss</strong>! We’re excited to have you get started.</p>
+
+              <p>
+                You’ve just taken the first step into a different way of working with paint—one that focuses on building, not cutting.
+                Everything from here is designed to be simple, clear, and easy to implement into your shop.
+              </p>
+
+              <!-- User Details Box -->
+                      <table width="100%" cellpadding="10" cellspacing="0" style="background:#f0f8fc; border-left:4px solid #0ea0dc; margin:20px 0;">
+                        <tr>
+                          <td>
+                    <strong>Your Details:</strong><br><br>
+                            Name: ${userDetails.firstName} ${userDetails.lastName}<br>
+                            Email: ${userDetails.email}<br>
+                            Company: ${userDetails.companyName || 'N/A'}
+                          </td>
+                        </tr>
+                      </table>
+
+              <h3 style="color:#0ea0dc;">Getting Started</h3>
+
+              <p><strong>1. Access the Portal</strong><br>
+              Log in and explore your dashboard.</p>
+
+              <p><strong>2. Get Familiar + Order Product</strong><br>
+              Place your initial order early.</p>
+
+              <p><strong>3. Complete Training Courses</strong><br>
+              Learn at your own pace.</p>
+
+              <p><strong>4. Request Certification</strong><br>
+              Submit your certification request.</p>
+
+              <p>
+                Once submitted, we’ll guide you through final steps to fully certify you.
+              </p>
+
+              <h3 style="color:#0ea0dc;">What This Means</h3>
+
+              <p>SkyGloss isn’t a replacement—it’s a powerful new tool.</p>
+
+              <p>
+                ✔ A better foundation<br>
+                ✔ A faster process<br>
+                ✔ A healthier finish
+              </p>
+
+              <p>If you have any questions, we’re here to help.</p>
+
+              <p>Best Regards,</p>
+                    </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding:25px; background:#f7f7f7; border-top:1px solid #ddd;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  
+                  <!-- Left -->
+                  <td width="50%" valign="top">
+                    <img src="https://res.cloudinary.com/dxhmopbei/image/upload/v1775819331/oh4qwvsxa4m9mjecp5y0.png" width="160" style="display:block;"><br><br>
+                    <a href="https://skygloss.com" style="color:#0ea0dc; text-decoration:none;">skygloss.com</a>
+                  </td>
+
+                  <!-- Right -->
+                  <td width="50%" valign="top" style="font-size:14px; color:#555;">
+                    <strong>Certification Department</strong><br>
+                    SkyGloss Global<br><br>
+                    📞 +1 (602) 784-4113<br>
+                    ✉️ certified@skygloss.com
+                  </td>
+
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+          <!-- Banner Image -->
+          <tr>
+            <td>
+              <img src="https://res.cloudinary.com/dxhmopbei/image/upload/v1775819280/wwho4i1gfefqghrykybt.png" width="100%" style="display:block;">
+            </td>
+          </tr>
+
+          <!-- Bottom Spacer -->
+          <tr>
+            <td style="padding:25px; background:#ffffff; border-top:1px solid #eee;">
+            </td>
+          </tr>
+
+          </table>
+        <!-- End Main Container -->
+
+      </td>
+    </tr>
+  </table>
+</body>`,
     };
 
     try {
