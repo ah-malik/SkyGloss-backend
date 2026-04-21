@@ -228,7 +228,7 @@ export class UsersController {
     }
     const updatedUser = await this.usersService.update(user._id.toString(), {
       isTrainingComplete: true,
-    } as any);
+    } as any, user);
 
     // Ensure they have an active chat room implicitly connected to them
     const existingRoom = await this.chatService.createOrGetRoom({
