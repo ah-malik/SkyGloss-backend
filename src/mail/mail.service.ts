@@ -23,7 +23,7 @@ export class MailService {
       service: 'gmail',
       auth: {
         user: 'sales@skygloss.com',
-        pass: 'hmah ysft xpwc ofaz',
+        pass: 'wsux didm itaa zeds',
       },
     });
 
@@ -32,7 +32,7 @@ export class MailService {
       service: 'gmail',
       auth: {
         user: 'certified@skygloss.com',
-        pass: 'xkon bplx wooc gxmu',
+        pass: 'qjyi fuku tgbb xqor',
       },
     });
 
@@ -626,6 +626,100 @@ export class MailService {
       this.logger.log(`Training completion emails sent for ${user.email}`);
     } catch (error) {
       this.logger.error(`Failed to send training completion notification`, error.stack);
+    }
+  }
+
+  async sendNewOrderNotification(order: any, user: any) {
+    const mailOptions = {
+      from: `"SkyGloss Portal" <portal@skygloss.com>`,
+      to: 'sales@skygloss.com',
+      subject: `NEW ORDER PAID: ${order.orderNumber} - ${user.firstName} ${user.lastName}`,
+      html: `
+        <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
+            <tr>
+              <td align="center">
+                <table width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="margin:20px 0; border-radius:8px; overflow:hidden;">
+                  <tr><td align="center" bgcolor="#272727" style="padding:20px; color:#ffffff; font-size:24px; font-weight:bold;">Order Paid</td></tr>
+                  <tr>
+                    <td style="padding:30px; color:#333333; font-size:14px; line-height:1.6;">
+                      <h2 style="color:#0ea0dc;">Payment Confirmed for Order ${order.orderNumber}</h2>
+                      <p>An order has been successfully paid through Stripe.</p>
+                      <table width="100%" cellpadding="10" cellspacing="0" style="background:#f0f8fc; border-left:4px solid #0ea0dc; margin:20px 0;">
+                        <tr>
+                          <td>
+                            <strong>Customer Details:</strong><br>
+                            Name: ${user.firstName} ${user.lastName}<br>
+                            Email: ${user.email}<br>
+                            Order Number: ${order.orderNumber}<br>
+                            Total Amount: $${order.totalAmount.toFixed(2)}<br>
+                            Date: ${new Date().toLocaleString()}
+                          </td>
+                        </tr>
+                      </table>
+                      <p>Please log in to the admin panel to view full order items and shipping details.</p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+      `,
+    };
+
+    try {
+      await this.salesTransporter.sendMail(mailOptions);
+      this.logger.log(`New order notification sent to sales@skygloss.com for ${order.orderNumber}`);
+    } catch (error) {
+      this.logger.error(`Failed to send new order notification`, error.stack);
+    }
+  }
+
+  async sendNewOrderRequestNotification(order: any, user: any) {
+    const mailOptions = {
+      from: `"SkyGloss Portal" <portal@skygloss.com>`,
+      to: 'sales@skygloss.com',
+      subject: `NEW ORDER REQUEST: ${order.orderNumber} - ${user.firstName} ${user.lastName}`,
+      html: `
+        <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
+            <tr>
+              <td align="center">
+                <table width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="margin:20px 0; border-radius:8px; overflow:hidden;">
+                  <tr><td align="center" bgcolor="#0ea0dc" style="padding:20px; color:#ffffff; font-size:24px; font-weight:bold;">Order Request</td></tr>
+                  <tr>
+                    <td style="padding:30px; color:#333333; font-size:14px; line-height:1.6;">
+                      <h2 style="color:#0ea0dc;">New Manual Order Request: ${order.orderNumber}</h2>
+                      <p>A user has submitted a new manual order request (inquiry).</p>
+                      <table width="100%" cellpadding="10" cellspacing="0" style="background:#f0f8fc; border-left:4px solid #0ea0dc; margin:20px 0;">
+                        <tr>
+                          <td>
+                            <strong>Customer Details:</strong><br>
+                            Name: ${user.firstName} ${user.lastName}<br>
+                            Email: ${user.email}<br>
+                            Order Number: ${order.orderNumber}<br>
+                            Estimated Total: $${order.totalAmount.toFixed(2)}<br>
+                            Date: ${new Date().toLocaleString()}
+                          </td>
+                        </tr>
+                      </table>
+                      <p>Please log in to the admin panel to generate a formal invoice for this customer.</p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+      `,
+    };
+
+    try {
+      await this.salesTransporter.sendMail(mailOptions);
+      this.logger.log(`New order request notification sent to sales@skygloss.com for ${order.orderNumber}`);
+    } catch (error) {
+      this.logger.error(`Failed to send new order request notification`, error.stack);
     }
   }
 }

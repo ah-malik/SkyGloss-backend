@@ -509,6 +509,11 @@ export class OrdersService {
             link: `/orders/${updatedOrder._id}`,
           });
           this.notificationsGateway.broadcastNotification(notification);
+          
+          // Send Email to sales@skygloss.com
+          await this.mailService.sendNewOrderNotification(updatedOrder, updatedOrder.user).catch(err => {
+             console.error('Failed to send order email to sales', err);
+          });
         } else {
           console.error(`[Stripe Webhook] Order with id ${orderId} not found in DB.`);
         }
@@ -585,6 +590,14 @@ export class OrdersService {
       link: `/orders/${savedOrder._id}`,
     });
     this.notificationsGateway.broadcastNotification(notification);
+
+    // Send Email to sales@skygloss.com
+    const user = await this.usersService.findOne(userId);
+    if (user) {
+      await this.mailService.sendNewOrderRequestNotification(savedOrder, user).catch(err => {
+        console.error('Failed to send order request email to sales', err);
+      });
+    }
 
     return savedOrder;
   }
