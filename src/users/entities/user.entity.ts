@@ -114,6 +114,9 @@ export class User {
   isTrainingComplete: boolean;
 
   @Prop({ default: false })
+  isCertified: boolean;
+
+  @Prop({ default: false })
   isVisibleOnMap: boolean;
 
   @Prop()
