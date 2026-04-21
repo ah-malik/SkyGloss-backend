@@ -258,15 +258,17 @@ export class AuthService {
 
   async registerShop(createUserDto: CreateUserDto) {
     let partnerId = createUserDto.referredByPartnerCode;
-
-    // Direct registration logic: if hearAboutUs or couponCode is present, assign Global Partner
-    if ((createUserDto.hearAboutUs || createUserDto.couponCode === 'CERTIFICATIONONUS') && !partnerId) {
+    
+    // Default to GLOBAL77 if no partner is provided
+    if (!partnerId) {
       partnerId = 'GLOBAL77';
       createUserDto.referredByPartnerCode = partnerId;
     }
-
-    if (!partnerId) {
-      throw new BadRequestException('Partner ID is required unless a hearing source is provided');
+    
+    // Direct registration logic: if hearAboutUs or couponCode is present, ensure GLOBAL77 is assigned (even if partnerId was somehow present but invalid)
+    if ((createUserDto.hearAboutUs || createUserDto.couponCode === 'CERTIFICATIONONUS')) {
+      partnerId = 'GLOBAL77';
+      createUserDto.referredByPartnerCode = partnerId;
     }
 
     // Validate Partner ID length and format (4-10 alphanumeric)

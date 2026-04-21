@@ -144,4 +144,12 @@ export class NotificationsService {
       .deleteMany({ createdAt: { $lt: date } })
       .exec();
   }
+
+  async findAllForUser(userId: string): Promise<NotificationDocument[]> {
+    return this.notificationModel
+      .find({ user: userId as any })
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .exec();
+  }
 }

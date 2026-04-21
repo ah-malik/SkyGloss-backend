@@ -12,6 +12,7 @@ import { ChatService } from '../chat.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { NotificationsGateway } from '../../notifications/notifications.gateway';
 import { NotificationType } from '../../notifications/entities/notification.entity';
+import { UsersService } from '../../users/users.service';
 
 @WebSocketGateway({
   cors: {
@@ -26,6 +27,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly chatService: ChatService,
     private readonly notificationsService: NotificationsService,
     private readonly notificationsGateway: NotificationsGateway,
+    private readonly usersService: UsersService,
   ) {}
 
   async handleConnection(client: Socket) {
@@ -100,6 +102,31 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // Also emit to the notifications namespace if it's a new notification, OR an update one
       this.notificationsGateway.broadcastNotification(notification);
+
+      // --- Notify the Referring Partner ---
+      try {
+        const room = await this.chatService.getRoomById(data.roomId);
+        if (room && room.userId) {
+          const user = await this.usersService.findOne(room.userId.toString());
+          if (user && user.referredByPartnerCode) {
+            const partner = await this.usersService.findByPartnerCode(user.referredByPartnerCode);
+            if (partner && partner._id.toString() !== room.userId.toString()) {
+              // Create database notification for the partner
+              const partnerNotif = await this.notificationsService.create({
+                user: partner._id.toString(),
+                type: NotificationType.CHAT_MESSAGE,
+                title: 'New message from Shop',
+                message: `Shop "${data.senderName}" sent a message.`,
+                metadata: { roomId: data.roomId, senderName: data.senderName },
+                link: `/dashboard/partner/chat`, 
+              });
+              this.notificationsGateway.broadcastNotification(partnerNotif);
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[ChatGateway] Failed to notify partner:', err);
+      }
     }
 
     // IF sender is admin, notify the specific user

@@ -5,6 +5,7 @@ import { ChatController } from './chat.controller';
 import { ChatGateway } from './chat/chat.gateway';
 import { ChatRoom, ChatRoomSchema } from './entities/chat-room.entity';
 import { ChatMessage, ChatMessageSchema } from './entities/chat-message.entity';
+import { UsersModule } from '../users/users.module';
 
 @Module({
   imports: [
@@ -12,6 +13,7 @@ import { ChatMessage, ChatMessageSchema } from './entities/chat-message.entity';
       { name: ChatRoom.name, schema: ChatRoomSchema },
       { name: ChatMessage.name, schema: ChatMessageSchema },
     ]),
+    UsersModule,
   ],
   controllers: [ChatController],
   providers: [ChatService, ChatGateway],

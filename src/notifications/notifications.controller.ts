@@ -35,6 +35,11 @@ export class NotificationsController {
     return this.notificationsService.getUnreadCountForUser(req.user.id);
   }
 
+  @Get('my')
+  getMyNotifications(@Req() req: any) {
+    return this.notificationsService.findAllForUser(req.user.id);
+  }
+
   @Patch('mark-my-chat-read')
   markMyChatRead(@Req() req: any) {
     return this.notificationsService.markChatNotificationsAsReadForUser(

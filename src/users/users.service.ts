@@ -198,6 +198,10 @@ export class UsersService implements OnModuleInit {
     return this.userModel.findOne({ accessCode }).exec();
   }
 
+  async findByPartnerCode(partnerCode: string): Promise<UserDocument | null> {
+    return this.userModel.findOne({ partnerCode }).exec();
+  }
+
   async update(
     id: string,
     updateUserDto: UpdateUserDto,

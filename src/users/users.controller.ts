@@ -256,9 +256,18 @@ export class UsersController {
       });
     }
 
-    // Try finding Partner to notify them separately, if a logic layer exists
+    // Notify Referring Partner
     if (user.referredByPartnerCode) {
-      // Optionally send targeted websocket event logic here if expanded
+      const partner = await this.usersService.findByPartnerCode(user.referredByPartnerCode);
+      if (partner) {
+        await this.notificationsService.create({
+          type: NotificationType.TRAINING_COMPLETED,
+          title: 'Shop Training Completed',
+          message: `${user.firstName} ${user.lastName} has completed all training modules and is awaiting your certification.`,
+          user: partner._id.toString() as any,
+          link: '/dashboard/partner/network',
+        });
+      }
     }
 
     // Send Training Complete Email Notification to user and certified@skygloss.com
