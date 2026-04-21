@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
@@ -14,7 +14,7 @@ import { MailModule } from 'src/mail/mail.module';
     MongooseModule.forFeature([{ name: User.name, schema: UserSchema }]),
     CloudinaryModule,
     NotificationsModule,
-    ChatModule,
+    forwardRef(() => ChatModule),
     MailModule,
   ],
   controllers: [UsersController],
