@@ -140,14 +140,14 @@ export class OrdersService {
       0,
     );
 
-    // Create pending order
+    const orderNumber = await this.generateOrderNumber('SG');
     const order = new this.orderModel({
       user: userId,
       items,
       totalAmount,
       shippingAddress,
       status: OrderStatus.PENDING,
-      orderNumber: `ORD-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      orderNumber,
     });
 
     try {
@@ -566,13 +566,14 @@ export class OrdersService {
     const taxRate = 0.08;
     const finalAmount = totalAmount + shippingRate + totalAmount * taxRate;
 
+    const orderNumber = await this.generateOrderNumber('SGR');
     const order = new this.orderModel({
       user: userId,
       items,
       totalAmount: finalAmount,
       shippingAddress,
       status: OrderStatus.PENDING,
-      orderNumber: `REQ-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      orderNumber,
     });
 
     const savedOrder = await order.save();
@@ -656,5 +657,10 @@ export class OrdersService {
       totalRevenue,
       chartData,
     };
+  }
+
+  private async generateOrderNumber(prefix: string): Promise<string> {
+    const count = await this.orderModel.countDocuments();
+    return `${prefix}${(count + 1).toString().padStart(6, '0')}`;
   }
 }
