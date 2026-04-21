@@ -630,6 +630,9 @@ export class MailService {
   }
 
   async sendNewOrderNotification(order: any, user: any) {
+    const subtotal = order.items.reduce((sum: number, item: any) => sum + (item.price * item.quantity), 0);
+    const tax = subtotal * 0.08; // 8% tax as calculated in OrdersService
+    
     const mailOptions = {
       from: `"SkyGloss Portal" <portal@skygloss.com>`,
       to: 'sales@skygloss.com',
@@ -639,25 +642,45 @@ export class MailService {
           <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
             <tr>
               <td align="center">
-                <table width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="margin:20px 0; border-radius:8px; overflow:hidden;">
+                <table width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="margin:20px 0; border-radius:8px; overflow:hidden; border: 1px solid #e0e0e0;">
                   <tr><td align="center" bgcolor="#272727" style="padding:20px; color:#ffffff; font-size:24px; font-weight:bold;">Order Paid</td></tr>
                   <tr>
                     <td style="padding:30px; color:#333333; font-size:14px; line-height:1.6;">
-                      <h2 style="color:#0ea0dc;">Payment Confirmed for Order ${order.orderNumber}</h2>
-                      <p>An order has been successfully paid through Stripe.</p>
+                      <h2 style="color:#0ea0dc; margin-bottom: 5px;">Payment Confirmed for Order ${order.orderNumber}</h2>
+                      <p style="margin-top: 0; color: #666;">Date: ${new Date().toLocaleString()}</p>
+                      
                       <table width="100%" cellpadding="10" cellspacing="0" style="background:#f0f8fc; border-left:4px solid #0ea0dc; margin:20px 0;">
                         <tr>
                           <td>
                             <strong>Customer Details:</strong><br>
                             Name: ${user.firstName} ${user.lastName}<br>
                             Email: ${user.email}<br>
-                            Order Number: ${order.orderNumber}<br>
-                            Total Amount: $${order.totalAmount.toFixed(2)}<br>
-                            Date: ${new Date().toLocaleString()}
+                            Order Number: ${order.orderNumber}
                           </td>
                         </tr>
                       </table>
-                      <p>Please log in to the admin panel to view full order items and shipping details.</p>
+
+                      <h3 style="color: #272727; border-bottom: 1px solid #eee; padding-bottom: 10px;">Order Summary</h3>
+                      ${this.renderOrderItems(order.items)}
+
+                      <table width="100%" cellpadding="5" cellspacing="0" style="margin-top: 20px; border-top: 2px solid #0ea0dc; padding-top: 10px;">
+                        <tr>
+                          <td align="right" style="color: #666;">Subtotal:</td>
+                          <td align="right" width="100" style="font-weight: bold;">$${subtotal.toFixed(2)}</td>
+                        </tr>
+                        <tr>
+                          <td align="right" style="color: #666;">Tax (8%):</td>
+                          <td align="right" style="font-weight: bold;">$${tax.toFixed(2)}</td>
+                        </tr>
+                        <tr>
+                          <td align="right" style="font-size: 18px; color: #272727; font-weight: bold;">Total Paid:</td>
+                          <td align="right" style="font-size: 18px; color: #0ea0dc; font-weight: bold;">$${order.totalAmount.toFixed(2)}</td>
+                        </tr>
+                      </table>
+
+                      <p style="margin-top: 30px; text-align: center; color: #999; font-size: 12px;">
+                        Please log in to the admin panel to view full shipping details and process this order.
+                      </p>
                     </td>
                   </tr>
                 </table>
@@ -677,6 +700,9 @@ export class MailService {
   }
 
   async sendNewOrderRequestNotification(order: any, user: any) {
+    const subtotal = order.items.reduce((sum: number, item: any) => sum + (item.price * item.quantity), 0);
+    const tax = subtotal * 0.08;
+
     const mailOptions = {
       from: `"SkyGloss Portal" <portal@skygloss.com>`,
       to: 'sales@skygloss.com',
@@ -686,25 +712,45 @@ export class MailService {
           <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
             <tr>
               <td align="center">
-                <table width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="margin:20px 0; border-radius:8px; overflow:hidden;">
+                <table width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="margin:20px 0; border-radius:8px; overflow:hidden; border: 1px solid #e0e0e0;">
                   <tr><td align="center" bgcolor="#0ea0dc" style="padding:20px; color:#ffffff; font-size:24px; font-weight:bold;">Order Request</td></tr>
                   <tr>
                     <td style="padding:30px; color:#333333; font-size:14px; line-height:1.6;">
-                      <h2 style="color:#0ea0dc;">New Manual Order Request: ${order.orderNumber}</h2>
-                      <p>A user has submitted a new manual order request (inquiry).</p>
+                      <h2 style="color:#0ea0dc; margin-bottom: 5px;">New Manual Order Request: ${order.orderNumber}</h2>
+                      <p style="margin-top: 0; color: #666;">Date: ${new Date().toLocaleString()}</p>
+
                       <table width="100%" cellpadding="10" cellspacing="0" style="background:#f0f8fc; border-left:4px solid #0ea0dc; margin:20px 0;">
                         <tr>
                           <td>
                             <strong>Customer Details:</strong><br>
                             Name: ${user.firstName} ${user.lastName}<br>
                             Email: ${user.email}<br>
-                            Order Number: ${order.orderNumber}<br>
-                            Estimated Total: $${order.totalAmount.toFixed(2)}<br>
-                            Date: ${new Date().toLocaleString()}
+                            Order Number: ${order.orderNumber}
                           </td>
                         </tr>
                       </table>
-                      <p>Please log in to the admin panel to generate a formal invoice for this customer.</p>
+
+                      <h3 style="color: #272727; border-bottom: 1px solid #eee; padding-bottom: 10px;">Requested Items</h3>
+                      ${this.renderOrderItems(order.items)}
+
+                      <table width="100%" cellpadding="5" cellspacing="0" style="margin-top: 20px; border-top: 2px solid #0ea0dc; padding-top: 10px;">
+                        <tr>
+                          <td align="right" style="color: #666;">Subtotal:</td>
+                          <td align="right" width="100" style="font-weight: bold;">$${subtotal.toFixed(2)}</td>
+                        </tr>
+                        <tr>
+                          <td align="right" style="color: #666;">Estimated Tax (8%):</td>
+                          <td align="right" style="font-weight: bold;">$${tax.toFixed(2)}</td>
+                        </tr>
+                        <tr>
+                          <td align="right" style="font-size: 18px; color: #272727; font-weight: bold;">Estimated Total:</td>
+                          <td align="right" style="font-size: 18px; color: #0ea0dc; font-weight: bold;">$${order.totalAmount.toFixed(2)}</td>
+                        </tr>
+                      </table>
+
+                      <p style="margin-top: 30px; text-align: center; color: #999; font-size: 12px;">
+                        Please log in to the admin panel to generate a formal invoice for this customer.
+                      </p>
                     </td>
                   </tr>
                 </table>
@@ -721,6 +767,49 @@ export class MailService {
     } catch (error) {
       this.logger.error(`Failed to send new order request notification`, error.stack);
     }
+  }
+
+  private renderOrderItems(items: any[]) {
+    let itemsHtml = `
+      <table width="100%" cellpadding="10" cellspacing="0" style="border-collapse: collapse; margin-top: 10px;">
+        <thead>
+          <tr style="background-color: #f8f9fa; border-bottom: 1px solid #dee2e6;">
+            <th align="left" style="padding: 10px; font-size: 11px; color: #666; text-transform: uppercase;">Product</th>
+            <th align="center" style="padding: 10px; font-size: 11px; color: #666; text-transform: uppercase;">Qty</th>
+            <th align="right" style="padding: 10px; font-size: 11px; color: #666; text-transform: uppercase;">Price</th>
+            <th align="right" style="padding: 10px; font-size: 11px; color: #666; text-transform: uppercase;">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+    `;
+
+    items.forEach((item) => {
+      itemsHtml += `
+        <tr style="border-bottom: 1px solid #eee;">
+          <td style="padding: 10px; vertical-align: middle;">
+            <table cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                ${item.image ? `<td style="padding-right: 10px;"><img src="${item.image}" width="45" height="45" style="border-radius: 6px; object-fit: cover; border: 1px solid #eee;"></td>` : ''}
+                <td>
+                  <div style="font-weight: bold; font-size: 13px; color: #272727;">${item.name}</div>
+                  ${item.size ? `<div style="font-size: 11px; color: #888;">Size: ${item.size}</div>` : ''}
+                </td>
+              </tr>
+            </table>
+          </td>
+          <td align="center" style="padding: 10px; font-size: 13px; color: #272727;">${item.quantity}</td>
+          <td align="right" style="padding: 10px; font-size: 13px; color: #272727;">$${item.price.toFixed(2)}</td>
+          <td align="right" style="padding: 10px; font-size: 13px; font-weight: bold; color: #272727;">$${(item.price * item.quantity).toFixed(2)}</td>
+        </tr>
+      `;
+    });
+
+    itemsHtml += `
+        </tbody>
+      </table>
+    `;
+
+    return itemsHtml;
   }
 }
 
