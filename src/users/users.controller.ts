@@ -130,12 +130,14 @@ export class UsersController {
     }
 
     const COURSE_STEPS = {
+      WELCOME_TO_SKYGLOSS: 18,
       UNDERSTANDING_SKYGLOSS: 9,
-      FUSION: 13,
-      RESIN_FILM: 4,
-      SHINE: 3,
-      MATTE: 3,
-      SEAL: 3,
+      SKYGLOSS_SHOP_SETUP: 4,
+      FUSION: 20,
+      RESIN_FILM: 7,
+      SHINE: 6,
+      MATTE: 6,
+      SEAL: 5,
     };
 
     let completedCount = 0;
@@ -153,8 +155,8 @@ export class UsersController {
 
     completedCount = Math.max(completedCount, legacyCount);
 
-    if (completedCount < 6) {
-      throw new BadRequestException('You must complete all 6 courses before uploading a certification video.');
+    if (completedCount < 8) {
+      throw new BadRequestException('You must complete all 8 courses before uploading a certification video.');
     }
 
     // Upload to Cloudinary
@@ -190,6 +192,36 @@ export class UsersController {
       return { message: 'Training already marked as complete' };
     }
 
+    // Verify all courses are actually completed before finalizing
+    const COURSE_STEPS = {
+      WELCOME_TO_SKYGLOSS: 18,
+      UNDERSTANDING_SKYGLOSS: 9,
+      SKYGLOSS_SHOP_SETUP: 4,
+      FUSION: 20,
+      RESIN_FILM: 7,
+      SHINE: 6,
+      MATTE: 6,
+      SEAL: 5,
+    };
+
+    let completedCount = 0;
+    const legacyCount = user.completedCourses?.length || 0;
+
+    if (user.courseProgress) {
+      const progressMap = JSON.parse(JSON.stringify(user.courseProgress || {}));
+      Object.entries(COURSE_STEPS).forEach(([courseKey, totalSteps]) => {
+        const progress = progressMap[courseKey] || progressMap[courseKey.replace('_', ' ')] || [];
+        if (progress && progress.length >= totalSteps) {
+          completedCount++;
+        }
+      });
+    }
+
+    completedCount = Math.max(completedCount, legacyCount);
+
+    if (completedCount < 8) {
+      throw new BadRequestException('You must complete all 8 training courses before finalizing certification.');
+    }
     const updatedUser = await this.usersService.update(user._id.toString(), {
       isTrainingComplete: true,
     } as any);

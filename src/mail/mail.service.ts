@@ -550,7 +550,7 @@ export class MailService {
     const mailOptions = {
       from: `"SkyGloss Certification" <certified@skygloss.com>`,
       to: recipients.join(', '),
-      subject: `Training Completed: ${user.firstName} ${user.lastName}`,
+      subject: `NEW CERTIFICATION REQUEST: ${user.firstName} ${user.lastName}`,
       html: `
         <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
@@ -560,9 +560,9 @@ export class MailService {
                   <tr><td align="center" bgcolor="#0ea0dc" style="padding:20px; color:#ffffff; font-size:24px; font-weight:bold;">SkyGloss Certification</td></tr>
                   <tr>
                     <td style="padding:30px; color:#333333; font-size:14px; line-height:1.6;">
-                      <h2 style="color:#0ea0dc; text-align:center;">Congratulations!</h2>
+                      <h2 style="color:#0ea0dc; text-align:center;">Certification Request Received!</h2>
                       <p>Hello ${user.firstName},</p>
-                      <p>You have successfully completed 100% of your SkyGloss training courses. Our certification department has been notified.</p>
+                      <p>Congratulations! You have successfully completed all 8 SkyGloss training courses. Our certification department has been notified and will review your status shortly.</p>
                       <table width="100%" cellpadding="10" cellspacing="0" style="background:#f0f8fc; border-left:4px solid #0ea0dc; margin:20px 0;">
                         <tr>
                           <td>
