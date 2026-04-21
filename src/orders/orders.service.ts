@@ -661,6 +661,7 @@ export class OrdersService {
 
   private async generateOrderNumber(prefix: string): Promise<string> {
     const count = await this.orderModel.countDocuments();
-    return `${prefix}${(count + 1).toString().padStart(6, '0')}`;
+    const baseOffset = prefix === 'REQ-' ? 254700 : 0;
+    return `${prefix}${(count + 1 + baseOffset).toString().padStart(6, '0')}`;
   }
 }
