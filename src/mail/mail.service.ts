@@ -545,12 +545,11 @@ export class MailService {
   }
 
   async sendTrainingCompleteNotification(user: any) {
-    const recipients = [user.email, 'certified@skygloss.com'];
-
-    const mailOptions = {
+    // 1. Send Congratulations to the User
+    const userMailOptions = {
       from: `"SkyGloss Certification" <certified@skygloss.com>`,
-      to: recipients.join(', '),
-      subject: `NEW CERTIFICATION REQUEST: ${user.firstName} ${user.lastName}`,
+      to: user.email,
+      subject: `Congratulations! Training Completed`,
       html: `
         <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
@@ -560,19 +559,8 @@ export class MailService {
                   <tr><td align="center" bgcolor="#0ea0dc" style="padding:20px; color:#ffffff; font-size:24px; font-weight:bold;">SkyGloss Certification</td></tr>
                   <tr>
                     <td style="padding:30px; color:#333333; font-size:14px; line-height:1.6;">
-                      <h2 style="color:#0ea0dc; text-align:center;">Certification Request Received!</h2>
-                      <p>Hello ${user.firstName},</p>
-                      <p>Congratulations! You have successfully completed all 8 SkyGloss training courses. Our certification department has been notified and will review your status shortly.</p>
-                      <table width="100%" cellpadding="10" cellspacing="0" style="background:#f0f8fc; border-left:4px solid #0ea0dc; margin:20px 0;">
-                        <tr>
-                          <td>
-                            <strong>Student Details:</strong><br>
-                            Name: ${user.firstName} ${user.lastName}<br>
-                            Email: ${user.email}<br>
-                            Date Completed: ${new Date().toLocaleDateString()}
-                          </td>
-                        </tr>
-                      </table>
+                      <h2 style="color:#0ea0dc; text-align:center;">Congratulations, ${user.firstName}!</h2>
+                      <p>You have successfully completed all 8 SkyGloss training courses. Our certification department has been notified and will review your status shortly.</p>
                       <p>We will review your progress and reach out shortly to finalize your certification status.</p>
                     </td>
                   </tr>
@@ -590,9 +578,52 @@ export class MailService {
       `,
     };
 
+    // 2. Send Certification Request to certified@skygloss.com
+    const adminMailOptions = {
+      from: `"SkyGloss Portal" <portal@skygloss.com>`,
+      to: 'certified@skygloss.com',
+      subject: `NEW CERTIFICATION REQUEST: ${user.firstName} ${user.lastName}`,
+      html: `
+        <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
+            <tr>
+              <td align="center">
+                <table width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="margin:20px 0; border-radius:8px; overflow:hidden;">
+                  <tr><td align="center" bgcolor="#272727" style="padding:20px; color:#ffffff; font-size:24px; font-weight:bold;">New Request</td></tr>
+                  <tr>
+                    <td style="padding:30px; color:#333333; font-size:14px; line-height:1.6;">
+                      <h2 style="color:#0ea0dc;">New Certification Request Received</h2>
+                      <p>A shop user has completed all training modules and is requesting certification.</p>
+                      <table width="100%" cellpadding="10" cellspacing="0" style="background:#f0f8fc; border-left:4px solid #0ea0dc; margin:20px 0;">
+                        <tr>
+                          <td>
+                            <strong>Student Details:</strong><br>
+                            Name: ${user.firstName} ${user.lastName}<br>
+                            Email: ${user.email}<br>
+                            Country: ${user.country}<br>
+                            Date Completed: ${new Date().toLocaleDateString()}<br>
+                            Partner Code: ${user.referredByPartnerCode || 'Direct'}
+                          </td>
+                        </tr>
+                      </table>
+                      <p>Please log in to the admin panel to review and approve this request.</p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+      `,
+    };
+
     try {
-      await this.certifiedTransporter.sendMail(mailOptions);
-      this.logger.log(`Training completion email sent via Certified to ${recipients.join(', ')}`);
+      // Send both emails
+      await Promise.all([
+        this.certifiedTransporter.sendMail(userMailOptions),
+        this.certifiedTransporter.sendMail(adminMailOptions)
+      ]);
+      this.logger.log(`Training completion emails sent for ${user.email}`);
     } catch (error) {
       this.logger.error(`Failed to send training completion notification`, error.stack);
     }
