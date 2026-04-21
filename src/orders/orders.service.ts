@@ -14,7 +14,7 @@ import { NotificationsGateway } from '../notifications/notifications.gateway';
 import { NotificationType } from '../notifications/entities/notification.entity';
 import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
-import { UserStatus } from '../users/entities/user.entity';
+import { UserRole, UserStatus } from '../users/entities/user.entity';
 
 @Injectable()
 export class OrdersService {
