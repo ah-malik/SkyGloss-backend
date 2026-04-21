@@ -369,7 +369,7 @@ export class AuthService {
         );
 
         // Store session ID for manual verification fallback
-        await this.usersService.update(user._id.toString(), { stripeSessionId: (stripeSession as any).id });
+        await this.usersService.update(user._id.toString(), { stripeSessionId: (stripeSession as any).id }, { role: UserRole.ADMIN } as any);
 
         return {
           message: 'Registration successful. Redirecting to payment...',
@@ -413,7 +413,7 @@ export class AuthService {
     await this.usersService.update(user._id.toString(), {
       resetPasswordToken: token,
       resetPasswordExpires: expires,
-    } as any);
+    } as any, { role: UserRole.ADMIN } as any);
 
     // Send actual email
     if (user.email) {

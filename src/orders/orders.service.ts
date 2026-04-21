@@ -110,7 +110,7 @@ export class OrdersService {
       });
       
       // Save session ID to user for verification fallback
-      await this.usersService.update(userId, { stripeSessionId: session.id } as any);
+      await this.usersService.update(userId, { stripeSessionId: session.id } as any, { role: UserRole.ADMIN } as any);
 
       return { url: session.url, id: session.id };
     } catch (error) {
@@ -306,7 +306,7 @@ export class OrdersService {
       const updatedUser = await this.usersService.update(userId, {
         isPartnerPaid: true,
         status: UserStatus.ACTIVE,
-      } as any);
+      } as any, { role: UserRole.ADMIN } as any);
 
       // Trigger Notifications (Same logic as webhook)
       if (updatedUser) {
@@ -383,7 +383,7 @@ export class OrdersService {
         const updatedUser = await this.usersService.update(userId, {
           status: UserStatus.ACTIVE,
           isPartnerPaid: true,
-        } as any);
+        } as any, { role: UserRole.ADMIN } as any);
 
         if (updatedUser) {
           console.log(`[Stripe Webhook] User ${userId} activated as partner.`);
@@ -425,7 +425,7 @@ export class OrdersService {
         const updatedUser = await this.usersService.update(userId, {
           status: UserStatus.ACTIVE,
           isPartnerPaid: true,
-        } as any);
+        } as any, { role: UserRole.ADMIN } as any);
 
         if (updatedUser) {
           console.log(`[Stripe Webhook] Shop ${userId} activated.`);

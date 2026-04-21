@@ -138,4 +138,8 @@ export class CreateUserDto {
   @IsBoolean()
   @IsOptional()
   isPartnerCertified?: boolean;
+
+  @IsBoolean()
+  @IsOptional()
+  isCertified?: boolean;
 }

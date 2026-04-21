@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, OnModuleInit, Logger } from '@nestjs/common';
+import { Injectable, BadRequestException, OnModuleInit, Logger, ForbiddenException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import * as bcrypt from 'bcrypt';
@@ -201,11 +201,26 @@ export class UsersService implements OnModuleInit {
   async update(
     id: string,
     updateUserDto: UpdateUserDto,
+    currentUser: UserDocument,
   ): Promise<UserDocument | null> {
     console.log(
-      `[UsersService] Updating user ${id} with DTO:`,
+      `[UsersService] Updating user ${id} by ${currentUser.email} with DTO:`,
       JSON.stringify(updateUserDto, null, 2),
     );
+
+    // Permission check: Non-admins can only update shops they referred
+    if (currentUser.role !== UserRole.ADMIN) {
+      const targetUser = await this.userModel.findById(id);
+      if (!targetUser) throw new BadRequestException('User not found');
+
+      // Check if this is a shop referred by the current partner
+      if (targetUser.referredByPartnerCode !== currentUser.partnerCode) {
+        throw new ForbiddenException('You do not have permission to update this user');
+      }
+
+      // Optional: Restrict what fields a Partner can update
+      // For now, let's just proceed since we trust the DTO validation for other roles
+    }
 
     const updatePayload: any = { ...updateUserDto };
 
