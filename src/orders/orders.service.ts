@@ -186,13 +186,13 @@ export class OrdersService {
           };
         });
 
-      // Add shipping cost (flat rate $15 for now, matching frontend)
-      const shippingRate = 1500;
+      // Add shipping cost (Free shipping)
+      const shippingRate = 0;
       line_items.push({
         price_data: {
           currency: 'usd',
           product_data: {
-            name: 'Shipping',
+            name: 'Shipping (Free)',
           },
           unit_amount: shippingRate,
         },
@@ -557,7 +557,7 @@ export class OrdersService {
     );
 
     // Calculate final mount with shipping and tax to match record keeping
-    const shippingRate = 15;
+    const shippingRate = 0;
     const taxRate = 0.08;
     const finalAmount = totalAmount + shippingRate + totalAmount * taxRate;
 
