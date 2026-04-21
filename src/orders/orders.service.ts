@@ -566,7 +566,7 @@ export class OrdersService {
     const taxRate = 0.08;
     const finalAmount = totalAmount + shippingRate + totalAmount * taxRate;
 
-    const orderNumber = await this.generateOrderNumber('SGR');
+    const orderNumber = await this.generateOrderNumber('REQ-');
     const order = new this.orderModel({
       user: userId,
       items,
