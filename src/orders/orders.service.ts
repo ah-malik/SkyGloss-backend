@@ -137,18 +137,15 @@ export class OrdersService {
     createOrderDto: CreateOrderDto,
     role?: string,
   ) {
-    const { shippingAddress } = createOrderDto;
-    const isUsaOrder = shippingAddress?.country?.toLowerCase().trim() === 'united states';
-
-    // Route USA orders to the USA Stripe account
-    const stripeInstance = isUsaOrder && this.usaStripe ? this.usaStripe : this.stripe;
+    // Product checkout is exclusively for USA users — always use USA Stripe
+    const stripeInstance = this.usaStripe || this.stripe;
 
     if (!stripeInstance) {
       throw new BadRequestException('Stripe is not configured on the server.');
     }
-    console.log(`[Stripe] Using ${isUsaOrder ? 'USA' : 'Global'} Stripe account for order.`);
+    console.log('[Stripe] Using USA Stripe account for product checkout.');
 
-    const { items } = createOrderDto;
+    const { items, shippingAddress } = createOrderDto;
 
     // Calculate total amount from items
     // Note: In a real app, we should fetch product prices from DB to secure against client-side manipulation.
@@ -249,10 +246,7 @@ export class OrdersService {
         cancel_url: `${baseUrl}/dashboard/shop?canceled=true`,
         client_reference_id: String(userId),
         customer_email: String(shippingAddress.email || ''),
-        metadata: {
-          ...sessionMetadata,
-          isUsaOrder: isUsaOrder ? 'true' : 'false',
-        },
+        metadata: sessionMetadata,
       });
 
       order.stripeSessionId = session.id;
@@ -294,7 +288,9 @@ export class OrdersService {
 
     if (!order.stripeSessionId) return order;
 
-    const session = await this.stripe.checkout.sessions.retrieve(
+    // Product orders use USA Stripe
+    const stripeInstance = this.usaStripe || this.stripe;
+    const session = await stripeInstance.checkout.sessions.retrieve(
       order.stripeSessionId,
     );
     if (session.payment_status === 'paid') {
@@ -397,13 +393,56 @@ export class OrdersService {
       const orderId = metadata.orderId;
       console.log(`[USA Stripe Webhook] Processing shop_order for orderId: ${orderId}`);
 
-      const order = await this.orderModel.findById(orderId);
-      if (order) {
-        order.status = OrderStatus.PAID;
-        await order.save();
-        console.log(`[USA Stripe Webhook] Order ${orderId} marked as PAID.`);
+      if (!orderId) {
+        console.error('[USA Stripe Webhook] No orderId found in metadata.');
+        return { received: true };
+      }
+
+      const updatedOrder = await this.orderModel
+        .findByIdAndUpdate(
+          orderId,
+          { status: OrderStatus.PAID },
+          { new: true },
+        )
+        .populate('user', 'firstName lastName email');
+
+      if (updatedOrder) {
+        console.log(`[USA Stripe Webhook] Order ${updatedOrder.orderNumber} marked as PAID.`);
+
+        // Send notification
+        const notification = await this.notificationsService.create({
+          type: NotificationType.ORDER_PAID,
+          title: 'Order Paid',
+          message: `Order ${updatedOrder.orderNumber} has been paid by ${updatedOrder.user ? (updatedOrder.user as any).firstName : 'a user'}.`,
+          metadata: {
+            orderId: updatedOrder._id,
+            orderNumber: updatedOrder.orderNumber,
+          },
+          user: (updatedOrder.user as any)?._id,
+          triggeredBy: (updatedOrder.user as any)?._id,
+          link: `/orders/${updatedOrder._id}`,
+        });
+        this.notificationsGateway.broadcastNotification(notification);
+
+        // Send Email to sales@skygloss.com
+        await this.mailService.sendNewOrderNotification(updatedOrder, updatedOrder.user).catch(err => {
+          console.error('[USA Stripe Webhook] Failed to send order email to sales', err);
+        });
       } else {
-        console.error(`[USA Stripe Webhook] Order ${orderId} not found.`);
+        console.error(`[USA Stripe Webhook] Order ${orderId} not found in DB.`);
+      }
+      return { received: true };
+    }
+
+    // Handle payment failure / expiration
+    if (
+      event.type === 'checkout.session.async_payment_failed' ||
+      event.type === 'checkout.session.expired'
+    ) {
+      const orderId = metadata?.orderId;
+      if (orderId) {
+        console.log(`[USA Stripe Webhook] Marking order ${orderId} as FAILED due to: ${event.type}`);
+        await this.orderModel.findByIdAndUpdate(orderId, { status: OrderStatus.FAILED });
       }
     }
 
