@@ -73,10 +73,10 @@ export class OrdersService {
     let unit_amount = 25000; // Default $250.00 USD
 
     const europeanCountries = [
-      'austria', 'belgium', 'bulgaria', 'croatia', 'cyprus', 'czech republic', 'denmark', 
-      'estonia', 'finland', 'france', 'germany', 'greece', 'hungary', 'ireland', 'italy', 
-      'latvia', 'lithuania', 'luxembourg', 'malta', 'netherlands', 'poland', 'portugal', 
-      'romania', 'slovakia', 'slovenia', 'spain', 'sweden', 'united kingdom', 
+      'austria', 'belgium', 'bulgaria', 'croatia', 'cyprus', 'czech republic', 'denmark',
+      'estonia', 'finland', 'france', 'germany', 'greece', 'hungary', 'ireland', 'italy',
+      'latvia', 'lithuania', 'luxembourg', 'malta', 'netherlands', 'poland', 'portugal',
+      'romania', 'slovakia', 'slovenia', 'spain', 'sweden', 'united kingdom',
       'switzerland', 'norway', 'iceland', 'liechtenstein', 'monaco', 'san marino', 'andorra'
     ];
 
@@ -99,8 +99,8 @@ export class OrdersService {
               currency,
               product_data: {
                 name: type === 'shop_registration' ? 'Shop Registration Fee' : 'Partner Registration Fee',
-                description: type === 'shop_registration' 
-                  ? 'One-time fee to activate your SkyGloss Shop account.' 
+                description: type === 'shop_registration'
+                  ? 'One-time fee to activate your SkyGloss Shop account.'
                   : 'One-time fee to activate your SkyGloss partner account.',
               },
               unit_amount,
@@ -119,7 +119,7 @@ export class OrdersService {
           ...additionalMetadata,
         },
       });
-      
+
       // Save session ID to user for verification fallback
       await this.usersService.update(userId, { stripeSessionId: session.id } as any, { role: UserRole.ADMIN } as any);
 
@@ -137,13 +137,18 @@ export class OrdersService {
     createOrderDto: CreateOrderDto,
     role?: string,
   ) {
-    // Product checkout is exclusively for USA users — always use USA Stripe
-    const stripeInstance = this.usaStripe || this.stripe;
+    // Fetch the logged-in user's country from database
+    const currentUser = await this.usersService.findOne(userId);
+    const userCountry = (currentUser?.country || '').toLowerCase().trim();
+    const isUsaUser = ['united states', 'usa', 'us', 'united states of america'].includes(userCountry);
+
+    // Route to appropriate Stripe based on user's country
+    const stripeInstance = isUsaUser && this.usaStripe ? this.usaStripe : this.stripe;
 
     if (!stripeInstance) {
       throw new BadRequestException('Stripe is not configured on the server.');
     }
-    console.log('[Stripe] Using USA Stripe account for product checkout.');
+    console.log(`[Stripe] Using ${isUsaUser ? 'USA' : 'Global'} Stripe for user country: "${currentUser?.country}"`);
 
     const { items, shippingAddress } = createOrderDto;
 
@@ -169,8 +174,8 @@ export class OrdersService {
       // Determine baseUrl once
       let baseUrl = (this.configService.get<string>('FRONTEND_URL') || '').replace(/\/+$/, '');
       if (!baseUrl) {
-        baseUrl = process.env.NODE_ENV === 'production' 
-          ? 'https://portal.skygloss.com' 
+        baseUrl = process.env.NODE_ENV === 'production'
+          ? 'https://portal.skygloss.com'
           : 'http://localhost:3000'; // Default for local
       }
 
@@ -288,8 +293,12 @@ export class OrdersService {
 
     if (!order.stripeSessionId) return order;
 
-    // Product orders use USA Stripe
-    const stripeInstance = this.usaStripe || this.stripe;
+    // Determine which Stripe to use based on the order's user country
+    const orderUser = await this.usersService.findOne(String((order as any).user));
+    const userCountry = (orderUser?.country || '').toLowerCase().trim();
+    const isUsaUser = ['United States', 'usa', 'us', 'united states of america'].includes(userCountry);
+    const stripeInstance = isUsaUser && this.usaStripe ? this.usaStripe : this.stripe;
+
     const session = await stripeInstance.checkout.sessions.retrieve(
       order.stripeSessionId,
     );
@@ -611,10 +620,10 @@ export class OrdersService {
             link: `/orders/${updatedOrder._id}`,
           });
           this.notificationsGateway.broadcastNotification(notification);
-          
+
           // Send Email to sales@skygloss.com
           await this.mailService.sendNewOrderNotification(updatedOrder, updatedOrder.user).catch(err => {
-             console.error('Failed to send order email to sales', err);
+            console.error('Failed to send order email to sales', err);
           });
         } else {
           console.error(`[Stripe Webhook] Order with id ${orderId} not found in DB.`);
