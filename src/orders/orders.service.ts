@@ -710,6 +710,11 @@ export class OrdersService {
       await this.mailService.sendNewOrderRequestNotification(savedOrder, user).catch(err => {
         console.error('Failed to send order request email to sales', err);
       });
+      
+      // Send Confirmation Email to the Customer
+      await this.mailService.sendOrderRequestCustomerConfirmation(savedOrder, user).catch(err => {
+        console.error('Failed to send order request confirmation email to customer', err);
+      });
     }
 
     return savedOrder;

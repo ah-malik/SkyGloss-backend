@@ -769,6 +769,67 @@ export class MailService {
     }
   }
 
+  async sendOrderRequestCustomerConfirmation(order: any, user: any) {
+    const subtotal = order.items.reduce((sum: number, item: any) => sum + (item.price * item.quantity), 0);
+    const tax = subtotal * 0.08;
+
+    const mailOptions = {
+      from: `"SkyGloss Portal" <portal@skygloss.com>`,
+      to: user.email,
+      subject: `Order Request Received: ${order.orderNumber}`,
+      html: `
+        <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
+            <tr>
+              <td align="center">
+                <table width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="margin:20px 0; border-radius:8px; overflow:hidden; border: 1px solid #e0e0e0;">
+                  <tr><td align="center" bgcolor="#0ea0dc" style="padding:20px; color:#ffffff; font-size:24px; font-weight:bold;">Order Request Received</td></tr>
+                  <tr>
+                    <td style="padding:30px; color:#333333; font-size:14px; line-height:1.6;">
+                      <h2 style="color:#272727; margin-bottom: 5px;">Hi ${user.firstName},</h2>
+                      <p style="margin-top: 0; color: #666;">Thank you for submitting your order request (<strong>${order.orderNumber}</strong>).</p>
+                      
+                      <p>Our sales team has received your request and will review it shortly. Once approved, you will receive an invoice to complete your purchase.</p>
+
+                      <h3 style="color: #272727; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-top: 30px;">Requested Items Summary</h3>
+                      ${this.renderOrderItems(order.items)}
+
+                      <table width="100%" cellpadding="5" cellspacing="0" style="margin-top: 20px; border-top: 2px solid #0ea0dc; padding-top: 10px;">
+                        <tr>
+                          <td align="right" style="color: #666;">Subtotal:</td>
+                          <td align="right" width="100" style="font-weight: bold;">$${subtotal.toFixed(2)}</td>
+                        </tr>
+                        <tr>
+                          <td align="right" style="color: #666;">Estimated Tax (8%):</td>
+                          <td align="right" style="font-weight: bold;">$${tax.toFixed(2)}</td>
+                        </tr>
+                        <tr>
+                          <td align="right" style="font-size: 18px; color: #272727; font-weight: bold;">Estimated Total:</td>
+                          <td align="right" style="font-size: 18px; color: #0ea0dc; font-weight: bold;">$${order.totalAmount.toFixed(2)}</td>
+                        </tr>
+                      </table>
+
+                      <p style="margin-top: 30px; text-align: center; color: #999; font-size: 12px;">
+                        If you have any questions, please contact our support team.
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+      `,
+    };
+
+    try {
+      await this.transporter.sendMail(mailOptions);
+      this.logger.log(`Order request confirmation sent to customer ${user.email} for ${order.orderNumber}`);
+    } catch (error) {
+      this.logger.error(`Failed to send order request confirmation to customer`, error.stack);
+    }
+  }
+
   private renderOrderItems(items: any[]) {
     let itemsHtml = `
       <table width="100%" cellpadding="10" cellspacing="0" style="border-collapse: collapse; margin-top: 10px;">
