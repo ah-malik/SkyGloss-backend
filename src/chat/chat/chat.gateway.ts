@@ -30,7 +30,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly notificationsGateway: NotificationsGateway,
     @Inject(forwardRef(() => UsersService))
     private readonly usersService: UsersService,
-  ) {}
+  ) { }
 
   async handleConnection(client: Socket) {
     console.log(`Client connected: ${client.id}`);
@@ -94,6 +94,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           message: `New message from ${data.senderName}: ${data.message.substring(0, 50)}${data.message.length > 50 ? '...' : ''}`,
           metadata: { roomId: data.roomId, senderName: data.senderName },
           link: `/live-chat?roomId=${data.roomId}`,
+          triggeredBy: (await this.chatService.getRoomById(data.roomId))?.userId?.toString(),
         });
 
       this.server.emit('message_notification', {
@@ -120,7 +121,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
                 title: 'New message from Shop',
                 message: `Shop "${data.senderName}" sent a message.`,
                 metadata: { roomId: data.roomId, senderName: data.senderName },
-                link: `/dashboard/partner/chat`, 
+                link: `/dashboard/partner/chat`,
+                triggeredBy: room.userId.toString(),
               });
               this.notificationsGateway.broadcastNotification(partnerNotif);
             }
@@ -136,7 +138,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const room = await this.chatService.getRoomById(data.roomId);
       if (room && room.userId) {
         const userId = room.userId.toString();
-        
+
         // Notify the specific user via their personal room (for toast/global alert)
         this.server.to(userId).emit('new_admin_message', {
           roomId: data.roomId,
@@ -152,6 +154,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           message: data.message.substring(0, 50) + (data.message.length > 50 ? '...' : ''),
           metadata: { roomId: data.roomId, senderName: data.senderName },
           link: '/support', // Assuming chat is located here for users
+          triggeredBy: 'admin', // Or some specific admin ID if available
         });
       }
     }

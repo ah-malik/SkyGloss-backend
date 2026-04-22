@@ -130,6 +130,7 @@ export class CertificationsService {
           shopName: certification.shopName,
         },
         user: userId,
+        triggeredBy: userId,
         link: `/certification-requests`,
       });
       this.notificationsGateway.broadcastNotification(notification);
@@ -232,6 +233,7 @@ export class CertificationsService {
         message: `Certification for ${cert.shopName} has been paid.`,
         metadata: { certificationId: cert._id, shopName: cert.shopName },
         user: cert.partner as any,
+        triggeredBy: cert.partner as any,
         link: `/certification-requests`,
       });
       this.notificationsGateway.broadcastNotification(notification);

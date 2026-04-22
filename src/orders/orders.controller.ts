@@ -113,6 +113,25 @@ export class OrdersController {
     return this.ordersService.handleWebhook(sig as string, req.rawBody);
   }
 
+  @Post('webhook-usa')
+  async handleUsaWebhook(@Req() req: RawBodyRequest<any>) {
+    console.log('[USA Stripe Webhook] Received request at /orders/webhook-usa');
+    const sig = req.headers['stripe-signature'];
+
+    if (!sig) {
+      console.error('[USA Stripe Webhook] Missing stripe-signature header');
+      throw new BadRequestException('Missing stripe-signature header');
+    }
+
+    if (!req.rawBody) {
+      console.error('[USA Stripe Webhook] CRITICAL: req.rawBody is MISSING.');
+      throw new BadRequestException('No webhook payload provided');
+    }
+
+    console.log(`[USA Stripe Webhook] Payload size: ${req.rawBody.length} bytes`);
+    return this.ordersService.handleUsaWebhook(sig as string, req.rawBody);
+  }
+
   @Post('request')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(

@@ -47,6 +47,11 @@ export class NotificationsController {
     );
   }
 
+  @Patch('mark-all-my-read')
+  markAllMyRead(@Req() req: any) {
+    return this.notificationsService.markAllAsReadForUser(req.user.id);
+  }
+
   @Patch(':id/read')
 
 

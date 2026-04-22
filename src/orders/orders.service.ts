@@ -19,6 +19,7 @@ import { UserRole, UserStatus } from '../users/entities/user.entity';
 @Injectable()
 export class OrdersService {
   private stripe: Stripe;
+  private usaStripe: Stripe;
 
   constructor(
     @InjectModel(Order.name) private orderModel: Model<OrderDocument>,
@@ -29,6 +30,7 @@ export class OrdersService {
     private mailService: MailService,
   ) {
     const stripeSecretKey = this.configService.get<string>('STRIPE_SECRET_KEY');
+    const usaStripeSecretKey = this.configService.get<string>('USA_STRIPE_SECRET_KEY');
     const stripeApiVersion =
       this.configService.get<string>('STRIPE_API_VERSION') || '2022-11-15';
 
@@ -37,6 +39,15 @@ export class OrdersService {
       this.stripe = undefined as any;
     } else {
       this.stripe = new Stripe(stripeSecretKey, {
+        apiVersion: stripeApiVersion as Stripe.LatestApiVersion,
+      });
+    }
+
+    if (!usaStripeSecretKey) {
+      console.warn('USA_STRIPE_SECRET_KEY is not defined');
+      this.usaStripe = undefined as any;
+    } else {
+      this.usaStripe = new Stripe(usaStripeSecretKey, {
         apiVersion: stripeApiVersion as Stripe.LatestApiVersion,
       });
     }
@@ -126,11 +137,18 @@ export class OrdersService {
     createOrderDto: CreateOrderDto,
     role?: string,
   ) {
-    if (!this.stripe) {
+    const { shippingAddress } = createOrderDto;
+    const isUsaOrder = shippingAddress?.country?.toLowerCase().trim() === 'united states';
+
+    // Route USA orders to the USA Stripe account
+    const stripeInstance = isUsaOrder && this.usaStripe ? this.usaStripe : this.stripe;
+
+    if (!stripeInstance) {
       throw new BadRequestException('Stripe is not configured on the server.');
     }
+    console.log(`[Stripe] Using ${isUsaOrder ? 'USA' : 'Global'} Stripe account for order.`);
 
-    const { items, shippingAddress } = createOrderDto;
+    const { items } = createOrderDto;
 
     // Calculate total amount from items
     // Note: In a real app, we should fetch product prices from DB to secure against client-side manipulation.
@@ -223,15 +241,18 @@ export class OrdersService {
       console.log('[Stripe Session] Creating with metadata:', JSON.stringify(sessionMetadata));
       console.log('[Stripe Session] Line items count:', line_items.length);
 
-      const session = await this.stripe.checkout.sessions.create({
+      const session = await stripeInstance.checkout.sessions.create({
         payment_method_types: ['card'],
         line_items: line_items,
         mode: 'payment',
         success_url: `${baseUrl}/dashboard/shop?success=true&order_id=${order._id}`,
-        cancel_url: `${baseUrl}/dashboard/shop?canceled=true`, // Fixed to match shop path
+        cancel_url: `${baseUrl}/dashboard/shop?canceled=true`,
         client_reference_id: String(userId),
         customer_email: String(shippingAddress.email || ''),
-        metadata: sessionMetadata,
+        metadata: {
+          ...sessionMetadata,
+          isUsaOrder: isUsaOrder ? 'true' : 'false',
+        },
       });
 
       order.stripeSessionId = session.id;
@@ -338,6 +359,7 @@ export class OrdersService {
               message: `Shop "${updatedUser.firstName} ${updatedUser.lastName}" has completed registration and is now part of your network.`,
               metadata: { shopId: updatedUser._id, shopName: `${updatedUser.firstName} ${updatedUser.lastName}` },
               user: partner._id,
+              triggeredBy: userId,
               link: `/dashboard/partner/network`,
             });
             this.notificationsGateway.broadcastNotification(partnerNotification);
@@ -349,6 +371,43 @@ export class OrdersService {
     }
 
     return { status: 'pending', user };
+  }
+
+  async handleUsaWebhook(sig: string, payload: Buffer) {
+    const endpointSecret = this.configService.get<string>('USA_STRIPE_WEBHOOK_SECRET');
+    if (!endpointSecret)
+      throw new BadRequestException('USA Webhook secret not configured');
+
+    if (!this.usaStripe)
+      throw new BadRequestException('USA Stripe is not configured on the server.');
+
+    let event: Stripe.Event;
+    try {
+      event = this.usaStripe.webhooks.constructEvent(payload, sig, endpointSecret);
+    } catch (err) {
+      console.error(`[USA Stripe Webhook] Verification Failed: ${err.message}`);
+      throw new BadRequestException(`Webhook Error: ${err.message}`);
+    }
+
+    const session = event.data.object as Stripe.Checkout.Session;
+    console.log(`[USA Stripe Webhook] Received event: ${event.type}`);
+    const metadata = session.metadata;
+
+    if (event.type === 'checkout.session.completed' && metadata?.type === 'shop_order') {
+      const orderId = metadata.orderId;
+      console.log(`[USA Stripe Webhook] Processing shop_order for orderId: ${orderId}`);
+
+      const order = await this.orderModel.findById(orderId);
+      if (order) {
+        order.status = OrderStatus.PAID;
+        await order.save();
+        console.log(`[USA Stripe Webhook] Order ${orderId} marked as PAID.`);
+      } else {
+        console.error(`[USA Stripe Webhook] Order ${orderId} not found.`);
+      }
+    }
+
+    return { received: true };
   }
 
   async handleWebhook(sig: string, payload: Buffer) {
@@ -407,6 +466,7 @@ export class OrdersService {
             message: `User ${updatedUser.firstName} ${updatedUser.lastName} has paid the registration fee and is now active.`,
             metadata: { userId: updatedUser._id },
             user: updatedUser._id as any,
+            triggeredBy: updatedUser._id as any,
             link: `/dashboard/partner`,
           });
           this.notificationsGateway.broadcastNotification(notification);
@@ -454,6 +514,7 @@ export class OrdersService {
                 message: `Shop "${updatedUser.firstName} ${updatedUser.lastName}" has completed registration and is now part of your network.`,
                 metadata: { shopId: updatedUser._id, shopName: `${updatedUser.firstName} ${updatedUser.lastName}` },
                 user: partner._id,
+                triggeredBy: updatedUser._id as any,
                 link: `/dashboard/partner/network`,
               });
               this.notificationsGateway.broadcastNotification(partnerNotification);
@@ -466,6 +527,7 @@ export class OrdersService {
             message: `Shop ${updatedUser.firstName} ${updatedUser.lastName} has paid the registration fee and is now active.`,
             metadata: { userId: updatedUser._id },
             user: updatedUser._id as any,
+            triggeredBy: updatedUser._id as any,
             link: `/dashboard/shop`,
           });
           this.notificationsGateway.broadcastNotification(notification);
@@ -506,6 +568,7 @@ export class OrdersService {
               orderNumber: updatedOrder.orderNumber,
             },
             user: (updatedOrder.user as any)?._id,
+            triggeredBy: (updatedOrder.user as any)?._id,
             link: `/orders/${updatedOrder._id}`,
           });
           this.notificationsGateway.broadcastNotification(notification);
@@ -588,6 +651,7 @@ export class OrdersService {
         orderNumber: savedOrder.orderNumber,
       },
       user: userId,
+      triggeredBy: userId,
       link: `/orders/${savedOrder._id}`,
     });
     this.notificationsGateway.broadcastNotification(notification);

@@ -34,7 +34,10 @@ export class Notification {
   isRead: boolean;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
-  user: User; // The user associated with the notification (e.g., who placed the order)
+  user: User; // The recipient of the notification
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
+  triggeredBy: User; // The user who triggered the activity
 
   @Prop()
   link: string; // Optional link to the resource (e.g., /orders/123)

@@ -20,6 +20,7 @@ export class NotificationsService {
     message: string;
     metadata?: any;
     user?: string;
+    triggeredBy?: string;
     link?: string;
   }): Promise<NotificationDocument> {
     console.log(
@@ -43,6 +44,7 @@ export class NotificationsService {
     message: string;
     metadata?: any;
     link?: string;
+    triggeredBy?: string;
   }): Promise<{ notification: NotificationDocument; isNew: boolean }> {
     // Find existing unread chat notification for this specific room
     const existingNotification = await this.notificationModel.findOne({
@@ -55,6 +57,7 @@ export class NotificationsService {
       // Update the existing notification
       existingNotification.message = data.message;
       existingNotification.title = data.title;
+      existingNotification.triggeredBy = data.triggeredBy;
       const currentCount = existingNotification.metadata?.unreadCount || 1;
 
       // Re-assign metadata to trigger Mongoose Mixed type update
@@ -73,6 +76,7 @@ export class NotificationsService {
       // Create a completely new notification
       const newNotifData = {
         ...data,
+        triggeredBy: data.triggeredBy,
         metadata: {
           ...data.metadata,
           unreadCount: 1,
@@ -117,7 +121,11 @@ export class NotificationsService {
 
   async getUnreadCountForUser(userId: string): Promise<number> {
     return this.notificationModel
-      .countDocuments({ user: userId, isRead: false } as any)
+      .countDocuments({
+        user: userId,
+        isRead: false,
+        triggeredBy: { $ne: userId as any },
+      } as any)
       .exec();
   }
 
@@ -127,6 +135,18 @@ export class NotificationsService {
         {
           user: userId as any,
           type: NotificationType.CHAT_MESSAGE,
+          isRead: false,
+        },
+        { isRead: true },
+      )
+      .exec();
+  }
+
+  async markAllAsReadForUser(userId: string): Promise<void> {
+    await this.notificationModel
+      .updateMany(
+        {
+          user: userId as any,
           isRead: false,
         },
         { isRead: true },
@@ -147,7 +167,10 @@ export class NotificationsService {
 
   async findAllForUser(userId: string): Promise<NotificationDocument[]> {
     return this.notificationModel
-      .find({ user: userId as any })
+      .find({
+        user: userId as any,
+        triggeredBy: { $ne: userId as any }, // Exclude self-triggered notifications
+      })
       .sort({ createdAt: -1 })
       .limit(20)
       .exec();

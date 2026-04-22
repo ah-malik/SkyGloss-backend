@@ -16,6 +16,7 @@ import { SupportModule } from './support/support.module';
 import { ChatModule } from './chat/chat.module';
 import { ProductGroupsModule } from './product-groups/product-groups.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { PdfModule } from './pdf/pdf.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { NotificationsModule } from './notifications/notifications.module';
     ChatModule,
     ProductGroupsModule,
     NotificationsModule,
+    PdfModule,
   ],
   controllers: [AppController],
   providers: [AppService, SeedService],

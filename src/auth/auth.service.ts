@@ -257,16 +257,10 @@ export class AuthService {
   }
 
   async registerShop(createUserDto: CreateUserDto) {
-    let partnerId = createUserDto.referredByPartnerCode;
-    
-    // Default to GLOBAL77 if no partner is provided
+    let partnerId = createUserDto.referredByPartnerCode?.trim();
+
+    // If user has no partner ID (checked the "Don't have Partner ID" box), default to GLOBAL77
     if (!partnerId) {
-      partnerId = 'GLOBAL77';
-      createUserDto.referredByPartnerCode = partnerId;
-    }
-    
-    // Direct registration logic: if hearAboutUs or couponCode is present, ensure GLOBAL77 is assigned (even if partnerId was somehow present but invalid)
-    if ((createUserDto.hearAboutUs || createUserDto.couponCode === 'CERTIFICATIONONUS')) {
       partnerId = 'GLOBAL77';
       createUserDto.referredByPartnerCode = partnerId;
     }
@@ -314,9 +308,11 @@ export class AuthService {
     }
 
 
-    // Handle Coupon Code Bypass
+    // Handle Coupon Code Bypass (free registration)
+    // If a valid partner code was provided, keep it. Only use GLOBAL77 if no partner was specified.
     const isCouponBypass = createUserDto.couponCode === 'CERTIFICATIONONUS';
-    if (isCouponBypass) {
+    const originalPartnerId = createUserDto.referredByPartnerCode?.trim();
+    if (isCouponBypass && !originalPartnerId) {
       partnerId = 'GLOBAL77';
     }
 
