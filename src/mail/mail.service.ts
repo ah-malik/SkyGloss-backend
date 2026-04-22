@@ -243,8 +243,8 @@ export class MailService {
     };
 
     try {
-      await this.salesTransporter.sendMail(mailOptions);
-      this.logger.log(`Registration confirmation email sent via Sales to ${to}`);
+      await this.certifiedTransporter.sendMail(mailOptions);
+      this.logger.log(`Registration confirmation email sent via Certified to ${to}`);
     } catch (error) {
       this.logger.error(`Failed to send registration confirmation email to ${to}`, error.stack);
     }
