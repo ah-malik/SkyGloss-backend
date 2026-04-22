@@ -603,7 +603,7 @@ export class OrdersService {
             { status: OrderStatus.PAID },
             { new: true },
           )
-          .populate('user', 'firstName lastName');
+          .populate('user', 'firstName lastName email');
 
         if (updatedOrder) {
           console.log(`[Stripe Webhook] Order ${updatedOrder.orderNumber} status updated to PAID.`);
