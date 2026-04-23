@@ -5,6 +5,7 @@ import { SupportController } from './support.controller';
 import { SupportTicket, SupportTicketSchema } from './entities/support.entity';
 
 import { NotificationsModule } from '../notifications/notifications.module';
+import { UsersModule } from '../users/users.module';
 
 @Module({
   imports: [
@@ -12,6 +13,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
       { name: SupportTicket.name, schema: SupportTicketSchema },
     ]),
     NotificationsModule,
+    UsersModule,
   ],
   controllers: [SupportController],
   providers: [SupportService],

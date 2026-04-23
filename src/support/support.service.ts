@@ -10,6 +10,7 @@ import {
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
 import { NotificationType } from '../notifications/entities/notification.entity';
+import { UsersService } from '../users/users.service';
 
 @Injectable()
 export class SupportService {
@@ -18,6 +19,7 @@ export class SupportService {
     private supportTicketModel: Model<SupportTicketDocument>,
     private readonly notificationsService: NotificationsService,
     private readonly notificationsGateway: NotificationsGateway,
+    private readonly usersService: UsersService,
   ) {}
 
   async create(createSupportDto: CreateSupportDto): Promise<SupportTicket> {
@@ -53,22 +55,44 @@ export class SupportService {
     id: string,
     updateSupportDto: UpdateSupportDto,
   ): Promise<SupportTicket> {
-    const updateData: any = { ...updateSupportDto };
-    if (updateSupportDto.adminReply) {
-      updateData.adminReplyDate = new Date();
-      // Optionally also set status to resolved if a reply is made
-      // updateData.status = TicketStatus.RESOLVED; 
-    }
-
-    const existingTicket = await this.supportTicketModel
-      .findByIdAndUpdate(id, { $set: updateData }, { new: true })
-      .exec();
-
+    const existingTicket = await this.supportTicketModel.findById(id).exec();
     if (!existingTicket) {
       throw new NotFoundException(`Support ticket #${id} not found`);
     }
 
-    return existingTicket;
+    const updateData: any = { ...updateSupportDto };
+    let notifyUserEmail = null;
+
+    if (updateSupportDto.adminReply) {
+      updateData.adminReplyDate = new Date();
+      notifyUserEmail = existingTicket.email;
+    }
+
+    const updatedTicket = await this.supportTicketModel
+      .findByIdAndUpdate(id, { $set: updateData }, { new: true })
+      .exec();
+
+    if (notifyUserEmail) {
+      // Find the user by email
+      try {
+        const user = await this.usersService.findByEmail(notifyUserEmail);
+        if (user) {
+          const notification = await this.notificationsService.create({
+            type: NotificationType.SUPPORT_TICKET,
+            title: 'Support Ticket Update',
+            message: `SkyGloss Support has replied to your ticket.`,
+            user: user._id as any,
+            metadata: { ticketId: updatedTicket._id },
+            link: '/support',
+          });
+          this.notificationsGateway.broadcastNotification(notification);
+        }
+      } catch (e) {
+        console.error('Failed to notify user for support reply', e);
+      }
+    }
+
+    return updatedTicket;
   }
 
   remove(id: number) {
