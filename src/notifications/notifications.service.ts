@@ -12,7 +12,7 @@ export class NotificationsService {
   constructor(
     @InjectModel(Notification.name)
     private notificationModel: Model<NotificationDocument>,
-  ) {}
+  ) { }
 
   async create(data: {
     type: NotificationType;
@@ -57,7 +57,7 @@ export class NotificationsService {
       // Update the existing notification
       existingNotification.message = data.message;
       existingNotification.title = data.title;
-      existingNotification.triggeredBy = data.triggeredBy;
+      existingNotification.triggeredBy = data.triggeredBy as any;
       const currentCount = existingNotification.metadata?.unreadCount || 1;
 
       // Re-assign metadata to trigger Mongoose Mixed type update
