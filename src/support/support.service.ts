@@ -61,7 +61,7 @@ export class SupportService {
     }
 
     const updateData: any = { ...updateSupportDto };
-    let notifyUserEmail = null;
+    let notifyUserEmail: string | null = null;
 
     if (updateSupportDto.adminReply) {
       updateData.adminReplyDate = new Date();
@@ -71,6 +71,10 @@ export class SupportService {
     const updatedTicket = await this.supportTicketModel
       .findByIdAndUpdate(id, { $set: updateData }, { new: true })
       .exec();
+
+    if (!updatedTicket) {
+      throw new NotFoundException(`Support ticket #${id} not found`);
+    }
 
     if (notifyUserEmail) {
       // Find the user by email
