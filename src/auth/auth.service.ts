@@ -315,6 +315,7 @@ export class AuthService {
     const shopDto = {
       ...createUserDto,
       referredByPartnerCode: partnerId,
+      couponCode: isCouponBypass ? 'CERTIFICATIONONUS' : undefined,
       role: UserRole.CERTIFIED_SHOP,
       status: isCouponBypass ? UserStatus.ACTIVE : UserStatus.PENDING,
       isPartnerPaid: isCouponBypass ? true : false,

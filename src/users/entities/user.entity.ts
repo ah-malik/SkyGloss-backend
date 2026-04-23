@@ -108,6 +108,9 @@ export class User {
   referredByPartnerCode?: string;
 
   @Prop()
+  couponCode?: string;
+
+  @Prop()
   certificationVideoUrl?: string;
 
   @Prop({ default: false })
