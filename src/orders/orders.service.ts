@@ -437,6 +437,11 @@ export class OrdersService {
         await this.mailService.sendNewOrderNotification(updatedOrder, updatedOrder.user).catch(err => {
           console.error('[USA Stripe Webhook] Failed to send order email to sales', err);
         });
+
+        // Send Confirmation Email to the Customer
+        await this.mailService.sendOrderPaidCustomerConfirmation(updatedOrder, updatedOrder.user).catch(err => {
+          console.error('[USA Stripe Webhook] Failed to send order paid confirmation email to customer', err);
+        });
       } else {
         console.error(`[USA Stripe Webhook] Order ${orderId} not found in DB.`);
       }
@@ -624,6 +629,11 @@ export class OrdersService {
           // Send Email to sales@skygloss.com
           await this.mailService.sendNewOrderNotification(updatedOrder, updatedOrder.user).catch(err => {
             console.error('Failed to send order email to sales', err);
+          });
+
+          // Send Confirmation Email to the Customer
+          await this.mailService.sendOrderPaidCustomerConfirmation(updatedOrder, updatedOrder.user).catch(err => {
+            console.error('Failed to send order paid confirmation email to customer', err);
           });
         } else {
           console.error(`[Stripe Webhook] Order with id ${orderId} not found in DB.`);
