@@ -7,4 +7,7 @@ export class UpdateSupportDto extends PartialType(CreateSupportDto) {
   @IsEnum(TicketStatus)
   @IsOptional()
   status?: TicketStatus;
+
+  @IsOptional()
+  adminReply?: string;
 }

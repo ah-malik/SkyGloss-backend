@@ -29,6 +29,12 @@ export class SupportTicket {
 
   @Prop({ type: String, enum: TicketStatus, default: TicketStatus.OPEN })
   status: TicketStatus;
+
+  @Prop()
+  adminReply?: string;
+
+  @Prop()
+  adminReplyDate?: Date;
 }
 
 export const SupportTicketSchema = SchemaFactory.createForClass(SupportTicket);

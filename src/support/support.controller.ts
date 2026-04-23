@@ -36,6 +36,11 @@ export class SupportController {
     return this.supportService.findOne(id);
   }
 
+  @Get('user/:email')
+  findByEmail(@Param('email') email: string) {
+    return this.supportService.findByEmail(email);
+  }
+
   @Patch(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)

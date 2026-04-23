@@ -45,12 +45,23 @@ export class SupportService {
     return this.supportTicketModel.findById(id).exec();
   }
 
+  async findByEmail(email: string): Promise<SupportTicket[]> {
+    return this.supportTicketModel.find({ email: new RegExp('^' + email + '$', 'i') }).sort({ createdAt: -1 }).exec();
+  }
+
   async update(
     id: string,
     updateSupportDto: UpdateSupportDto,
   ): Promise<SupportTicket> {
+    const updateData: any = { ...updateSupportDto };
+    if (updateSupportDto.adminReply) {
+      updateData.adminReplyDate = new Date();
+      // Optionally also set status to resolved if a reply is made
+      // updateData.status = TicketStatus.RESOLVED; 
+    }
+
     const existingTicket = await this.supportTicketModel
-      .findByIdAndUpdate(id, { $set: updateSupportDto }, { new: true })
+      .findByIdAndUpdate(id, { $set: updateData }, { new: true })
       .exec();
 
     if (!existingTicket) {
