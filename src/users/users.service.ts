@@ -212,13 +212,16 @@ export class UsersService implements OnModuleInit {
       JSON.stringify(updateUserDto, null, 2),
     );
 
-    // Permission check: Non-admins can only update shops they referred
+    // Permission check: Non-admins can only update themselves or shops they referred
     if (currentUser.role !== UserRole.ADMIN) {
       const targetUser = await this.userModel.findById(id);
       if (!targetUser) throw new BadRequestException('User not found');
 
-      // Check if this is a shop referred by the current partner
-      if (targetUser.referredByPartnerCode !== currentUser.partnerCode) {
+      // Allow self-update (e.g., training-complete)
+      const isSelfUpdate = currentUser._id.toString() === targetUser._id.toString();
+
+      // Check if this is a shop referred by the current partner OR a self-update
+      if (!isSelfUpdate && targetUser.referredByPartnerCode !== currentUser.partnerCode) {
         throw new ForbiddenException('You do not have permission to update this user');
       }
 
