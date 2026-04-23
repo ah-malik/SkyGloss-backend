@@ -309,12 +309,7 @@ export class AuthService {
 
 
     // Handle Coupon Code Bypass (free registration)
-    // If a valid partner code was provided, keep it. Only use GLOBAL77 if no partner was specified.
     const isCouponBypass = createUserDto.couponCode === 'CERTIFICATIONONUS';
-    const originalPartnerId = createUserDto.referredByPartnerCode?.trim();
-    if (isCouponBypass && !originalPartnerId) {
-      partnerId = 'GLOBAL77';
-    }
 
     // Force role and status for a new shop registration
     const shopDto = {
