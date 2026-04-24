@@ -23,7 +23,16 @@ export class SupportService {
   ) {}
 
   async create(createSupportDto: CreateSupportDto): Promise<SupportTicket> {
-    const createdTicket = new this.supportTicketModel(createSupportDto);
+    const createdTicket = new this.supportTicketModel({
+      ...createSupportDto,
+      messages: [
+        {
+          sender: 'user',
+          content: createSupportDto.message,
+          timestamp: new Date(),
+        },
+      ],
+    });
     const savedTicket = await createdTicket.save();
 
     // Notify admins about the new support ticket
@@ -49,6 +58,74 @@ export class SupportService {
 
   async findByEmail(email: string): Promise<SupportTicket[]> {
     return this.supportTicketModel.find({ email: new RegExp('^' + email + '$', 'i') }).sort({ createdAt: -1 }).exec();
+  }
+
+  async addMessage(
+    id: string,
+    sender: 'user' | 'admin',
+    content: string,
+    senderEmail?: string,
+  ): Promise<SupportTicket> {
+    const ticket = await this.supportTicketModel.findById(id).exec();
+    if (!ticket) {
+      throw new NotFoundException(`Support ticket #${id} not found`);
+    }
+
+    const newMessage = { sender, content, timestamp: new Date() };
+
+    const updateData: any = {
+      $push: { messages: newMessage },
+    };
+
+    // If admin sends a message, also update legacy adminReply and set status to in_progress
+    if (sender === 'admin') {
+      updateData.$set = {
+        adminReply: content,
+        adminReplyDate: new Date(),
+        status: ticket.status === 'open' ? 'in_progress' : ticket.status,
+      };
+    }
+
+    const updatedTicket = await this.supportTicketModel
+      .findByIdAndUpdate(id, updateData, { new: true })
+      .exec();
+
+    if (!updatedTicket) {
+      throw new NotFoundException(`Support ticket #${id} not found`);
+    }
+
+    // Notify the other party
+    if (sender === 'admin') {
+      // Notify the user
+      try {
+        const user = await this.usersService.findByEmail(ticket.email);
+        if (user) {
+          const notification = await this.notificationsService.create({
+            type: NotificationType.SUPPORT_TICKET,
+            title: 'New Reply on Your Ticket',
+            message: `SkyGloss Support has replied to your ticket.`,
+            user: user._id as any,
+            metadata: { ticketId: updatedTicket._id },
+            link: '/support',
+          });
+          this.notificationsGateway.broadcastNotification(notification);
+        }
+      } catch (e) {
+        console.error('Failed to notify user for support reply', e);
+      }
+    } else {
+      // User sent a message — notify admins
+      const notification = await this.notificationsService.create({
+        type: NotificationType.SUPPORT_TICKET,
+        title: 'New Reply on Support Ticket',
+        message: `${ticket.name} has sent a new message on their support ticket.`,
+        metadata: { ticketId: updatedTicket._id, email: ticket.email },
+        link: '/support-tickets',
+      });
+      this.notificationsGateway.broadcastNotification(notification);
+    }
+
+    return updatedTicket;
   }
 
   async update(

@@ -10,6 +10,20 @@ export enum TicketStatus {
   CLOSED = 'closed',
 }
 
+@Schema({ _id: false, timestamps: false })
+export class TicketMessage {
+  @Prop({ required: true, enum: ['user', 'admin'] })
+  sender: string;
+
+  @Prop({ required: true })
+  content: string;
+
+  @Prop({ default: () => new Date() })
+  timestamp: Date;
+}
+
+export const TicketMessageSchema = SchemaFactory.createForClass(TicketMessage);
+
 @Schema({ timestamps: true })
 export class SupportTicket {
   @Prop({ required: true })
@@ -35,6 +49,9 @@ export class SupportTicket {
 
   @Prop()
   adminReplyDate?: Date;
+
+  @Prop({ type: [TicketMessageSchema], default: [] })
+  messages: TicketMessage[];
 }
 
 export const SupportTicketSchema = SchemaFactory.createForClass(SupportTicket);

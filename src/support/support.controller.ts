@@ -47,4 +47,12 @@ export class SupportController {
   update(@Param('id') id: string, @Body() updateSupportDto: UpdateSupportDto) {
     return this.supportService.update(id, updateSupportDto);
   }
+
+  @Post(':id/messages')
+  addMessage(
+    @Param('id') id: string,
+    @Body() body: { sender: 'user' | 'admin'; content: string; senderEmail?: string },
+  ) {
+    return this.supportService.addMessage(id, body.sender, body.content, body.senderEmail);
+  }
 }
