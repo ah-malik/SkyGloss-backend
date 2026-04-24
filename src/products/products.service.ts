@@ -8,7 +8,7 @@ import {
 } from '../product-groups/entities/product-group.entity';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
-import { User } from '../users/entities/user.entity';
+import { User, UserRole } from '../users/entities/user.entity';
 import { Schema as MongooseSchema } from 'mongoose';
 
 @Injectable()
@@ -41,7 +41,7 @@ export class ProductsService {
     let groupToUse: any = null;
 
     if (user) {
-      if (user.role === 'shop') {
+      if (user.role === UserRole.CERTIFIED_SHOP) {
         console.log(`[ProductsService] Resolving dynamic group for shop user by country: ${user.country}`);
         if (user.country) {
           groupToUse = await this.productGroupModel
@@ -116,7 +116,7 @@ export class ProductsService {
     let groupToUse: any = null;
 
     if (user) {
-      if (user.role === 'shop') {
+      if (user.role === UserRole.CERTIFIED_SHOP) {
         if (user.country) {
           groupToUse = await this.productGroupModel
             .findOne({ country: user.country, isActive: true })
