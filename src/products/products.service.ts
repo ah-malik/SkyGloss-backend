@@ -38,36 +38,48 @@ export class ProductsService {
       user ? `${(user as any)._id} (${user.username})` : 'Anonymous',
     );
 
-    // 1. If user has a product group, STRICTLY restrict visibility and override prices
-    if (user && user.productGroup) {
-      console.log(
-        '[ProductsService] User has productGroup:',
-        user.productGroup,
-      );
-      const group = await this.productGroupModel
-        .findById(user.productGroup)
-        .populate('products.productId')
-        .exec();
+    let groupToUse: any = null;
 
-      if (!group) {
-        console.warn(
-          `[ProductsService] Group ${user.productGroup} assigned to user but NOT FOUND in database.`,
-        );
-        return []; // Strict: If group assigned but not found, return NO products
+    if (user) {
+      if (user.role === 'shop') {
+        console.log(`[ProductsService] Resolving dynamic group for shop user by country: ${user.country}`);
+        if (user.country) {
+          groupToUse = await this.productGroupModel
+            .findOne({ country: user.country, isActive: true })
+            .populate('products.productId')
+            .exec();
+        }
+        
+        if (!groupToUse) {
+          console.log(`[ProductsService] No group found for country ${user.country}, falling back to default group.`);
+          groupToUse = await this.productGroupModel
+            .findOne({ isDefault: true, isActive: true })
+            .populate('products.productId')
+            .exec();
+        }
+      } else if (user.productGroup) {
+        console.log('[ProductsService] User has explicit productGroup:', user.productGroup);
+        groupToUse = await this.productGroupModel
+          .findById(user.productGroup)
+          .populate('products.productId')
+          .exec();
       }
+    }
 
+    // 1. If user has an applicable product group, STRICTLY restrict visibility and override prices
+    if (groupToUse) {
       console.log(
-        `[ProductsService] Filtering for group: ${group.name} (${group.products?.length} items)`,
+        `[ProductsService] Filtering for group: ${groupToUse.name} (${groupToUse.products?.length} items)`,
       );
 
       // Return only products in the group with group-specific prices
-      return group.products
+      return groupToUse.products
         .map((item) => {
           const product = item.productId as any;
           if (!product) return null;
 
           // Deep clone and override
-          const productObj = product.toObject();
+          const productObj = product.toObject ? product.toObject() : product;
 
           return {
             ...productObj,
@@ -75,8 +87,8 @@ export class ProductsService {
               size: s.size,
               price: s.price,
             })),
-            currency: group.currency || 'USD',
-            groupName: group.name,
+            currency: groupToUse.currency || 'USD',
+            groupName: groupToUse.name,
           };
         })
         .filter((p) => p !== null);
@@ -101,23 +113,33 @@ export class ProductsService {
       user ? (user as any)._id : 'Anonymous',
     );
 
-    // 1. Check if user has a product group and if this product is in it
-    if (user && user.productGroup) {
-      const group = await this.productGroupModel
-        .findById(user.productGroup)
-        .populate('products.productId')
-        .exec();
+    let groupToUse: any = null;
 
-      if (!group) {
-        console.warn(
-          `[ProductsService] Group ${user.productGroup} assigned to user but NOT FOUND.`,
-        );
-        throw new NotFoundException(
-          `Product with ID ${id} not found for your group`,
-        );
+    if (user) {
+      if (user.role === 'shop') {
+        if (user.country) {
+          groupToUse = await this.productGroupModel
+            .findOne({ country: user.country, isActive: true })
+            .populate('products.productId')
+            .exec();
+        }
+        if (!groupToUse) {
+          groupToUse = await this.productGroupModel
+            .findOne({ isDefault: true, isActive: true })
+            .populate('products.productId')
+            .exec();
+        }
+      } else if (user.productGroup) {
+        groupToUse = await this.productGroupModel
+          .findById(user.productGroup)
+          .populate('products.productId')
+          .exec();
       }
+    }
 
-      const groupItem = group.products.find(
+    // 1. Check if user has an applicable product group and if this product is in it
+    if (groupToUse) {
+      const groupItem = groupToUse.products.find(
         (item) =>
           (item.productId as any)?._id?.toString() === id ||
           (item.productId as any)?.id?.toString() === id,
@@ -125,19 +147,19 @@ export class ProductsService {
 
       if (groupItem) {
         const product = groupItem.productId as any;
-        const productObj = product.toObject();
+        const productObj = product.toObject ? product.toObject() : product;
         return {
           ...productObj,
           sizes: groupItem.sizes.map((s) => ({
             size: s.size,
             price: s.price,
           })),
-          currency: group.currency || 'USD',
-          groupName: group.name,
+          currency: groupToUse.currency || 'USD',
+          groupName: groupToUse.name,
         };
       } else {
         console.warn(
-          `[ProductsService] Product ${id} NOT found in user's group ${group.name}`,
+          `[ProductsService] Product ${id} NOT found in group ${groupToUse.name}`,
         );
         throw new NotFoundException(
           `Product with ID ${id} not found in your assigned group`,

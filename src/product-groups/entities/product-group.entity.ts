@@ -36,6 +36,12 @@ export class ProductGroup {
 
   @Prop({ default: true })
   isActive: boolean;
+
+  @Prop()
+  country?: string;
+
+  @Prop({ default: false })
+  isDefault: boolean;
 }
 
 export const ProductGroupSchema = SchemaFactory.createForClass(ProductGroup);

@@ -41,6 +41,14 @@ export class CreateProductGroupDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @IsOptional()
+  @IsString()
+  country?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isDefault?: boolean;
 }
 
 export class UpdateProductGroupDto {
@@ -61,4 +69,12 @@ export class UpdateProductGroupDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @IsOptional()
+  @IsString()
+  country?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isDefault?: boolean;
 }

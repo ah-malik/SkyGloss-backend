@@ -284,15 +284,7 @@ export class UsersService implements OnModuleInit {
       .findByIdAndUpdate(id, updatePayload, { new: true })
       .exec();
 
-    // IF this was a partner role update AND productGroup was changed, sync to all their shops
-    const partnerRoles = [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER];
-    if (updatedUser && partnerRoles.includes(updatedUser.role) && updatePayload.productGroup !== undefined) {
-      console.log(`[UsersService] Syncing productGroup ${updatePayload.productGroup} to all shops referred by ${updatedUser.partnerCode}`);
-      await this.userModel.updateMany(
-        { referredByPartnerCode: updatedUser.partnerCode, role: UserRole.CERTIFIED_SHOP },
-        { productGroup: updatePayload.productGroup }
-      ).exec();
-    }
+
 
     return updatedUser;
   }
@@ -448,12 +440,11 @@ export class UsersService implements OnModuleInit {
     });
     if (!partner) throw new BadRequestException('Invalid Partner Code');
 
-    // 2. Update Shop with partner's code and inherit their productGroup
+    // 2. Update Shop with partner's code
     const shop = await this.userModel.findByIdAndUpdate(
       shopId,
       {
-        referredByPartnerCode: partnerCode,
-        productGroup: partner.productGroup || undefined
+        referredByPartnerCode: partnerCode
       },
       { new: true }
     );
