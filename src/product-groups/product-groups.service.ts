@@ -23,6 +23,9 @@ export class ProductGroupsService {
   async create(
     createProductGroupDto: CreateProductGroupDto,
   ): Promise<ProductGroup> {
+    if (createProductGroupDto.isDefault) {
+      await this.productGroupModel.updateMany({}, { isDefault: false }).exec();
+    }
     const createdGroup = new this.productGroupModel(createProductGroupDto);
     return createdGroup.save();
   }
@@ -34,15 +37,39 @@ export class ProductGroupsService {
       .lean()
       .exec();
 
+    // Fetch all active countries with groups
+    const activeCountries = groups.map(g => g.country).filter(c => c);
+
     // Add user count to each group
     const groupsWithCounts = await Promise.all(
       groups.map(async (group) => {
-        const userCount = await this.userModel
+        // 1. Users explicitly assigned this group
+        const explicitCount = await this.userModel
           .countDocuments({ productGroup: group._id as any })
           .exec();
+
+        // 2. Shop users matching by country
+        let countryCount = 0;
+        if (group.country) {
+          countryCount = await this.userModel
+            .countDocuments({ role: 'certified_shop', country: group.country })
+            .exec();
+        }
+
+        // 3. Shop users falling back to default
+        let defaultCount = 0;
+        if (group.isDefault) {
+           defaultCount = await this.userModel
+             .countDocuments({ 
+                role: 'certified_shop', 
+                country: { $nin: activeCountries } 
+             })
+             .exec();
+        }
+
         return {
           ...group,
-          userCount,
+          userCount: explicitCount + countryCount + defaultCount,
         };
       }),
     );
@@ -65,6 +92,10 @@ export class ProductGroupsService {
     id: string,
     updateProductGroupDto: UpdateProductGroupDto,
   ): Promise<ProductGroup> {
+    if (updateProductGroupDto.isDefault) {
+      await this.productGroupModel.updateMany({ _id: { $ne: id } }, { isDefault: false }).exec();
+    }
+
     const existingGroup = await this.productGroupModel
       .findByIdAndUpdate(id, updateProductGroupDto, { new: true })
       .exec();
