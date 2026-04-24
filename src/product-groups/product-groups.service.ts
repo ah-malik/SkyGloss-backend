@@ -23,6 +23,19 @@ export class ProductGroupsService {
   async create(
     createProductGroupDto: CreateProductGroupDto,
   ): Promise<ProductGroup> {
+    // Check for duplicate countries
+    if (createProductGroupDto.countries && createProductGroupDto.countries.length > 0) {
+      const existingGroups = await this.productGroupModel.find({
+        countries: { $in: createProductGroupDto.countries }
+      }).exec();
+
+      if (existingGroups.length > 0) {
+        const dupCountries = existingGroups.flatMap(g => g.countries)
+          .filter(c => createProductGroupDto.countries.includes(c));
+        throw new Error(`The following countries are already assigned to another group: ${dupCountries.join(', ')}. Please remove them from the existing group first.`);
+      }
+    }
+
     if (createProductGroupDto.isDefault) {
       await this.productGroupModel.updateMany({}, { isDefault: false }).exec();
     }
@@ -43,7 +56,8 @@ export class ProductGroupsService {
       .lean()
       .exec();
 
-    const activeCountries = groups.map((g) => g.country).filter((c) => c);
+    // Fetch all active countries with groups (flattened array)
+    const activeCountries = groups.flatMap((g) => g.countries || []).filter((c) => c);
 
     // Map counts to each group
     const groupsWithCounts = groups.map((group) => {
@@ -61,8 +75,10 @@ export class ProductGroupsService {
 
         // 2. Dynamic matching for shop users
         if (user.role === UserRole.CERTIFIED_SHOP) {
-          // Does the user match this specific country group?
-          if (group.country && user.country === group.country) {
+          // Does the user match any of the countries in this group?
+          const userInThisGroup = group.countries && group.countries.includes(user.country);
+          
+          if (userInThisGroup) {
             count++;
           }
           // Or if no country match, do they fall back to this default group?
@@ -84,6 +100,8 @@ export class ProductGroupsService {
     });
 
     return groupsWithCounts;
+
+
   }
 
   async findOne(id: string): Promise<ProductGroup> {
@@ -101,6 +119,20 @@ export class ProductGroupsService {
     id: string,
     updateProductGroupDto: UpdateProductGroupDto,
   ): Promise<ProductGroup> {
+    // Check for duplicate countries (excluding this group itself)
+    if (updateProductGroupDto.countries && updateProductGroupDto.countries.length > 0) {
+      const existingGroups = await this.productGroupModel.find({
+        _id: { $ne: id },
+        countries: { $in: updateProductGroupDto.countries }
+      }).exec();
+
+      if (existingGroups.length > 0) {
+        const dupCountries = existingGroups.flatMap(g => g.countries)
+          .filter(c => updateProductGroupDto.countries.includes(c));
+        throw new Error(`The following countries are already assigned to another group: ${dupCountries.join(', ')}. Please remove them from the existing group first.`);
+      }
+    }
+
     if (updateProductGroupDto.isDefault) {
       await this.productGroupModel.updateMany({ _id: { $ne: id } }, { isDefault: false }).exec();
     }

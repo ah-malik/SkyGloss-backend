@@ -43,8 +43,9 @@ export class CreateProductGroupDto {
   isActive?: boolean;
 
   @IsOptional()
-  @IsString()
-  country?: string;
+  @IsArray()
+  @IsString({ each: true })
+  countries?: string[];
 
   @IsOptional()
   @IsBoolean()
@@ -71,8 +72,9 @@ export class UpdateProductGroupDto {
   isActive?: boolean;
 
   @IsOptional()
-  @IsString()
-  country?: string;
+  @IsArray()
+  @IsString({ each: true })
+  countries?: string[];
 
   @IsOptional()
   @IsBoolean()

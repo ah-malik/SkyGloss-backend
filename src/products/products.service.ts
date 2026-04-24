@@ -45,7 +45,7 @@ export class ProductsService {
         console.log(`[ProductsService] Resolving dynamic group for shop user by country: ${user.country}`);
         if (user.country) {
           groupToUse = await this.productGroupModel
-            .findOne({ country: user.country, isActive: true })
+            .findOne({ countries: user.country, isActive: true })
             .populate('products.productId')
             .exec();
         }
@@ -119,7 +119,7 @@ export class ProductsService {
       if (user.role === UserRole.CERTIFIED_SHOP) {
         if (user.country) {
           groupToUse = await this.productGroupModel
-            .findOne({ country: user.country, isActive: true })
+            .findOne({ countries: user.country, isActive: true })
             .populate('products.productId')
             .exec();
         }
