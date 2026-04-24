@@ -9,7 +9,7 @@ import {
   CreateProductGroupDto,
   UpdateProductGroupDto,
 } from './dto/product-group.dto';
-import { User, UserDocument } from '../users/entities/user.entity';
+import { User, UserDocument, UserRole } from '../users/entities/user.entity';
 
 @Injectable()
 export class ProductGroupsService {
@@ -37,42 +37,51 @@ export class ProductGroupsService {
       .lean()
       .exec();
 
-    // Fetch all active countries with groups
-    const activeCountries = groups.map(g => g.country).filter(c => c);
+    // Fetch relevant user data for in-memory counting
+    const users = await this.userModel
+      .find({}, 'role country productGroup')
+      .lean()
+      .exec();
 
-    // Add user count to each group
-    const groupsWithCounts = await Promise.all(
-      groups.map(async (group) => {
-        // 1. Users explicitly assigned this group
-        const explicitCount = await this.userModel
-          .countDocuments({ productGroup: group._id as any })
-          .exec();
+    const activeCountries = groups.map((g) => g.country).filter((c) => c);
 
-        // 2. Shop users matching by country
-        let countryCount = 0;
-        if (group.country) {
-          countryCount = await this.userModel
-            .countDocuments({ role: 'certified_shop', country: group.country })
-            .exec();
+    // Map counts to each group
+    const groupsWithCounts = groups.map((group) => {
+      let count = 0;
+
+      users.forEach((user) => {
+        // 1. Explicitly assigned this group (Priority)
+        if (
+          user.productGroup &&
+          user.productGroup.toString() === group._id.toString()
+        ) {
+          count++;
+          return;
         }
 
-        // 3. Shop users falling back to default
-        let defaultCount = 0;
-        if (group.isDefault) {
-           defaultCount = await this.userModel
-             .countDocuments({ 
-                role: 'certified_shop', 
-                country: { $nin: activeCountries } 
-             })
-             .exec();
+        // 2. Dynamic matching for shop users
+        if (user.role === UserRole.CERTIFIED_SHOP) {
+          // Does the user match this specific country group?
+          if (group.country && user.country === group.country) {
+            count++;
+          }
+          // Or if no country match, do they fall back to this default group?
+          else if (group.isDefault) {
+            const hasSpecificCountryGroup = activeCountries.includes(
+              user.country,
+            );
+            if (!hasSpecificCountryGroup) {
+              count++;
+            }
+          }
         }
+      });
 
-        return {
-          ...group,
-          userCount: explicitCount + countryCount + defaultCount,
-        };
-      }),
-    );
+      return {
+        ...group,
+        userCount: count,
+      };
+    });
 
     return groupsWithCounts;
   }
