@@ -57,11 +57,20 @@ export class ProductGroupsService {
       .exec();
 
     // Fetch all active countries with groups (flattened array)
-    const activeCountries = groups.flatMap((g) => g.countries || []).filter((c) => c);
+    // Handle both new 'countries' array and old 'country' string field for compatibility
+    const activeCountries = groups.flatMap((g) => {
+      const list = g.countries || [];
+      if (g.country && !list.includes(g.country)) {
+        list.push(g.country);
+      }
+      return list;
+    }).filter((c) => c);
 
     // Map counts to each group
     const groupsWithCounts = groups.map((group) => {
       let count = 0;
+      
+      const groupCountries = group.countries || (group.country ? [group.country] : []);
 
       users.forEach((user) => {
         // 1. Explicitly assigned this group (Priority)
@@ -76,7 +85,7 @@ export class ProductGroupsService {
         // 2. Dynamic matching for shop users
         if (user.role === UserRole.CERTIFIED_SHOP) {
           // Does the user match any of the countries in this group?
-          const userInThisGroup = group.countries && group.countries.includes(user.country);
+          const userInThisGroup = groupCountries.includes(user.country);
           
           if (userInThisGroup) {
             count++;

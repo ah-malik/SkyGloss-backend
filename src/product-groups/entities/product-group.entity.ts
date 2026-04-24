@@ -40,6 +40,9 @@ export class ProductGroup {
   @Prop({ type: [String], default: [] })
   countries: string[];
 
+  @Prop()
+  country?: string;
+
   @Prop({ default: false })
   isDefault: boolean;
 }
