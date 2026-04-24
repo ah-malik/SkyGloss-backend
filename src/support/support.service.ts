@@ -99,11 +99,11 @@ export class SupportService {
 
     // Notify only the OTHER party (not the sender)
     if (sender === 'admin') {
-      // Notify the user only
+      // Save notification to DB for user's history (no global broadcast to avoid admin seeing it)
       try {
         const user = await this.usersService.findByEmail(ticket.email);
         if (user) {
-          const notification = await this.notificationsService.create({
+          await this.notificationsService.create({
             type: NotificationType.SUPPORT_TICKET,
             title: 'New Reply on Your Ticket',
             message: `SkyGloss Support has replied to your ticket.`,
@@ -111,8 +111,7 @@ export class SupportService {
             metadata: { ticketId: updatedTicket._id },
             link: '/support',
           });
-          // Send targeted notification (has user field, so admin filter will skip it)
-          this.notificationsGateway.broadcastNotification(notification);
+          // No broadcastNotification — real-time handled by support_message event
         }
       } catch (e) {
         console.error('Failed to notify user for support reply', e);
