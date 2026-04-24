@@ -31,7 +31,7 @@ export class ProductGroupsService {
 
       if (existingGroups.length > 0) {
         const dupCountries = existingGroups.flatMap(g => g.countries)
-          .filter(c => createProductGroupDto.countries.includes(c));
+          .filter(c => createProductGroupDto.countries?.includes(c));
         throw new Error(`The following countries are already assigned to another group: ${dupCountries.join(', ')}. Please remove them from the existing group first.`);
       }
     }
@@ -137,7 +137,7 @@ export class ProductGroupsService {
 
       if (existingGroups.length > 0) {
         const dupCountries = existingGroups.flatMap(g => g.countries)
-          .filter(c => updateProductGroupDto.countries.includes(c));
+          .filter(c => updateProductGroupDto.countries?.includes(c));
         throw new Error(`The following countries are already assigned to another group: ${dupCountries.join(', ')}. Please remove them from the existing group first.`);
       }
     }
