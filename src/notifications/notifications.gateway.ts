@@ -52,4 +52,10 @@ export class NotificationsGateway
     this.server.emit('new_notification', notification);
     this.logger.log('Emit call completed');
   }
+
+  broadcastSupportMessage(ticketId: string, updatedTicket: any) {
+    if (!this.server) return;
+    this.logger.log(`Broadcasting support_message for ticket ${ticketId}`);
+    this.server.emit('support_message', { ticketId, ticket: updatedTicket });
+  }
 }

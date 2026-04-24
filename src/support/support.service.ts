@@ -94,9 +94,12 @@ export class SupportService {
       throw new NotFoundException(`Support ticket #${id} not found`);
     }
 
-    // Notify the other party
+    // Broadcast real-time update so both admin and user see the message instantly
+    this.notificationsGateway.broadcastSupportMessage(id, updatedTicket);
+
+    // Notify only the OTHER party (not the sender)
     if (sender === 'admin') {
-      // Notify the user
+      // Notify the user only
       try {
         const user = await this.usersService.findByEmail(ticket.email);
         if (user) {
@@ -108,22 +111,15 @@ export class SupportService {
             metadata: { ticketId: updatedTicket._id },
             link: '/support',
           });
+          // Send targeted notification (has user field, so admin filter will skip it)
           this.notificationsGateway.broadcastNotification(notification);
         }
       } catch (e) {
         console.error('Failed to notify user for support reply', e);
       }
-    } else {
-      // User sent a message — notify admins
-      const notification = await this.notificationsService.create({
-        type: NotificationType.SUPPORT_TICKET,
-        title: 'New Reply on Support Ticket',
-        message: `${ticket.name} has sent a new message on their support ticket.`,
-        metadata: { ticketId: updatedTicket._id, email: ticket.email },
-        link: '/support-tickets',
-      });
-      this.notificationsGateway.broadcastNotification(notification);
     }
+    // When user sends a message, do NOT broadcast a global notification
+    // (the real-time support_message event is enough for the admin panel)
 
     return updatedTicket;
   }
