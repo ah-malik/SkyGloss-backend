@@ -173,7 +173,7 @@ export class UsersService implements OnModuleInit {
   }
 
   async findAll(): Promise<UserDocument[]> {
-    return this.userModel.find().exec();
+    return this.userModel.find().populate('productGroup').exec();
   }
 
   async findOne(id: string): Promise<UserDocument | null> {

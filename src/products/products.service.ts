@@ -41,11 +41,26 @@ export class ProductsService {
     let groupToUse: any = null;
 
     if (user) {
-      if (user.role === UserRole.CERTIFIED_SHOP) {
+      // Priority 1: Explicitly assigned product group by Admin or Registration
+      if (user.productGroup) {
+        console.log('[ProductsService] User has explicit productGroup:', user.productGroup);
+        groupToUse = await this.productGroupModel
+          .findById(user.productGroup)
+          .populate('products.productId')
+          .exec();
+      } 
+      // Priority 2: Dynamic matching by country (only if no explicit group)
+      else if (user.role === UserRole.CERTIFIED_SHOP) {
         console.log(`[ProductsService] Resolving dynamic group for shop user by country: ${user.country}`);
         if (user.country) {
           groupToUse = await this.productGroupModel
-            .findOne({ countries: user.country, isActive: true })
+            .findOne({ 
+              $or: [
+                { countries: user.country },
+                { country: user.country }
+              ],
+              isActive: true 
+            })
             .populate('products.productId')
             .exec();
         }
@@ -57,12 +72,6 @@ export class ProductsService {
             .populate('products.productId')
             .exec();
         }
-      } else if (user.productGroup) {
-        console.log('[ProductsService] User has explicit productGroup:', user.productGroup);
-        groupToUse = await this.productGroupModel
-          .findById(user.productGroup)
-          .populate('products.productId')
-          .exec();
       }
     }
 
@@ -116,10 +125,21 @@ export class ProductsService {
     let groupToUse: any = null;
 
     if (user) {
-      if (user.role === UserRole.CERTIFIED_SHOP) {
+      if (user.productGroup) {
+        groupToUse = await this.productGroupModel
+          .findById(user.productGroup)
+          .populate('products.productId')
+          .exec();
+      } else if (user.role === UserRole.CERTIFIED_SHOP) {
         if (user.country) {
           groupToUse = await this.productGroupModel
-            .findOne({ countries: user.country, isActive: true })
+            .findOne({ 
+              $or: [
+                { countries: user.country },
+                { country: user.country }
+              ],
+              isActive: true 
+            })
             .populate('products.productId')
             .exec();
         }
@@ -129,11 +149,6 @@ export class ProductsService {
             .populate('products.productId')
             .exec();
         }
-      } else if (user.productGroup) {
-        groupToUse = await this.productGroupModel
-          .findById(user.productGroup)
-          .populate('products.productId')
-          .exec();
       }
     }
 

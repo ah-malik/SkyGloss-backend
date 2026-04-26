@@ -20,6 +20,7 @@ import { OrdersService } from '../orders/orders.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
 import { NotificationType } from '../notifications/entities/notification.entity';
+import { ProductGroupsService } from '../product-groups/product-groups.service';
 
 @Injectable()
 export class AuthService {
@@ -31,6 +32,7 @@ export class AuthService {
     private ordersService: OrdersService,
     private notificationsService: NotificationsService,
     private notificationsGateway: NotificationsGateway,
+    private productGroupsService: ProductGroupsService,
   ) { }
 
   async validateUser(identifier: string, pass: string): Promise<any> {
@@ -311,6 +313,23 @@ export class AuthService {
     // Handle Coupon Code Bypass (free registration)
     const isCouponBypass = createUserDto.couponCode === 'CERTIFICATIONONUS';
 
+    // Determine product group: country match > partner's group > default group
+    let resolvedProductGroup: any = partner.productGroup || undefined;
+    try {
+      const allGroups = await this.productGroupsService.findAll();
+      const countryMatch = allGroups.find(
+        (g: any) => (g.countries && g.countries.includes(createUserDto.country)) || g.country === createUserDto.country
+      );
+      if (countryMatch) {
+        resolvedProductGroup = countryMatch._id;
+      } else if (!resolvedProductGroup) {
+        const defaultGroup = allGroups.find((g: any) => g.isDefault);
+        if (defaultGroup) resolvedProductGroup = defaultGroup._id;
+      }
+    } catch (err) {
+      console.error('[AuthService] Failed to resolve product group by country:', err);
+    }
+
     // Force role and status for a new shop registration
     const shopDto = {
       ...createUserDto,
@@ -320,7 +339,7 @@ export class AuthService {
       status: isCouponBypass ? UserStatus.ACTIVE : UserStatus.PENDING,
       isPartnerPaid: isCouponBypass ? true : false,
       isSelfRegistered: true,
-      productGroup: partner.productGroup || undefined, // Inherit from partner
+      productGroup: resolvedProductGroup,
     };
 
     try {

@@ -10,6 +10,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { MailModule } from '../mail/mail.module';
 import { OrdersModule } from '../orders/orders.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { ProductGroupsModule } from '../product-groups/product-groups.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     AccessCodesModule,
     OrdersModule,
     NotificationsModule,
+    ProductGroupsModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
