@@ -36,6 +36,21 @@ export class OrdersController {
     );
   }
 
+  @Post('activation-fee')
+  @UseGuards(JwtAuthGuard)
+  async createActivationFeeSession(@GetUser() user: any) {
+    const session = await this.ordersService.createDistributorFeeCheckoutSession(
+      user._id.toString(),
+      user.email,
+      {
+        type: 'shop_registration',
+        referredByPartnerCode: user.referredByPartnerCode,
+        country: user.country
+      }
+    );
+    return { url: session.url };
+  }
+
   @Get('my-orders')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(

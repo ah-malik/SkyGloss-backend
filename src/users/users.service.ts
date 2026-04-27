@@ -249,6 +249,9 @@ export class UsersService implements OnModuleInit {
     if (updatePayload.productGroup === '') {
       updatePayload.productGroup = null;
     }
+    if (updatePayload.referredByPartnerCode === '') {
+      updatePayload.referredByPartnerCode = null;
+    }
 
     // Explicitly sync isPartnerPaid to its DB name isDistributorPaid to ensure persistence during raw updates
     if (updatePayload.isPartnerPaid !== undefined) {
@@ -365,7 +368,6 @@ export class UsersService implements OnModuleInit {
 
     const query: any = {
       role: UserRole.CERTIFIED_SHOP,
-      isPartnerPaid: true,
     };
 
     // If it's NOT the Global Partner, filter by their specific code

@@ -725,6 +725,7 @@ export class MailService {
                             <strong>Customer Details:</strong><br>
                             Name: ${user.firstName} ${user.lastName}<br>
                             Email: ${user.email}<br>
+                            Country: ${order.country}<br>
                             Order Number: ${order.orderNumber}
                           </td>
                         </tr>
