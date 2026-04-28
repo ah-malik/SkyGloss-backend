@@ -740,7 +740,7 @@ export class MailService {
                             <strong>Customer Details:</strong><br>
                             Name: ${user.firstName} ${user.lastName}<br>
                             Email: ${user.email}<br>
-                            Country: ${order.country || user.country}<br>
+                            Country: ${order.shippingAddress?.country || user?.country || 'N/A'}<br>
                             Order Number: ${order.orderNumber}<br>
                             Currency: ${currency}
                           </td>
