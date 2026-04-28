@@ -720,7 +720,7 @@ export class MailService {
 
     const mailOptions = {
       from: `"SkyGloss Portal" <portal@skygloss.com>`,
-      to: 'sales@skygloss.com',
+      to: 'sales@skygloss.com, it@skygloss.com',
       subject: `NEW ORDER REQUEST: ${order.orderNumber} - ${user.firstName} ${user.lastName}`,
       html: `
         <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
