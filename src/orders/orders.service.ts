@@ -240,33 +240,9 @@ export class OrdersService {
           };
         });
 
-      // Add shipping cost (Free shipping)
+      // Shipping and tax are free
       const shippingRate = 0;
-      line_items.push({
-        price_data: {
-          currency: orderCurrency,
-          product_data: {
-            name: 'Shipping (Free)',
-          },
-          unit_amount: shippingRate,
-        },
-        quantity: 1,
-      });
-
-      // Add Tax (8% approx matching frontend)
-      const taxAmount = Math.round(totalAmount * 100 * 0.08);
-      if (taxAmount > 0) {
-        line_items.push({
-          price_data: {
-            currency: orderCurrency,
-            product_data: {
-              name: 'Tax (Estimated)',
-            },
-            unit_amount: taxAmount,
-          },
-          quantity: 1,
-        });
-      }
+      const taxAmount = 0;
 
       // Prepare metadata carefully (max 50 keys, 500 chars per value)
       const sessionMetadata = {
@@ -719,10 +695,10 @@ export class OrdersService {
       0,
     );
 
-    // Calculate final mount with shipping and tax to match record keeping
+    // Shipping and tax are free
     const shippingRate = 0;
-    const taxRate = 0.08;
-    const finalAmount = totalAmount + shippingRate + totalAmount * taxRate;
+    const taxRate = 0;
+    const finalAmount = totalAmount;
 
     const orderNumber = await this.generateOrderNumber('REQ-');
     const order = new this.orderModel({
