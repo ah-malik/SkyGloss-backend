@@ -15,6 +15,7 @@ import { NotificationType } from '../notifications/entities/notification.entity'
 import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
 import { UserRole, UserStatus } from '../users/entities/user.entity';
+import { ProductGroup, ProductGroupDocument } from '../product-groups/entities/product-group.entity';
 
 @Injectable()
 export class OrdersService {
@@ -23,6 +24,7 @@ export class OrdersService {
 
   constructor(
     @InjectModel(Order.name) private orderModel: Model<OrderDocument>,
+    @InjectModel(ProductGroup.name) private productGroupModel: Model<ProductGroupDocument>,
     private configService: ConfigService,
     private notificationsService: NotificationsService,
     private notificationsGateway: NotificationsGateway,
@@ -51,6 +53,34 @@ export class OrdersService {
         apiVersion: stripeApiVersion as Stripe.LatestApiVersion,
       });
     }
+  }
+
+  async getCurrencyForUser(user: any): Promise<string> {
+    const userCountry = (user?.country || '').toLowerCase().trim();
+    let orderCurrency = 'usd';
+
+    if (user.productGroup) {
+      const explicitGroup = await this.productGroupModel.findById(user.productGroup);
+      if (explicitGroup && explicitGroup.currency) {
+        orderCurrency = explicitGroup.currency.toLowerCase();
+      }
+    } else {
+      const groups = await this.productGroupModel.find({ isActive: { $ne: false } }).exec();
+      const countryMatch = groups.find(
+        g => (Array.isArray(g.countries) && g.countries.map(c => c.toLowerCase()).includes(userCountry)) || 
+             (g.country && g.country.toLowerCase() === userCountry)
+      );
+      
+      if (countryMatch && countryMatch.currency) {
+        orderCurrency = countryMatch.currency.toLowerCase();
+      } else {
+        const defaultGroup = groups.find(g => g.isDefault);
+        if (defaultGroup && defaultGroup.currency) {
+          orderCurrency = defaultGroup.currency.toLowerCase();
+        }
+      }
+    }
+    return orderCurrency;
   }
 
   async createDistributorFeeCheckoutSession(userId: string, email: string, additionalMetadata: any = {}) {
@@ -150,6 +180,9 @@ export class OrdersService {
     }
     console.log(`[Stripe] Using ${isUsaUser ? 'USA' : 'Global'} Stripe for user country: "${currentUser?.country}"`);
 
+    // DETERMINE CURRENCY
+    const orderCurrency = await this.getCurrencyForUser(currentUser);
+
     const { items, shippingAddress } = createOrderDto;
 
     // Calculate total amount from items
@@ -168,6 +201,7 @@ export class OrdersService {
       shippingAddress,
       status: OrderStatus.PENDING,
       orderNumber,
+      currency: orderCurrency.toUpperCase(),
     });
 
     try {
@@ -191,7 +225,7 @@ export class OrdersService {
 
           return {
             price_data: {
-              currency: 'usd',
+              currency: orderCurrency,
               product_data: {
                 name: String(item.name || 'Product'),
                 images: images,
@@ -210,7 +244,7 @@ export class OrdersService {
       const shippingRate = 0;
       line_items.push({
         price_data: {
-          currency: 'usd',
+          currency: orderCurrency,
           product_data: {
             name: 'Shipping (Free)',
           },
@@ -224,7 +258,7 @@ export class OrdersService {
       if (taxAmount > 0) {
         line_items.push({
           price_data: {
-            currency: 'usd',
+            currency: orderCurrency,
             product_data: {
               name: 'Tax (Estimated)',
             },
@@ -676,6 +710,9 @@ export class OrdersService {
   }
 
   async createOrderRequest(userId: string, createOrderDto: CreateOrderDto) {
+    const currentUser = await this.usersService.findOne(userId);
+    const orderCurrency = await this.getCurrencyForUser(currentUser);
+
     const { items, shippingAddress } = createOrderDto;
     const totalAmount = items.reduce(
       (sum, item) => sum + item.price * item.quantity,
@@ -695,6 +732,7 @@ export class OrdersService {
       shippingAddress,
       status: OrderStatus.PENDING,
       orderNumber,
+      currency: orderCurrency.toUpperCase(),
     });
 
     const savedOrder = await order.save();

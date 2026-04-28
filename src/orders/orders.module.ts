@@ -6,10 +6,14 @@ import { Order, OrderSchema } from './entities/order.entity';
 import { ConfigModule } from '@nestjs/config';
 import { UsersModule } from '../users/users.module';
 import { MailModule } from '../mail/mail.module';
+import { ProductGroup, ProductGroupSchema } from '../product-groups/entities/product-group.entity';
 
 @Module({
   imports: [
-    MongooseModule.forFeature([{ name: Order.name, schema: OrderSchema }]),
+    MongooseModule.forFeature([
+      { name: Order.name, schema: OrderSchema },
+      { name: ProductGroup.name, schema: ProductGroupSchema }
+    ]),
     ConfigModule,
     UsersModule,
     MailModule,

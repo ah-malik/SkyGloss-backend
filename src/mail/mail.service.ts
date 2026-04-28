@@ -633,6 +633,15 @@ export class MailService {
     const subtotal = order.items.reduce((sum: number, item: any) => sum + (item.price * item.quantity), 0);
     const tax = subtotal * 0.08; // 8% tax as calculated in OrdersService
 
+    const currencySymbols: { [key: string]: string } = {
+      USD: '$',
+      AUD: '$',
+      EUR: '€',
+      GBP: '£',
+    };
+    const currency = (order.currency || 'USD').toUpperCase();
+    const symbol = currencySymbols[currency] || '$';
+
     const mailOptions = {
       from: `"SkyGloss Portal" <portal@skygloss.com>`,
       to: 'sales@skygloss.com',
@@ -655,26 +664,27 @@ export class MailService {
                             <strong>Customer Details:</strong><br>
                             Name: ${user.firstName} ${user.lastName}<br>
                             Email: ${user.email}<br>
-                            Order Number: ${order.orderNumber}
+                            Order Number: ${order.orderNumber}<br>
+                            Currency: ${currency}
                           </td>
                         </tr>
                       </table>
 
                       <h3 style="color: #272727; border-bottom: 1px solid #eee; padding-bottom: 10px;">Order Summary</h3>
-                      ${this.renderOrderItems(order.items)}
+                      ${this.renderOrderItems(order.items, symbol)}
 
                       <table width="100%" cellpadding="5" cellspacing="0" style="margin-top: 20px; border-top: 2px solid #0ea0dc; padding-top: 10px;">
                         <tr>
                           <td align="right" style="color: #666;">Subtotal:</td>
-                          <td align="right" width="100" style="font-weight: bold;">$${subtotal.toFixed(2)}</td>
+                          <td align="right" width="100" style="font-weight: bold;">${symbol}${subtotal.toFixed(2)}</td>
                         </tr>
                         <tr>
                           <td align="right" style="color: #666;">Tax (8%):</td>
-                          <td align="right" style="font-weight: bold;">$${tax.toFixed(2)}</td>
+                          <td align="right" style="font-weight: bold;">${symbol}${tax.toFixed(2)}</td>
                         </tr>
                         <tr>
                           <td align="right" style="font-size: 18px; color: #272727; font-weight: bold;">Total Paid:</td>
-                          <td align="right" style="font-size: 18px; color: #0ea0dc; font-weight: bold;">$${order.totalAmount.toFixed(2)}</td>
+                          <td align="right" style="font-size: 18px; color: #0ea0dc; font-weight: bold;">${symbol}${order.totalAmount.toFixed(2)} <span style="font-size:12px; color:#666;">${currency}</span></td>
                         </tr>
                       </table>
 
@@ -703,6 +713,15 @@ export class MailService {
     const subtotal = order.items.reduce((sum: number, item: any) => sum + (item.price * item.quantity), 0);
     const tax = subtotal * 0.08;
 
+    const currencySymbols: { [key: string]: string } = {
+      USD: '$',
+      AUD: '$',
+      EUR: '€',
+      GBP: '£',
+    };
+    const currency = (order.currency || 'USD').toUpperCase();
+    const symbol = currencySymbols[currency] || '$';
+
     const mailOptions = {
       from: `"SkyGloss Portal" <portal@skygloss.com>`,
       to: 'sales@skygloss.com',
@@ -725,27 +744,28 @@ export class MailService {
                             <strong>Customer Details:</strong><br>
                             Name: ${user.firstName} ${user.lastName}<br>
                             Email: ${user.email}<br>
-                            Country: ${order.country}<br>
-                            Order Number: ${order.orderNumber}
+                            Country: ${order.country || user.country}<br>
+                            Order Number: ${order.orderNumber}<br>
+                            Currency: ${currency}
                           </td>
                         </tr>
                       </table>
 
                       <h3 style="color: #272727; border-bottom: 1px solid #eee; padding-bottom: 10px;">Requested Items</h3>
-                      ${this.renderOrderItems(order.items)}
+                      ${this.renderOrderItems(order.items, symbol)}
 
                       <table width="100%" cellpadding="5" cellspacing="0" style="margin-top: 20px; border-top: 2px solid #0ea0dc; padding-top: 10px;">
                         <tr>
                           <td align="right" style="color: #666;">Subtotal:</td>
-                          <td align="right" width="100" style="font-weight: bold;">$${subtotal.toFixed(2)}</td>
+                          <td align="right" width="100" style="font-weight: bold;">${symbol}${subtotal.toFixed(2)}</td>
                         </tr>
                         <tr>
                           <td align="right" style="color: #666;">Estimated Tax (8%):</td>
-                          <td align="right" style="font-weight: bold;">$${tax.toFixed(2)}</td>
+                          <td align="right" style="font-weight: bold;">${symbol}${tax.toFixed(2)}</td>
                         </tr>
                         <tr>
                           <td align="right" style="font-size: 18px; color: #272727; font-weight: bold;">Estimated Total:</td>
-                          <td align="right" style="font-size: 18px; color: #0ea0dc; font-weight: bold;">$${order.totalAmount.toFixed(2)}</td>
+                          <td align="right" style="font-size: 18px; color: #0ea0dc; font-weight: bold;">${symbol}${order.totalAmount.toFixed(2)} <span style="font-size:12px; color:#666;">${currency}</span></td>
                         </tr>
                       </table>
 
@@ -774,6 +794,15 @@ export class MailService {
     const subtotal = order.items.reduce((sum: number, item: any) => sum + (item.price * item.quantity), 0);
     const tax = subtotal * 0.08;
 
+    const currencySymbols: { [key: string]: string } = {
+      USD: '$',
+      AUD: '$',
+      EUR: '€',
+      GBP: '£',
+    };
+    const currency = (order.currency || 'USD').toUpperCase();
+    const symbol = currencySymbols[currency] || '$';
+
     const mailOptions = {
       from: `"SkyGloss Portal" <sales@skygloss.com>`,
       to: user.email,
@@ -793,20 +822,20 @@ export class MailService {
                       <p>Our sales team has received your request and will review it shortly. Once approved, you will receive an invoice to complete your purchase.</p>
 
                       <h3 style="color: #272727; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-top: 30px;">Requested Items Summary</h3>
-                      ${this.renderOrderItems(order.items)}
+                      ${this.renderOrderItems(order.items, symbol)}
 
                       <table width="100%" cellpadding="5" cellspacing="0" style="margin-top: 20px; border-top: 2px solid #0ea0dc; padding-top: 10px;">
                         <tr>
                           <td align="right" style="color: #666;">Subtotal:</td>
-                          <td align="right" width="100" style="font-weight: bold;">$${subtotal.toFixed(2)}</td>
+                          <td align="right" width="100" style="font-weight: bold;">${symbol}${subtotal.toFixed(2)}</td>
                         </tr>
                         <tr>
                           <td align="right" style="color: #666;">Estimated Tax (8%):</td>
-                          <td align="right" style="font-weight: bold;">$${tax.toFixed(2)}</td>
+                          <td align="right" style="font-weight: bold;">${symbol}${tax.toFixed(2)}</td>
                         </tr>
                         <tr>
                           <td align="right" style="font-size: 18px; color: #272727; font-weight: bold;">Estimated Total:</td>
-                          <td align="right" style="font-size: 18px; color: #0ea0dc; font-weight: bold;">$${order.totalAmount.toFixed(2)}</td>
+                          <td align="right" style="font-size: 18px; color: #0ea0dc; font-weight: bold;">${symbol}${order.totalAmount.toFixed(2)} <span style="font-size:12px; color:#666;">${currency}</span></td>
                         </tr>
                       </table>
 
@@ -835,6 +864,15 @@ export class MailService {
     const subtotal = order.items.reduce((sum: number, item: any) => sum + (item.price * item.quantity), 0);
     const tax = subtotal * 0.08;
 
+    const currencySymbols: { [key: string]: string } = {
+      USD: '$',
+      AUD: '$',
+      EUR: '€',
+      GBP: '£',
+    };
+    const currency = (order.currency || 'USD').toUpperCase();
+    const symbol = currencySymbols[currency] || '$';
+
     const mailOptions = {
       from: `"SkyGloss Portal" <sales@skygloss.com>`,
       to: user.email,
@@ -854,20 +892,20 @@ export class MailService {
                       <p>We will notify you once your items have been shipped.</p>
 
                       <h3 style="color: #272727; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-top: 30px;">Order Summary</h3>
-                      ${this.renderOrderItems(order.items)}
+                      ${this.renderOrderItems(order.items, symbol)}
 
                       <table width="100%" cellpadding="5" cellspacing="0" style="margin-top: 20px; border-top: 2px solid #0ea0dc; padding-top: 10px;">
                         <tr>
                           <td align="right" style="color: #666;">Subtotal:</td>
-                          <td align="right" width="100" style="font-weight: bold;">$${subtotal.toFixed(2)}</td>
+                          <td align="right" width="100" style="font-weight: bold;">${symbol}${subtotal.toFixed(2)}</td>
                         </tr>
                         <tr>
                           <td align="right" style="color: #666;">Estimated Tax (8%):</td>
-                          <td align="right" style="font-weight: bold;">$${tax.toFixed(2)}</td>
+                          <td align="right" style="font-weight: bold;">${symbol}${tax.toFixed(2)}</td>
                         </tr>
                         <tr>
                           <td align="right" style="font-size: 18px; color: #272727; font-weight: bold;">Total Paid:</td>
-                          <td align="right" style="font-size: 18px; color: #0ea0dc; font-weight: bold;">$${order.totalAmount.toFixed(2)}</td>
+                          <td align="right" style="font-size: 18px; color: #0ea0dc; font-weight: bold;">${symbol}${order.totalAmount.toFixed(2)} <span style="font-size:12px; color:#666;">${currency}</span></td>
                         </tr>
                       </table>
 
@@ -892,7 +930,7 @@ export class MailService {
     }
   }
 
-  private renderOrderItems(items: any[]) {
+  private renderOrderItems(items: any[], symbol: string = '$') {
     let itemsHtml = `
       <table width="100%" cellpadding="10" cellspacing="0" style="border-collapse: collapse; margin-top: 10px;">
         <thead>
@@ -921,8 +959,8 @@ export class MailService {
             </table>
           </td>
           <td align="center" style="padding: 10px; font-size: 13px; color: #272727;">${item.quantity}</td>
-          <td align="right" style="padding: 10px; font-size: 13px; color: #272727;">$${item.price.toFixed(2)}</td>
-          <td align="right" style="padding: 10px; font-size: 13px; font-weight: bold; color: #272727;">$${(item.price * item.quantity).toFixed(2)}</td>
+          <td align="right" style="padding: 10px; font-size: 13px; color: #272727;">${symbol}${item.price.toFixed(2)}</td>
+          <td align="right" style="padding: 10px; font-size: 13px; font-weight: bold; color: #272727;">${symbol}${(item.price * item.quantity).toFixed(2)}</td>
         </tr>
       `;
     });

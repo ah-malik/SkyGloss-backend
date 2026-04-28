@@ -91,6 +91,9 @@ export class Order {
   @Prop({ required: true, unique: true })
   orderNumber: string;
 
+  @Prop({ default: 'USD' })
+  currency: string;
+
   @Prop()
   stripeSessionId: string;
 }
