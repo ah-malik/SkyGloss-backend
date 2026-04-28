@@ -2,53 +2,68 @@ import { Injectable } from '@nestjs/common';
 const PDFDocument = require('pdfkit');
 import { User } from '../users/entities/user.entity';
 import { Order } from '../orders/entities/order.entity';
+import axios from 'axios';
 
 @Injectable()
 export class PdfService {
+
+
   async generateCertificate(user: User): Promise<Buffer> {
-    return new Promise((resolve) => {
+    return new Promise(async (resolve) => {
       const doc = new PDFDocument({
         size: 'A4',
         layout: 'landscape',
-        margin: 50,
+        margin: 0,
       });
 
       const chunks: Buffer[] = [];
       doc.on('data', (chunk) => chunks.push(chunk));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
 
-      // Border
-      doc.rect(20, 20, doc.page.width - 40, doc.page.height - 40).lineWidth(5).stroke('#0EA0DC');
-      doc.rect(30, 30, doc.page.width - 60, doc.page.height - 60).lineWidth(1).stroke('#0EA0DC');
+      // ✅ Background
+      const bgUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1777377593/ikbhkmhdwj6t0rsghffz.jpg';
+      const bg = await axios.get(bgUrl, { responseType: 'arraybuffer' });
 
-      // Title
-      doc.fontSize(45).fillColor('#0EA0DC').font('Helvetica-Bold').text('CERTIFICATE OF COMPLETION', 0, 100, { align: 'center' });
-      
-      doc.moveDown(1);
-      doc.fontSize(22).fillColor('#272727').font('Helvetica').text('This is to certify that', { align: 'center' });
-      
-      doc.moveDown(0.5);
-      doc.fontSize(36).fillColor('#0EA0DC').font('Helvetica-Bold').text(`${user.firstName} ${user.lastName}`, { align: 'center' });
-      
-      doc.moveDown(0.5);
-      doc.fontSize(20).fillColor('#272727').font('Helvetica').text('of', { align: 'center' });
-      
-      doc.moveDown(0.5);
-      doc.fontSize(28).fillColor('#272727').font('Helvetica-Bold').text(user.shopName || user.companyName || 'SkyGloss Authorized Shop', { align: 'center' });
-      
-      doc.moveDown(1);
-      doc.fontSize(18).font('Helvetica').text('has successfully completed the professional training program and is now a', { align: 'center' });
-      
-      doc.moveDown(0.5);
-      doc.fontSize(26).fillColor('#0EA0DC').font('Helvetica-Bold').text('CERTIFIED SKYGLOSS INSTALLER', { align: 'center' });
-      
-      doc.moveDown(2);
-      doc.fontSize(14).fillColor('#999999').text(`Certificate ID: SG-${(user as any)._id.toString().substring(0, 8).toUpperCase()}`, { align: 'center' });
-      doc.text(`Issued Date: ${new Date().toLocaleDateString()}`, { align: 'center' });
+      doc.image(Buffer.from(bg.data), 0, 0, {
+        width: doc.page.width,
+        height: doc.page.height,
+      });
 
-      // Footer Logo Text
-      doc.moveDown(2);
-      doc.fontSize(24).fillColor('#0EA0DC').font('Helvetica-Bold').text('SKYGLOSS', { align: 'center' });
+      // ✅ Small Signature (LEFT)
+      // const signUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1777378204/f8kav3aspmdyxpu7qtmo.jpg';
+      // const sign = await axios.get(signUrl, { responseType: 'arraybuffer' });
+
+      // doc.image(Buffer.from(sign.data), 10, 250, {
+      //   width: 520,
+      // });
+
+      // ✅ TEXT (perfect positioning)
+
+      // Main Title
+      doc.fontSize(42)
+        .fillColor('#111')
+        .text(user.shopName || 'Car Care Melbourne', 0, 20, {
+          align: 'center',
+        });
+
+      // Subtitle
+      doc.fontSize(16)
+        .text('SKYGLOSS CERTIFIED', 0, 65, { align: 'center' });
+
+      // Left block
+      doc.fontSize(12).text('Jonas Svirtautas', 80, 100);
+      doc.moveTo(80, 120).lineTo(280, 120).stroke();
+      doc.text('Skygloss Inc.', 80, 130);
+
+      doc.text('12831154', 80, 165);
+      doc.moveTo(80, 195).lineTo(200, 195).stroke();
+      doc.text('Certification No', 80, 205);
+
+      // Date (right)
+      const date = new Date().toLocaleDateString();
+      doc.text(date, 225, 165);
+      doc.moveTo(225, 195).lineTo(300, 195).stroke();
+      doc.text('Date', 225, 205);
 
       doc.end();
     });
@@ -64,7 +79,7 @@ export class PdfService {
       // Header
       doc.fontSize(24).fillColor('#0EA0DC').font('Helvetica-Bold').text('Order Details', { align: 'center' });
       doc.moveDown();
-      
+
       doc.fontSize(12).fillColor('#272727').font('Helvetica');
       doc.text(`Order Number: ${order.orderNumber}`);
       doc.text(`Date: ${new Date((order as any).createdAt).toLocaleString()}`);
@@ -93,7 +108,7 @@ export class PdfService {
       // Items Table
       doc.fontSize(14).font('Helvetica-Bold').text('Order Items:', { underline: true });
       doc.moveDown(0.5);
-      
+
       doc.fontSize(10).font('Helvetica-Bold');
       doc.text('Item', 50, doc.y, { width: 250 });
       doc.text('Size', 300, doc.y, { width: 100 });
