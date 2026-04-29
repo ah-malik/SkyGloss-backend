@@ -18,6 +18,8 @@ import { CreateCertificationDto } from './dto/create-certification.dto';
 import { GoogleCertificationService } from './google-certification.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
+import { MailService } from '../mail/mail.service';
+import { PdfService } from '../pdf/pdf.service';
 import { NotificationType } from '../notifications/entities/notification.entity';
 
 @Injectable()
@@ -32,6 +34,8 @@ export class CertificationsService {
     private googleCertificationService: GoogleCertificationService,
     private notificationsService: NotificationsService,
     private notificationsGateway: NotificationsGateway,
+    private mailService: MailService,
+    private pdfService: PdfService,
   ) {
     const stripeSecretKey = this.configService.get<string>('STRIPE_SECRET_KEY');
     const stripeApiVersion =
@@ -303,6 +307,17 @@ export class CertificationsService {
         .catch((err) => {
           this.logger.error(`Failed to port to Google Sheet: ${err.message}`);
         });
+
+      // Generate PDF and dispatch via email
+      (async () => {
+        try {
+          // PdfService expects a user object with shopName
+          const certificateBuffer = await this.pdfService.generateCertificate(cert as any);
+          await this.mailService.sendCertificateEmail(cert.shopEmail, cert.shopName, certificateBuffer);
+        } catch (emailErr) {
+          this.logger.error(`Failed to generate or send certificate email to ${cert.shopEmail}: ${emailErr.message}`);
+        }
+      })();
     }
 
     return cert;

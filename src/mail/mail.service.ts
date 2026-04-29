@@ -956,5 +956,52 @@ export class MailService {
 
     return itemsHtml;
   }
+
+  async sendCertificateEmail(toEmail: string, shopName: string, attachmentBuffer: Buffer) {
+    const mailOptions = {
+      from: `"SkyGloss Certification" <certified@skygloss.com>`,
+      to: toEmail,
+      subject: `Congratulations! Your SkyGloss Certificate for ${shopName}`,
+      html: `
+        <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
+            <tr>
+              <td align="center">
+                <table width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="margin:20px 0; border-radius:8px; overflow:hidden;">
+                  <tr><td align="center" bgcolor="#0ea0dc" style="padding:20px; color:#ffffff; font-size:24px; font-weight:bold;">SkyGloss Certificate</td></tr>
+                  <tr>
+                    <td style="padding:30px; color:#333333; font-size:14px; line-height:1.6;">
+                      <h2 style="color:#0ea0dc; text-align:center;">Congratulations!</h2>
+                      <p>We are pleased to inform you that your request for SkyGloss Certification has been approved.</p>
+                      <p>Please find your official certificate attached to this email.</p>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:25px; background:#f7f7f7; border-top:1px solid #ddd; text-align:center;">
+                       <span style="color:#555; font-size:14px; font-weight:bold;">Certification Department</span><br>
+                       <span style="color:#555; font-size:12px;">✉️ certified@skygloss.com</span>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+      `,
+      attachments: [
+        {
+          filename: 'SkyGloss_Certificate.pdf',
+          content: attachmentBuffer,
+        },
+      ],
+    };
+
+    try {
+      await this.certifiedTransporter.sendMail(mailOptions);
+      this.logger.log(`Certificate email sent to ${toEmail} for ${shopName}`);
+    } catch (error) {
+      this.logger.error(`Failed to send certificate email to ${toEmail}`, error.stack);
+    }
+  }
 }
 

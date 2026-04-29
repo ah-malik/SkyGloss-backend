@@ -8,12 +8,16 @@ import {
   CertificationSchema,
 } from './entities/certification.entity';
 import { GoogleCertificationService } from './google-certification.service';
+import { MailModule } from '../mail/mail.module';
+import { PdfModule } from '../pdf/pdf.module';
 
 @Module({
   imports: [
     MongooseModule.forFeature([
       { name: Certification.name, schema: CertificationSchema },
     ]),
+    MailModule,
+    PdfModule,
   ],
   controllers: [CertificationsController],
   providers: [CertificationsService, GoogleCertificationService],

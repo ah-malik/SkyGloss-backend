@@ -99,6 +99,39 @@ export class UsersController {
     return this.usersService.remove(id);
   }
 
+  @Patch('me/profile')
+  async updateProfile(
+    @GetUser() user: UserDocument,
+    @Body() profileData: any,
+  ) {
+    const allowedFields = [
+      'firstName',
+      'lastName',
+      'phoneNumber',
+      'address',
+      'streetAddress',
+      'city',
+      'zipCode',
+      'country',
+      'website',
+      'facebook',
+      'instagram',
+      'youtube',
+      'tiktok',
+      'linkedin',
+      'password',
+    ];
+
+    const updatePayload: any = {};
+    for (const key of allowedFields) {
+      if (profileData[key] !== undefined) {
+        updatePayload[key] = profileData[key];
+      }
+    }
+
+    return this.usersService.update(user._id.toString(), updatePayload, user);
+  }
+
   @Patch('me/complete-course')
   completeCourse(
     @GetUser() user: UserDocument,
