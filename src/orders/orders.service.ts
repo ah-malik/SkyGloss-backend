@@ -260,7 +260,7 @@ export class OrdersService {
         success_url: `${baseUrl}/dashboard/shop?success=true&order_id=${order._id}`,
         cancel_url: `${baseUrl}/dashboard/shop?canceled=true`,
         client_reference_id: String(userId),
-        customer_email: String(shippingAddress.email || ''),
+        customer_email: String(currentUser?.email || shippingAddress.email || ''),
         metadata: sessionMetadata,
       });
 
