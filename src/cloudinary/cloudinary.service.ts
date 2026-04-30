@@ -27,7 +27,9 @@ export class CloudinaryService {
         `[CloudinaryService] Starting upload for file: ${file.originalname} (${file.size} bytes)`,
       );
 
-      const upload = cloudinary.uploader.upload_stream((error, result) => {
+      const upload = cloudinary.uploader.upload_stream(
+        { resource_type: 'auto' },
+        (error, result) => {
         if (error) {
           console.error(
             '[CloudinaryService] Upload error details:',
