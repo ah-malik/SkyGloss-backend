@@ -83,22 +83,6 @@ export class UsersController {
     return this.usersService.findOne(id);
   }
 
-  @Patch(':id')
-  @Roles(UserRole.ADMIN, UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER)
-  update(
-    @Param('id') id: string,
-    @Body() updateUserDto: UpdateUserDto,
-    @GetUser() currentUser: UserDocument,
-  ) {
-    return this.usersService.update(id, updateUserDto, currentUser);
-  }
-
-  @Delete(':id')
-  @Roles(UserRole.ADMIN)
-  remove(@Param('id') id: string) {
-    return this.usersService.remove(id);
-  }
-
   @Patch('me/profile')
   async updateProfile(
     @GetUser() user: UserDocument,
@@ -131,6 +115,23 @@ export class UsersController {
 
     return this.usersService.update(user._id.toString(), updatePayload, user);
   }
+
+  @Patch(':id')
+  @Roles(UserRole.ADMIN, UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER)
+  update(
+    @Param('id') id: string,
+    @Body() updateUserDto: UpdateUserDto,
+    @GetUser() currentUser: UserDocument,
+  ) {
+    return this.usersService.update(id, updateUserDto, currentUser);
+  }
+
+  @Delete(':id')
+  @Roles(UserRole.ADMIN)
+  remove(@Param('id') id: string) {
+    return this.usersService.remove(id);
+  }
+
 
   @Patch('me/complete-course')
   completeCourse(

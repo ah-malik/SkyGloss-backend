@@ -841,7 +841,7 @@ export class MailService {
     };
 
     try {
-      await this.transporter.sendMail(mailOptions);
+      await this.salesTransporter.sendMail(mailOptions);
       this.logger.log(`Order request confirmation sent to customer ${user.email} for ${order.orderNumber}`);
     } catch (error) {
       this.logger.error(`Failed to send order request confirmation to customer`, error.stack);
@@ -907,7 +907,7 @@ export class MailService {
     };
 
     try {
-      await this.transporter.sendMail(mailOptions);
+      await this.salesTransporter.sendMail(mailOptions);
       this.logger.log(`Order paid confirmation sent to customer ${user.email} for ${order.orderNumber}`);
     } catch (error) {
       this.logger.error(`Failed to send order paid confirmation to customer`, error.stack);
