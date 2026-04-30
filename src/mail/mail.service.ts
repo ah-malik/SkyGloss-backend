@@ -1088,7 +1088,7 @@ export class MailService {
     };
 
     try {
-      await this.transporter.sendMail(mailOptions);
+      await this.salesTransporter.sendMail(mailOptions);
       this.logger.log(`Order cancellation notification sent to ${user.email} for ${order.orderNumber}`);
     } catch (error) {
       this.logger.error(`Failed to send order cancellation notification to customer`, error.stack);
