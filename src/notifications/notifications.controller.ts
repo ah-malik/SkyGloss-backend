@@ -47,6 +47,14 @@ export class NotificationsController {
     );
   }
 
+  @Patch('mark-chat-read/:triggeredById')
+  markChatReadByTriggeredBy(@Req() req: any, @Param('triggeredById') triggeredById: string) {
+    return this.notificationsService.markChatNotificationsAsReadByTriggeredBy(
+      req.user.id,
+      triggeredById,
+    );
+  }
+
   @Patch('mark-all-my-read')
   markAllMyRead(@Req() req: any) {
     return this.notificationsService.markAllAsReadForUser(req.user.id);

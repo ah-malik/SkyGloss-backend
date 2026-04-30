@@ -142,6 +142,20 @@ export class NotificationsService {
       .exec();
   }
 
+  async markChatNotificationsAsReadByTriggeredBy(userId: string, triggeredById: string): Promise<void> {
+    await this.notificationModel
+      .updateMany(
+        {
+          user: userId as any,
+          triggeredBy: triggeredById as any,
+          type: NotificationType.CHAT_MESSAGE,
+          isRead: false,
+        },
+        { isRead: true },
+      )
+      .exec();
+  }
+
   async markAllAsReadForUser(userId: string): Promise<void> {
     await this.notificationModel
       .updateMany(
