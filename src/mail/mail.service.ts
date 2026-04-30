@@ -1003,5 +1003,95 @@ export class MailService {
       this.logger.error(`Failed to send certificate email to ${toEmail}`, error.stack);
     }
   }
-}
 
+  async sendOrderCancelledAdminNotification(order: any, user: any) {
+    const currency = (order.currency || 'USD').toUpperCase();
+    
+    const mailOptions = {
+      from: `"SkyGloss Portal" <portal@skygloss.com>`,
+      to: 'sales@skygloss.com',
+      subject: `ORDER CANCELLED: ${order.orderNumber} - ${user.firstName} ${user.lastName}`,
+      html: `
+        <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
+            <tr>
+              <td align="center">
+                <table width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="margin:20px 0; border-radius:8px; overflow:hidden; border: 1px solid #e0e0e0;">
+                  <tr><td align="center" bgcolor="#dc2626" style="padding:20px; color:#ffffff; font-size:24px; font-weight:bold;">Order Cancelled & Refunded</td></tr>
+                  <tr>
+                    <td style="padding:30px; color:#333333; font-size:14px; line-height:1.6;">
+                      <h2 style="color:#dc2626; margin-bottom: 5px;">Order ${order.orderNumber} has been cancelled</h2>
+                      <p style="margin-top: 0; color: #666;">Date: ${new Date().toLocaleString()}</p>
+                      
+                      <table width="100%" cellpadding="10" cellspacing="0" style="background:#fef2f2; border-left:4px solid #dc2626; margin:20px 0;">
+                        <tr>
+                          <td>
+                            <strong>Customer Details:</strong><br>
+                            Name: ${user.firstName} ${user.lastName}<br>
+                            Email: ${user.email}<br>
+                            Order Number: ${order.orderNumber}<br>
+                            Currency: ${currency}
+                          </td>
+                        </tr>
+                      </table>
+                      <p style="margin-top: 30px; color: #666;">This order has been cancelled and its amount has been refunded to the user.</p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+      `,
+    };
+
+    try {
+      await this.salesTransporter.sendMail(mailOptions);
+      this.logger.log(`Order cancellation notification sent to sales@skygloss.com for ${order.orderNumber}`);
+    } catch (error) {
+      this.logger.error(`Failed to send order cancellation notification`, error.stack);
+    }
+  }
+
+  async sendOrderCancelledCustomerNotification(order: any, user: any) {
+    const currency = (order.currency || 'USD').toUpperCase();
+    
+    const mailOptions = {
+      from: `"SkyGloss Portal" <sales@skygloss.com>`,
+      to: user.email,
+      subject: `Order Cancelled & Refunded: ${order.orderNumber}`,
+      html: `
+        <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
+            <tr>
+              <td align="center">
+                <table width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="margin:20px 0; border-radius:8px; overflow:hidden; border: 1px solid #e0e0e0;">
+                  <tr><td align="center" bgcolor="#dc2626" style="padding:20px; color:#ffffff; font-size:24px; font-weight:bold;">Order Cancelled</td></tr>
+                  <tr>
+                    <td style="padding:30px; color:#333333; font-size:14px; line-height:1.6;">
+                      <h2 style="color:#272727; margin-bottom: 5px;">Hi ${user.firstName},</h2>
+                      <p style="margin-top: 0; color: #666;">Your order (<strong>${order.orderNumber}</strong>) has been cancelled.</p>
+                      
+                      <p>The total amount for this order has been automatically refunded to your original payment method. Please allow a few business days for the funds to appear in your account.</p>
+
+                      <p style="margin-top: 30px; text-align: center; color: #999; font-size: 12px;">
+                        If you have any questions, please contact our support team.
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+      `,
+    };
+
+    try {
+      await this.transporter.sendMail(mailOptions);
+      this.logger.log(`Order cancellation notification sent to ${user.email} for ${order.orderNumber}`);
+    } catch (error) {
+      this.logger.error(`Failed to send order cancellation notification to customer`, error.stack);
+    }
+  }
+}

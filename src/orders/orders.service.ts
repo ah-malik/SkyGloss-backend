@@ -676,13 +676,48 @@ export class OrdersService {
   }
 
   async updateStatus(id: string, status: OrderStatus): Promise<Order> {
-    const order = await this.orderModel.findByIdAndUpdate(
-      id,
-      { status },
-      { new: true },
-    );
+    const order = await this.orderModel.findById(id).populate('user');
     if (!order) throw new NotFoundException('Order not found');
-    return order;
+
+    const oldStatus = order.status;
+    order.status = status;
+
+    if (status === OrderStatus.CANCELLED && oldStatus !== OrderStatus.CANCELLED) {
+      if (oldStatus === OrderStatus.PAID && order.stripeSessionId) {
+        try {
+          const userCountry = ((order.user as any)?.country || '').toLowerCase().trim();
+          const isUsaUser = ['united states', 'usa', 'us', 'united states of america'].includes(userCountry);
+          const stripeInstance = isUsaUser && this.usaStripe ? this.usaStripe : this.stripe;
+
+          if (stripeInstance) {
+            const session = await stripeInstance.checkout.sessions.retrieve(order.stripeSessionId);
+            if (session.payment_intent) {
+              await stripeInstance.refunds.create({
+                payment_intent: session.payment_intent as string,
+              });
+              console.log(`[Order Cancelled] Refund issued for order ${order.orderNumber}`);
+            } else {
+              console.warn(`[Order Cancelled] No payment_intent found for session ${order.stripeSessionId}`);
+            }
+          }
+        } catch (error) {
+          console.error(`[Order Cancelled] Refund failed for order ${order.orderNumber}:`, error);
+        }
+      }
+
+      // Send cancellation emails
+      if (order.user) {
+        await this.mailService.sendOrderCancelledCustomerNotification(order, order.user).catch(err => {
+          console.error('Failed to send order cancelled email to customer', err);
+        });
+        await this.mailService.sendOrderCancelledAdminNotification(order, order.user).catch(err => {
+          console.error('Failed to send order cancelled email to admin', err);
+        });
+      }
+    }
+
+    const updatedOrder = await order.save();
+    return updatedOrder;
   }
 
   async createOrderRequest(userId: string, createOrderDto: CreateOrderDto) {
