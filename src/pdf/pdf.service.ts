@@ -24,18 +24,18 @@ export class PdfService {
       const bgUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1777377593/ikbhkmhdwj6t0rsghffz.jpg';
       const bg = await axios.get(bgUrl, { responseType: 'arraybuffer' });
 
-      doc.image(Buffer.from(bg.data), 0, 75, {
+      doc.image(Buffer.from(bg.data), 0, 40, {
         width: doc.page.width,
         height: doc.page.height,
       });
 
-      // ✅ Small Signature (LEFT)
-      // const signUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1777378204/f8kav3aspmdyxpu7qtmo.jpg';
-      // const sign = await axios.get(signUrl, { responseType: 'arraybuffer' });
+      // ✅ Small Signature(LEFT)
+      const signUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1777691931/e8a8bblrwxgpnhbb0djo.jpg';
+      const sign = await axios.get(signUrl, { responseType: 'arraybuffer' });
 
-      // doc.image(Buffer.from(sign.data), 10, 250, {
-      //   width: 520,
-      // });
+      doc.image(Buffer.from(sign.data), 65, 70, {
+        width: 200,
+      });
 
       // ✅ TEXT (perfect positioning)
 
@@ -51,7 +51,7 @@ export class PdfService {
         .text('SKYGLOSS CERTIFIED', 0, 65, { align: 'center' });
 
       // Left block
-      doc.fontSize(12).text('Jonas Svirtautas', 80, 100);
+      // doc.fontSize(12).text('Jonas Svirtautas', 80, 100);
       doc.moveTo(80, 120).lineTo(280, 120).stroke();
       doc.text('Skygloss Inc.', 80, 130);
 
