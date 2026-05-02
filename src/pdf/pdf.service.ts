@@ -24,7 +24,7 @@ export class PdfService {
       const bgUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1777377593/ikbhkmhdwj6t0rsghffz.jpg';
       const bg = await axios.get(bgUrl, { responseType: 'arraybuffer' });
 
-      doc.image(Buffer.from(bg.data), 0, 0, {
+      doc.image(Buffer.from(bg.data), 0, 75, {
         width: doc.page.width,
         height: doc.page.height,
       });

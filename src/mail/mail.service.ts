@@ -60,7 +60,7 @@ export class MailService {
     const resetLink = `https://portal.skygloss.com/reset-password?token=${token}`;
 
     const mailOptions = {
-      from: `"SkyGloss Support" <${this.configService.get<string>('MAIL_USER')}>`,
+      from: '"SkyGloss Support" <sales@skygloss.com>',
       to,
       subject: 'Password Reset Request',
       html: `
@@ -82,7 +82,7 @@ export class MailService {
     };
 
     try {
-      await this.transporter.sendMail(mailOptions);
+      await this.salesTransporter.sendMail(mailOptions);
       this.logger.log(`Password reset email sent to ${to}`);
     } catch (error) {
       this.logger.error(
