@@ -16,6 +16,7 @@ import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
 import { UserRole, UserStatus } from '../users/entities/user.entity';
 import { ProductGroup, ProductGroupDocument } from '../product-groups/entities/product-group.entity';
+import { RegistrationFeesService } from '../registration-fees/registration-fees.service';
 
 @Injectable()
 export class OrdersService {
@@ -30,6 +31,7 @@ export class OrdersService {
     private notificationsGateway: NotificationsGateway,
     private usersService: UsersService,
     private mailService: MailService,
+    private registrationFeesService: RegistrationFeesService,
   ) {
     const stripeSecretKey = this.configService.get<string>('STRIPE_SECRET_KEY');
     const usaStripeSecretKey = this.configService.get<string>('USA_STRIPE_SECRET_KEY');
@@ -102,22 +104,10 @@ export class OrdersService {
     let currency = 'usd';
     let unit_amount = 25000; // Default $250.00 USD
 
-    const europeanCountries = [
-      'austria', 'belgium', 'bulgaria', 'croatia', 'cyprus', 'czech republic', 'denmark',
-      'estonia', 'finland', 'france', 'germany', 'greece', 'hungary', 'ireland', 'italy',
-      'latvia', 'lithuania', 'luxembourg', 'malta', 'netherlands', 'poland', 'portugal',
-      'romania', 'slovakia', 'slovenia', 'spain', 'sweden', 'united kingdom',
-      'switzerland', 'norway', 'iceland', 'liechtenstein', 'monaco', 'san marino', 'andorra'
-    ];
-
-    const normalizedCountry = country.toLowerCase().trim();
-
-    if (normalizedCountry === 'australia' || normalizedCountry === 'new zealand') {
-      currency = 'aud';
-      unit_amount = 198000; // 1,980.00 AUD (1800 base + 180 tax)
-    } else if (europeanCountries.includes(normalizedCountry)) {
-      currency = 'eur';
-      unit_amount = 25000; // 250.00 EUR
+    const feeGroup = await this.registrationFeesService.findByCountry(country);
+    if (feeGroup) {
+      currency = feeGroup.currency.toLowerCase();
+      unit_amount = Math.round(feeGroup.feeAmount * 100);
     }
 
     try {

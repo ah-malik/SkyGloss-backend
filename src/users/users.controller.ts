@@ -104,6 +104,8 @@ export class UsersController {
       'tiktok',
       'linkedin',
       'password',
+      'hasSeenWelcomePopup',
+      'profileImage',
     ];
 
     const updatePayload: any = {};
@@ -116,8 +118,21 @@ export class UsersController {
     return this.usersService.update(user._id.toString(), updatePayload, user);
   }
 
+  @Post('me/profile-image')
+  @UseInterceptors(FileInterceptor('image'))
+  async uploadProfileImage(
+    @GetUser() user: UserDocument,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) {
+      throw new BadRequestException('Please provide an image file.');
+    }
+    const result = await this.cloudinaryService.uploadFile(file);
+    return this.usersService.updateProfileImage(user._id.toString(), result.secure_url);
+  }
+
   @Patch(':id')
-  @Roles(UserRole.ADMIN, UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER)
+  @Roles(UserRole.ADMIN, UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER, UserRole.CERTIFIED_SHOP)
   update(
     @Param('id') id: string,
     @Body() updateUserDto: UpdateUserDto,

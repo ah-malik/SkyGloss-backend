@@ -10,6 +10,7 @@ import {
 import { GoogleCertificationService } from './google-certification.service';
 import { MailModule } from '../mail/mail.module';
 import { PdfModule } from '../pdf/pdf.module';
+import { UsersModule } from '../users/users.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { PdfModule } from '../pdf/pdf.module';
     ]),
     MailModule,
     PdfModule,
+    UsersModule,
   ],
   controllers: [CertificationsController],
   providers: [CertificationsService, GoogleCertificationService],

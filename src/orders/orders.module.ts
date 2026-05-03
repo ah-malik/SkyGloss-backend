@@ -7,6 +7,7 @@ import { ConfigModule } from '@nestjs/config';
 import { UsersModule } from '../users/users.module';
 import { MailModule } from '../mail/mail.module';
 import { ProductGroup, ProductGroupSchema } from '../product-groups/entities/product-group.entity';
+import { RegistrationFeesModule } from '../registration-fees/registration-fees.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { ProductGroup, ProductGroupSchema } from '../product-groups/entities/pro
     ConfigModule,
     UsersModule,
     MailModule,
+    RegistrationFeesModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService],

@@ -173,7 +173,7 @@ export class UsersService implements OnModuleInit {
   }
 
   async findAll(): Promise<UserDocument[]> {
-    return this.userModel.find().populate('productGroup').exec();
+    return this.userModel.find().populate('productGroup').populate('blockedBy', 'firstName lastName role').exec();
   }
 
   async findOne(id: string): Promise<UserDocument | null> {
@@ -231,6 +231,34 @@ export class UsersService implements OnModuleInit {
 
     const updatePayload: any = { ...updateUserDto };
 
+    // Handle Blocking/Unblocking Logic and Overrides
+    if (updatePayload.status) {
+      if (updatePayload.status === UserStatus.BLOCKED) {
+        updatePayload.blockedBy = currentUser._id;
+      } else if (updatePayload.status === UserStatus.ACTIVE) {
+        const targetUser = await this.userModel.findById(id);
+        if (targetUser && targetUser.status === UserStatus.BLOCKED) {
+           // If Admin is unblocking, it overrides anything
+           if (currentUser.role === UserRole.ADMIN) {
+             updatePayload.blockedBy = null;
+             updatePayload.blockedReason = 'Unblocked by Admin';
+           } else {
+             // If Partner is unblocking, check if they were the one who blocked it
+             // Actually, the request says Partner should be able to block/unblock their own shops
+             // but Admin can override. 
+             // If Admin blocked it, maybe Partner shouldn't be able to unblock?
+             if (targetUser.blockedBy && targetUser.blockedBy.toString() !== currentUser._id.toString()) {
+                const blocker = await this.userModel.findById(targetUser.blockedBy);
+                if (blocker && (blocker.role as any) === UserRole.ADMIN && (currentUser.role as any) !== UserRole.ADMIN) {
+                  throw new ForbiddenException('This user was blocked by an Admin and cannot be unblocked by a Partner.');
+                }
+             }
+             updatePayload.blockedBy = null;
+           }
+        }
+      }
+    }
+
     // partnerCode cleanup to avoid duplicate key errors on empty strings (sparse index only allows one "")
     if (updatePayload.partnerCode) {
       updatePayload.partnerCode = updatePayload.partnerCode.toString().trim();
@@ -251,6 +279,11 @@ export class UsersService implements OnModuleInit {
     }
     if (updatePayload.referredByPartnerCode === '') {
       updatePayload.referredByPartnerCode = null;
+    }
+
+    // Auto-enable map visibility when a shop is certified
+    if (updatePayload.isCertified === true) {
+      updatePayload.isVisibleOnMap = true;
     }
 
     // Explicitly sync isPartnerPaid to its DB name isDistributorPaid to ensure persistence during raw updates
@@ -360,6 +393,15 @@ export class UsersService implements OnModuleInit {
         { certificationVideoUrl: videoUrl },
         { new: true },
       )
+      .exec();
+  }
+
+  async updateProfileImage(
+    userId: string,
+    imageUrl: string,
+  ): Promise<UserDocument | null> {
+    return this.userModel
+      .findByIdAndUpdate(userId, { profileImage: imageUrl }, { new: true })
       .exec();
   }
 

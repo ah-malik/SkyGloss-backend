@@ -47,6 +47,20 @@ export class CertificationsController {
     return this.certificationsService.getAllRequests();
   }
 
+  @Get('admin/summary')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  getCertificationStatusSummary() {
+    return this.certificationsService.getCertificationStatusSummary();
+  }
+
+  @Post('admin/email-summary')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  emailCertificationStatusSummary(@Body('email') email: string) {
+    return this.certificationsService.emailCertificationStatusSummary(email);
+  }
+
   @Patch('admin/:id/status')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)

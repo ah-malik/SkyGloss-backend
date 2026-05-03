@@ -142,4 +142,12 @@ export class CreateUserDto {
   @IsBoolean()
   @IsOptional()
   isCertified?: boolean;
+
+  @IsBoolean()
+  @IsOptional()
+  hasSeenWelcomePopup?: boolean;
+
+  @IsString()
+  @IsOptional()
+  profileImage?: string;
 }

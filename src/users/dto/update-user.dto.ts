@@ -10,4 +10,12 @@ export class UpdateUserDto extends PartialType(CreateUserDto) {
   @IsString()
   @IsOptional()
   stripeSessionId?: string;
+
+  @IsString()
+  @IsOptional()
+  blockedBy?: string;
+
+  @IsString()
+  @IsOptional()
+  blockedReason?: string;
 }

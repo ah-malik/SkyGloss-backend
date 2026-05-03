@@ -22,6 +22,10 @@ import { MailService } from '../mail/mail.service';
 import { PdfService } from '../pdf/pdf.service';
 import { NotificationType } from '../notifications/entities/notification.entity';
 
+import { User, UserDocument, UserRole } from '../users/entities/user.entity';
+
+import * as XLSX from 'xlsx';
+
 @Injectable()
 export class CertificationsService {
   private stripe: Stripe;
@@ -30,6 +34,8 @@ export class CertificationsService {
   constructor(
     @InjectModel(Certification.name)
     private certificationModel: Model<CertificationDocument>,
+    @InjectModel(User.name)
+    private userModel: Model<UserDocument>,
     private configService: ConfigService,
     private googleCertificationService: GoogleCertificationService,
     private notificationsService: NotificationsService,
@@ -321,5 +327,95 @@ export class CertificationsService {
     }
 
     return cert;
+  }
+
+  async getCertificationStatusSummary() {
+    const shops = await this.userModel.find({ 
+      $or: [
+        { role: UserRole.CERTIFIED_SHOP },
+        { isCertified: true },
+        { isTrainingComplete: true },
+        { shopName: { $exists: true, $ne: '' } }
+      ]
+    });
+    const requests = await this.certificationModel.find().sort({ createdAt: -1 });
+
+    const summary = await Promise.all(shops.map(async (shop) => {
+      // Find partner details
+      const partner = await this.userModel.findOne({ partnerCode: shop.referredByPartnerCode });
+
+      // Find relevant certification request
+      // Match by email if available, otherwise check if shopName matches (less reliable)
+      const shopRequest = requests.find(r => 
+        (shop.email && (r as any).shopEmail?.toLowerCase() === shop.email?.toLowerCase()) || 
+        (shop.shopName && (r as any).shopName?.toLowerCase() === shop.shopName?.toLowerCase()) ||
+        (shop.companyName && (r as any).shopName?.toLowerCase() === shop.companyName?.toLowerCase()) ||
+        (shop.firstName && shop.lastName && (r as any).firstName?.toLowerCase() === shop.firstName?.toLowerCase() && (r as any).lastName?.toLowerCase() === shop.lastName?.toLowerCase())
+      );
+
+      let status = 'Training in Progress';
+      if (shop.isCertified) {
+        status = 'Approved';
+      } else if (shopRequest) {
+        if (shopRequest.requestStatus === RequestStatus.APPROVED) {
+          status = 'Approved';
+        } else if (shopRequest.paymentStatus === PaymentStatus.PAID) {
+          status = 'Applied';
+        } else if (shop.isTrainingComplete) {
+          status = 'Course Complete (Not Applied)';
+        }
+      } else if (shop.isTrainingComplete) {
+        status = 'Course Complete (Not Applied)';
+      }
+
+      return {
+        userId: shop._id.toString(),
+        shopName: shop.shopName || shop.companyName || 'N/A',
+        firstName: shop.firstName,
+        lastName: shop.lastName,
+        email: shop.email,
+        country: shop.country,
+        city: shop.city,
+        partnerName: partner ? `${partner.firstName} ${partner.lastName}` : 'N/A',
+        partnerEmail: partner?.email || 'N/A',
+        partnerCode: shop.referredByPartnerCode || 'N/A',
+        isTrainingComplete: shop.isTrainingComplete,
+        isCertified: shop.isCertified,
+        status,
+        appliedDate: (shopRequest as any)?.createdAt,
+      };
+    }));
+
+    return summary;
+  }
+
+  async emailCertificationStatusSummary(email: string) {
+    const summary = await this.getCertificationStatusSummary();
+    
+    // Prepare data for Excel
+    const data = summary.map(item => ({
+      'Shop Name': item.shopName,
+      'First Name': item.firstName,
+      'Last Name': item.lastName,
+      'Email': item.email,
+      'Country': item.country,
+      'City': item.city,
+      'Partner': item.partnerName,
+      'Partner Code': item.partnerCode,
+      'Training Complete': item.isTrainingComplete ? 'Yes' : 'No',
+      'Certified': item.isCertified ? 'Yes' : 'No',
+      'Status': item.status,
+      'Applied Date': item.appliedDate ? new Date(item.appliedDate).toLocaleDateString() : 'N/A'
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(data);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Certification Summary');
+    
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    
+    await this.mailService.sendCertificationSummaryEmail(email, buffer);
+
+    return { success: true, message: `Report sent to ${email}` };
   }
 }

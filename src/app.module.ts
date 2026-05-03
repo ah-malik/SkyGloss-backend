@@ -17,6 +17,7 @@ import { ChatModule } from './chat/chat.module';
 import { ProductGroupsModule } from './product-groups/product-groups.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PdfModule } from './pdf/pdf.module';
+import { RegistrationFeesModule } from './registration-fees/registration-fees.module';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { PdfModule } from './pdf/pdf.module';
     ProductGroupsModule,
     NotificationsModule,
     PdfModule,
+    RegistrationFeesModule,
   ],
   controllers: [AppController],
   providers: [AppService, SeedService],

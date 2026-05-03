@@ -83,7 +83,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     );
 
     // Broadcast message to all clients in the room (e.g. if they have the chat open)
-    this.server.to(data.roomId).emit('new_message', savedMessage);
+    this.server.to(data.roomId.toString()).emit('new_message', savedMessage);
 
     // Notify admin panel about new message, ONLY if sender is user
     if (data.senderType === 'user') {
@@ -92,13 +92,13 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           type: NotificationType.CHAT_MESSAGE,
           title: 'New Chat Message',
           message: `New message from ${data.senderName}: ${data.message.substring(0, 50)}${data.message.length > 50 ? '...' : ''}`,
-          metadata: { roomId: data.roomId, senderName: data.senderName },
-          link: `/live-chat?roomId=${data.roomId}`,
+          metadata: { roomId: data.roomId.toString(), senderName: data.senderName },
+          link: `/live-chat?roomId=${data.roomId.toString()}`,
           triggeredBy: (await this.chatService.getRoomById(data.roomId))?.userId?.toString(),
         });
 
       this.server.emit('message_notification', {
-        roomId: data.roomId,
+        roomId: data.roomId.toString(),
         message: data.message,
         senderName: data.senderName,
       });
@@ -120,8 +120,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
                 type: NotificationType.CHAT_MESSAGE,
                 title: 'New message from Shop',
                 message: `Shop "${data.senderName}" sent a message.`,
-                metadata: { roomId: data.roomId, senderName: data.senderName },
-                link: `/dashboard/partner/chat`,
+                metadata: { roomId: data.roomId.toString(), senderName: data.senderName },
+                link: `/live-chat?roomId=${data.roomId.toString()}`,
                 triggeredBy: room.userId.toString(),
               });
               this.notificationsGateway.broadcastNotification(partnerNotif);
@@ -140,20 +140,20 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         const userId = room.userId.toString();
 
         // Notify the specific user via their personal room (for toast/global alert)
-        this.server.to(userId).emit('new_admin_message', {
-          roomId: data.roomId,
+        this.server.to(userId.toString()).emit('new_admin_message', {
+          roomId: data.roomId.toString(),
           message: data.message,
           senderName: data.senderName,
         });
 
         // Create database notification for the user
         await this.notificationsService.create({
-          user: userId,
+          user: userId.toString(),
           type: NotificationType.CHAT_MESSAGE,
           title: 'New message from Partner',
           message: data.message.substring(0, 50) + (data.message.length > 50 ? '...' : ''),
-          metadata: { roomId: data.roomId, senderName: data.senderName },
-          link: '/support', // Assuming chat is located here for users
+          metadata: { roomId: data.roomId.toString(), senderName: data.senderName },
+          link: `/live-chat?roomId=${data.roomId.toString()}`,
           triggeredBy: 'admin', // Or some specific admin ID if available
         });
       }

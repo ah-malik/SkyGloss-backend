@@ -142,6 +142,18 @@ export class User {
 
   @Prop()
   linkedin?: string;
+
+  @Prop({ default: false })
+  hasSeenWelcomePopup: boolean;
+
+  @Prop()
+  profileImage?: string;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
+  blockedBy?: MongooseSchema.Types.ObjectId;
+
+  @Prop()
+  blockedReason?: string;
 }
 
 

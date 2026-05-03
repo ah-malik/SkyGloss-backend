@@ -40,6 +40,9 @@ export class AuthService {
     const user = await this.usersService.findByUsernameOrEmail(identifier);
     console.log(`[Auth] User found: ${!!user}`);
     if (user && user.password && (await bcrypt.compare(pass, user.password))) {
+      if (user.status === UserStatus.BLOCKED) {
+        throw new UnauthorizedException('Your account has been blocked. Please contact your partner or support.');
+      }
       const { password, ...result } = user.toObject();
       return result;
     }
@@ -82,6 +85,7 @@ export class AuthService {
         productGroup: user.productGroup,
         isPartnerPaid: user.isPartnerPaid,
         partnerCode: user.partnerCode,
+        hasSeenWelcomePopup: user.hasSeenWelcomePopup,
       },
     };
   }
@@ -114,6 +118,10 @@ export class AuthService {
             );
           }
 
+          if (user.status === UserStatus.BLOCKED) {
+            throw new UnauthorizedException('Your account has been blocked. Please contact your partner or support.');
+          }
+
           // Return login for existing user
           const payload = { sub: user._id.toString(), role: user.role };
           return {
@@ -126,6 +134,7 @@ export class AuthService {
               lastName: user.lastName,
               productGroup: user.productGroup,
               partnerCode: user.partnerCode,
+              hasSeenWelcomePopup: user.hasSeenWelcomePopup,
             },
           };
         }
@@ -153,6 +162,7 @@ export class AuthService {
           country: user.country,
           productGroup: user.productGroup,
           partnerCode: user.partnerCode,
+          hasSeenWelcomePopup: user.hasSeenWelcomePopup,
         },
       };
     } catch (err: any) {
@@ -235,6 +245,7 @@ export class AuthService {
         role: user.role,
         status: user.status,
         partnerCode: user.partnerCode,
+        hasSeenWelcomePopup: user.hasSeenWelcomePopup,
       }
     };
   }
@@ -373,6 +384,7 @@ export class AuthService {
             email: user.email,
             role: user.role,
             status: user.status,
+            hasSeenWelcomePopup: user.hasSeenWelcomePopup,
           }
         };
       }
@@ -384,7 +396,8 @@ export class AuthService {
           email: user.email,
           role: user.role,
           status: user.status,
-          isPaid: true
+          isPaid: true,
+          hasSeenWelcomePopup: user.hasSeenWelcomePopup,
         }
       };
     } catch (err: any) {

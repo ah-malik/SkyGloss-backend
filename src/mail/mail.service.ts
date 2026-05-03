@@ -1094,4 +1094,37 @@ export class MailService {
       this.logger.error(`Failed to send order cancellation notification to customer`, error.stack);
     }
   }
+
+  async sendCertificationSummaryEmail(to: string, excelBuffer: Buffer) {
+    const mailOptions = {
+      from: '"SkyGloss Admin" <certified@skygloss.com>',
+      to,
+      subject: 'Shop Certification Status Report',
+      text: 'Please find the attached shop certification status report.',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #0EA0DC;">Certification Status Report</h2>
+          <p>Hello,</p>
+          <p>The requested shop certification status report has been generated and is attached to this email as an Excel file.</p>
+          <p>This report includes details on shop training progress, partner references, and current certification application statuses.</p>
+          <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+          <p style="font-size: 12px; color: #999;">SkyGloss Admin System</p>
+        </div>
+      `,
+      attachments: [
+        {
+          filename: `SkyGloss_Certification_Report_${new Date().toISOString().split('T')[0]}.xlsx`,
+          content: excelBuffer,
+        },
+      ],
+    };
+
+    try {
+      await this.certifiedTransporter.sendMail(mailOptions);
+      this.logger.log(`Certification summary email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send certification summary email to ${to}`, error.stack);
+      throw error;
+    }
+  }
 }
