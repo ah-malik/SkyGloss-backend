@@ -636,11 +636,14 @@ export class MailService {
     const currencySymbols: { [key: string]: string } = {
       USD: '$',
       AUD: '$',
+      CAD: '$',
       EUR: '€',
       GBP: '£',
+      INR: '₹',
+      AED: 'AED ',
     };
     const currency = (order.currency || 'USD').toUpperCase();
-    const symbol = currencySymbols[currency] || '$';
+    const symbol = currencySymbols[currency] || (currency + ' ');
 
     const mailOptions = {
       from: `"SkyGloss Portal" <portal@skygloss.com>`,
@@ -712,11 +715,14 @@ export class MailService {
     const currencySymbols: { [key: string]: string } = {
       USD: '$',
       AUD: '$',
+      CAD: '$',
       EUR: '€',
       GBP: '£',
+      INR: '₹',
+      AED: 'AED ',
     };
     const currency = (order.currency || 'USD').toUpperCase();
-    const symbol = currencySymbols[currency] || '$';
+    const symbol = currencySymbols[currency] || (currency + ' ');
 
     const mailOptions = {
       from: `"SkyGloss Portal" <portal@skygloss.com>`,
@@ -789,11 +795,14 @@ export class MailService {
     const currencySymbols: { [key: string]: string } = {
       USD: '$',
       AUD: '$',
+      CAD: '$',
       EUR: '€',
       GBP: '£',
+      INR: '₹',
+      AED: 'AED ',
     };
     const currency = (order.currency || 'USD').toUpperCase();
-    const symbol = currencySymbols[currency] || '$';
+    const symbol = currencySymbols[currency] || (currency + ' ');
 
     const mailOptions = {
       from: `"SkyGloss Portal" <sales@skygloss.com>`,
@@ -855,11 +864,14 @@ export class MailService {
     const currencySymbols: { [key: string]: string } = {
       USD: '$',
       AUD: '$',
+      CAD: '$',
       EUR: '€',
       GBP: '£',
+      INR: '₹',
+      AED: 'AED ',
     };
     const currency = (order.currency || 'USD').toUpperCase();
-    const symbol = currencySymbols[currency] || '$';
+    const symbol = currencySymbols[currency] || (currency + ' ');
 
     const mailOptions = {
       from: `"SkyGloss Portal" <sales@skygloss.com>`,

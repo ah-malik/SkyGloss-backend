@@ -118,13 +118,31 @@ export class PdfService {
       doc.lineWidth(1).moveTo(50, doc.y).lineTo(550, doc.y).stroke();
       doc.moveDown(0.5);
 
+      const getCurrencySymbol = (currency?: string) => {
+        const symbols: Record<string, string> = {
+          'USD': '$',
+          'EUR': '€',
+          'GBP': '£',
+          'AUD': '$',
+          'CAD': '$',
+          'INR': '₹',
+          'AED': 'AED '
+        };
+        const key = currency?.toUpperCase();
+        return (key && symbols[key]) || (currency ? (currency + ' ') : '??? ');
+      };
+
+      console.log(`[PdfService] Generating PDF for order ${order.orderNumber}. Currency in object: ${order.currency}`);
+      const currencySymbol = getCurrencySymbol(order.currency);
+      console.log(`[PdfService] Resolved symbol: ${currencySymbol}`);
+
       doc.font('Helvetica');
       order.items.forEach((item) => {
         const currentY = doc.y;
         doc.text(item.name, 50, currentY, { width: 250 });
         doc.text(item.size, 300, currentY, { width: 100 });
         doc.text(item.quantity.toString(), 400, currentY, { width: 50 });
-        doc.text(`$${item.price.toFixed(2)}`, 450, currentY, { width: 100 });
+        doc.text(`${currencySymbol}${item.price.toFixed(2)}`, 450, currentY, { width: 100 });
         doc.moveDown();
       });
 
@@ -132,7 +150,7 @@ export class PdfService {
       doc.lineWidth(1).moveTo(50, doc.y).lineTo(550, doc.y).stroke();
       doc.moveDown();
 
-      doc.fontSize(16).font('Helvetica-Bold').text(`Total Amount: $${order.totalAmount.toFixed(2)}`, { align: 'right' });
+      doc.fontSize(16).font('Helvetica-Bold').text(`Total Amount: ${currencySymbol}${order.totalAmount.toFixed(2)}`, { align: 'right' });
 
       doc.end();
     });

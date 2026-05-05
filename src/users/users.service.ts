@@ -221,7 +221,10 @@ export class UsersService implements OnModuleInit {
       const isSelfUpdate = currentUser._id.toString() === targetUser._id.toString();
 
       // Check if this is a shop referred by the current partner OR a self-update
-      if (!isSelfUpdate && targetUser.referredByPartnerCode !== currentUser.partnerCode) {
+      const isGlobalPartner = currentUser.partnerCode === 'GLOBAL77';
+      const isReferredShop = targetUser.referredByPartnerCode === currentUser.partnerCode;
+
+      if (!isSelfUpdate && !isGlobalPartner && !isReferredShop) {
         throw new ForbiddenException('You do not have permission to update this user');
       }
 

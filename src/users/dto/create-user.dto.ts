@@ -145,6 +145,10 @@ export class CreateUserDto {
 
   @IsBoolean()
   @IsOptional()
+  isVisibleOnMap?: boolean;
+
+  @IsBoolean()
+  @IsOptional()
   hasSeenWelcomePopup?: boolean;
 
   @IsString()
