@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsString,
   MinLength,
+  MaxLength,
   IsBoolean,
 } from 'class-validator';
 import { UserRole, UserStatus } from '../entities/user.entity';
@@ -54,6 +55,7 @@ export class CreateUserDto {
 
   @IsString()
   @IsOptional()
+  @MaxLength(30)
   shopName?: string;
 
   @IsString()

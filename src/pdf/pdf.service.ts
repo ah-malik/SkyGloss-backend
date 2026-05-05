@@ -20,50 +20,112 @@ export class PdfService {
       doc.on('data', (chunk) => chunks.push(chunk));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
 
-      // ✅ Background
-      const bgUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1777377593/ikbhkmhdwj6t0rsghffz.jpg';
-      const bg = await axios.get(bgUrl, { responseType: 'arraybuffer' });
+      const pageWidth = doc.page.width;   // 842
+      const pageHeight = doc.page.height; // 595
 
-      doc.image(Buffer.from(bg.data), 0, 40, {
-        width: doc.page.width,
-        height: doc.page.height,
+      // ── SECTION 1: Blue Header Banner Image ──
+      const headerUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1777952451/u0a7gcyy9mpis8e0opwz.png';
+      const headerImg = await axios.get(headerUrl, { responseType: 'arraybuffer' });
+      const headerHeight = 320;
+      doc.image(Buffer.from(headerImg.data), 0, 0, {
+        width: pageWidth,
+        height: headerHeight,
       });
 
-      // ✅ Small Signature(LEFT)
-      const signUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1777691931/e8a8bblrwxgpnhbb0djo.jpg';
-      const sign = await axios.get(signUrl, { responseType: 'arraybuffer' });
+      // ── SECTION 2: White Content Area ──
+      const contentY = headerHeight + 110;
+      const leftMargin = 60;
+      const midX = pageWidth * 0.52;
+      const rightX = pageWidth * 0.78;
 
-      doc.image(Buffer.from(sign.data), 65, 70, {
-        width: 200,
+      // "MASTER DISTRIBUTOR" label
+      doc.fontSize(11)
+        .fillColor('#222222')
+        .font('Helvetica-Bold')
+        .text('MASTER DISTRIBUTOR', leftMargin, contentY);
+
+      // ── Signature Image (center area) ──
+      const signUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1777952544/wtxf8shuj7ouv3tj6fnv.png';
+      const signImg = await axios.get(signUrl, { responseType: 'arraybuffer' });
+      const signWidth = 150;
+      const signY = contentY - 30;
+      doc.image(Buffer.from(signImg.data), midX, signY, {
+        width: signWidth,
       });
 
-      // ✅ TEXT (perfect positioning)
+      // Line under signature
+      const signLineY = signY + 50;
+      doc.lineWidth(0.5)
+        .strokeColor('#333333')
+        .moveTo(midX, signLineY)
+        .lineTo(midX + signWidth + 10, signLineY)
+        .stroke();
 
-      // Main Title
-      doc.fontSize(42)
-        .fillColor('#111')
-        .text(user.shopName || 'Car Care Melbourne', 0, 20, {
-          align: 'center',
+      // "Skygloss Inc." label under signature
+      doc.fontSize(9)
+        .fillColor('#555555')
+        .font('Helvetica')
+        .text('Skygloss Inc.', midX, signLineY + 5);
+
+      // ── Date (right side) ──
+      const months = ['January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'];
+      const now = new Date();
+      const day = now.getDate();
+      const suffix = day === 1 || day === 21 || day === 31 ? 'st' : day === 2 || day === 22 ? 'nd' : day === 3 || day === 23 ? 'rd' : 'th';
+      const dateStr = `${day}${suffix} ${months[now.getMonth()]} ${now.getFullYear()}`;
+
+      doc.fontSize(11)
+        .fillColor('#222222')
+        .font('Helvetica-Bold')
+        .text(dateStr, rightX, contentY);
+
+      // Line under date
+      const dateLine = contentY + 20;
+      doc.lineWidth(0.5)
+        .strokeColor('#333333')
+        .moveTo(rightX, dateLine)
+        .lineTo(rightX + 130, dateLine)
+        .stroke();
+
+      // "Date" label
+      doc.fontSize(9)
+        .fillColor('#555555')
+        .font('Helvetica')
+        .text('Date', rightX, dateLine + 5);
+
+      // ── Store Name (large, left side) ──
+      const storeName = user.shopName || user.companyName || `${user.firstName} ${user.lastName}`;
+      const storeNameY = contentY + 55;
+      doc.fontSize(36)
+        .fillColor('#111111')
+        .font('Helvetica-Bold')
+        .text(storeName, leftMargin, storeNameY, {
+          width: pageWidth * 0.45,
         });
 
-      // Subtitle
-      doc.fontSize(16)
-        .text('SKYGLOSS CERTIFIED', 0, 65, { align: 'center' });
+      // ── Territory (right side, aligned with store name) ──
+      const territoryY = storeNameY + 15;
+      doc.fontSize(10)
+        .fillColor('#555555')
+        .font('Helvetica')
+        .text('Territory:', midX, territoryY);
 
-      // Left block
-      // doc.fontSize(12).text('Jonas Svirtautas', 80, 100);
-      doc.moveTo(80, 120).lineTo(280, 120).stroke();
-      doc.text('Skygloss Inc.', 80, 130);
+      // Territory line
+      const territoryLineY = territoryY + 15;
+      doc.lineWidth(0.5)
+        .strokeColor('#333333')
+        .moveTo(midX + 55, territoryLineY)
+        .lineTo(pageWidth - 60, territoryLineY)
+        .stroke();
 
-      doc.text('12831154', 80, 165);
-      doc.moveTo(80, 195).lineTo(200, 195).stroke();
-      doc.text('Certification No', 80, 205);
-
-      // Date (right)
-      const date = new Date().toLocaleDateString();
-      doc.text(date, 225, 165);
-      doc.moveTo(225, 195).lineTo(300, 195).stroke();
-      doc.text('Date', 225, 205);
+      // Territory value (country)
+      if (user.country) {
+        doc.fontSize(10)
+          .fillColor('#222222')
+          .font('Helvetica')
+          .text(user.country, midX + 60, territoryY);
+      }
 
       doc.end();
     });
