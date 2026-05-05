@@ -183,7 +183,7 @@ export class UsersController {
     }
 
     const COURSE_STEPS = {
-      WELCOME_TO_SKYGLOSS: 18,
+      WELCOME_TO_SKYGLOSS: 16,
       UNDERSTANDING_SKYGLOSS: 9,
       SKYGLOSS_SHOP_SETUP: 4,
       FUSION: 20,
@@ -247,7 +247,7 @@ export class UsersController {
 
     // Verify all courses are actually completed before finalizing
     const COURSE_STEPS = {
-      WELCOME_TO_SKYGLOSS: 18,
+      WELCOME_TO_SKYGLOSS: 16,
       UNDERSTANDING_SKYGLOSS: 9,
       SKYGLOSS_SHOP_SETUP: 4,
       FUSION: 20,
