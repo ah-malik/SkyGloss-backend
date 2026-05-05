@@ -330,13 +330,9 @@ export class CertificationsService {
   }
 
   async getCertificationStatusSummary() {
+    // Only query certified_shop users
     const shops = await this.userModel.find({ 
-      $or: [
-        { role: UserRole.CERTIFIED_SHOP },
-        { isCertified: true },
-        { isTrainingComplete: true },
-        { shopName: { $exists: true, $ne: '' } }
-      ]
+      role: UserRole.CERTIFIED_SHOP
     });
     const requests = await this.certificationModel.find().sort({ createdAt: -1 });
 
@@ -345,7 +341,6 @@ export class CertificationsService {
       const partner = await this.userModel.findOne({ partnerCode: shop.referredByPartnerCode });
 
       // Find relevant certification request
-      // Match by email if available, otherwise check if shopName matches (less reliable)
       const shopRequest = requests.find(r => 
         (shop.email && (r as any).shopEmail?.toLowerCase() === shop.email?.toLowerCase()) || 
         (shop.shopName && (r as any).shopName?.toLowerCase() === shop.shopName?.toLowerCase()) ||
@@ -353,13 +348,12 @@ export class CertificationsService {
         (shop.firstName && shop.lastName && (r as any).firstName?.toLowerCase() === shop.firstName?.toLowerCase() && (r as any).lastName?.toLowerCase() === shop.lastName?.toLowerCase())
       );
 
+      // Only isCertified === true on the user record counts as Approved
       let status = 'Training in Progress';
-      if (shop.isCertified) {
+      if (shop.isCertified === true) {
         status = 'Approved';
       } else if (shopRequest) {
-        if (shopRequest.requestStatus === RequestStatus.APPROVED) {
-          status = 'Approved';
-        } else if (shopRequest.paymentStatus === PaymentStatus.PAID) {
+        if (shopRequest.paymentStatus === PaymentStatus.PAID) {
           status = 'Applied';
         } else if (shop.isTrainingComplete) {
           status = 'Course Complete (Not Applied)';
