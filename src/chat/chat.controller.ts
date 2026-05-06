@@ -3,7 +3,7 @@ import { ChatService } from './chat.service';
 
 @Controller('chat')
 export class ChatController {
-  constructor(private readonly chatService: ChatService) {}
+  constructor(private readonly chatService: ChatService) { }
 
   @Post('room')
   async createRoom(

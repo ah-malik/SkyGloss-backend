@@ -13,7 +13,7 @@ export class ChatService {
     @InjectModel(ChatRoom.name) private chatRoomModel: Model<ChatRoomDocument>,
     @InjectModel(ChatMessage.name)
     private chatMessageModel: Model<ChatMessageDocument>,
-  ) {}
+  ) { }
 
   async createOrGetRoom(userData: {
     userId?: string;
