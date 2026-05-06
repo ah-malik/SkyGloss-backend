@@ -2,6 +2,7 @@ import { forwardRef, Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
+import { PublicUsersController } from './public-users.controller';
 import { User, UserSchema } from './entities/user.entity';
 
 import { CloudinaryModule } from '../cloudinary/cloudinary.module';
@@ -17,7 +18,7 @@ import { MailModule } from 'src/mail/mail.module';
     forwardRef(() => ChatModule),
     MailModule,
   ],
-  controllers: [UsersController],
+  controllers: [UsersController, PublicUsersController],
   providers: [UsersService],
   exports: [UsersService, MongooseModule],
 })
