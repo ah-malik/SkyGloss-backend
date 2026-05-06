@@ -104,7 +104,7 @@ export class NotificationsService {
       { new: true },
     );
     if (!notification) {
-      throw new NotFoundException('Notification not found');
+      throw new NotFoundException('Notification not found.');
     }
     return notification;
   }

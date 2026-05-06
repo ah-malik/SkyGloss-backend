@@ -15,21 +15,19 @@ export class PublicUsersController {
       latitude: { $ne: null },
       longitude: { $ne: null },
       $or: [
-        // Active & certified shops OR shops manually marked as visible
+        // Approved Shops: Must be ACTIVE and CERTIFIED
         {
           role: UserRole.CERTIFIED_SHOP,
           status: 'active',
-          $or: [
-            { isCertified: true },
-            { isVisibleOnMap: true },
-          ],
+          isCertified: true,
         },
-        // Active Partners
+        // Approved Partners: Must be ACTIVE
         {
           role: { $in: [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER] },
           status: 'active',
         },
       ],
+
 
     }).select(
       'firstName lastName shopName companyName country city address latitude longitude role ' +
