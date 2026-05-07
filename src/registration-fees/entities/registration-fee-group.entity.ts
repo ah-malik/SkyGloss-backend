@@ -14,6 +14,9 @@ export class RegistrationFeeGroup {
   @Prop({ required: true, default: 250 })
   feeAmount: number;
 
+  @Prop({ required: false, default: 0 })
+  taxAmount: number;
+
   @Prop({ required: true, default: 'USD' })
   currency: string;
 

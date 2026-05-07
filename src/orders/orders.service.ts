@@ -103,31 +103,48 @@ export class OrdersService {
     // PRICING LOGIC
     let currency = 'usd';
     let unit_amount = 25000; // Default $250.00 USD
+    let tax_amount = 0;
 
     const feeGroup = await this.registrationFeesService.findByCountry(country);
     if (feeGroup) {
       currency = feeGroup.currency.toLowerCase();
       unit_amount = Math.round(feeGroup.feeAmount * 100);
+      tax_amount = Math.round((feeGroup.taxAmount || 0) * 100);
+    }
+
+    const line_items: Stripe.Checkout.SessionCreateParams.LineItem[] = [
+      {
+        price_data: {
+          currency,
+          product_data: {
+            name: type === 'shop_registration' ? 'Shop Registration Fee' : 'Partner Registration Fee',
+            description: type === 'shop_registration'
+              ? 'One-time fee to activate your SkyGloss Shop account.'
+              : 'One-time fee to activate your SkyGloss partner account.',
+          },
+          unit_amount,
+        },
+        quantity: 1,
+      },
+    ];
+
+    if (tax_amount > 0) {
+      line_items.push({
+        price_data: {
+          currency,
+          product_data: {
+            name: 'Tax',
+          },
+          unit_amount: tax_amount,
+        },
+        quantity: 1,
+      });
     }
 
     try {
       const session = await this.stripe.checkout.sessions.create({
         payment_method_types: ['card'],
-        line_items: [
-          {
-            price_data: {
-              currency,
-              product_data: {
-                name: type === 'shop_registration' ? 'Shop Registration Fee' : 'Partner Registration Fee',
-                description: type === 'shop_registration'
-                  ? 'One-time fee to activate your SkyGloss Shop account.'
-                  : 'One-time fee to activate your SkyGloss partner account.',
-              },
-              unit_amount,
-            },
-            quantity: 1,
-          },
-        ],
+        line_items,
         mode: 'payment',
         success_url: `${baseUrl}${success_path}&user_id=${userId}`,
         cancel_url: `${baseUrl}${cancel_path}&user_id=${userId}`,

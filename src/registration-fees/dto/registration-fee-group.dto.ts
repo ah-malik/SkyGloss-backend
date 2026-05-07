@@ -11,6 +11,10 @@ export class CreateRegistrationFeeGroupDto {
   @IsNumber()
   feeAmount: number;
 
+  @IsNumber()
+  @IsOptional()
+  taxAmount?: number;
+
   @IsString()
   @IsOptional()
   currency?: string;

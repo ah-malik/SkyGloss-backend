@@ -26,14 +26,14 @@ export class PdfService {
       // ── SECTION 1: Blue Header Banner Image ──
       const headerUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1777952451/u0a7gcyy9mpis8e0opwz.png';
       const headerImg = await axios.get(headerUrl, { responseType: 'arraybuffer' });
-      const headerHeight = 320;
+      const headerHeight = 280;
       doc.image(Buffer.from(headerImg.data), 0, 0, {
         width: pageWidth,
         height: headerHeight,
       });
 
       // ── SECTION 2: White Content Area ──
-      const contentY = headerHeight + 110;
+      const contentY = headerHeight + 30;
       const leftMargin = 60;
       const midX = pageWidth * 0.52;
       const rightX = pageWidth * 0.78;
@@ -48,7 +48,7 @@ export class PdfService {
       const signUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1777952544/wtxf8shuj7ouv3tj6fnv.png';
       const signImg = await axios.get(signUrl, { responseType: 'arraybuffer' });
       const signWidth = 150;
-      const signY = contentY - 30;
+      const signY = contentY - 15;
       doc.image(Buffer.from(signImg.data), midX, signY, {
         width: signWidth,
       });
@@ -204,7 +204,7 @@ export class PdfService {
         doc.text(item.name, 50, currentY, { width: 250 });
         doc.text(item.size, 300, currentY, { width: 100 });
         doc.text(item.quantity.toString(), 400, currentY, { width: 50 });
-        doc.text(`${currencySymbol}${item.price.toFixed(2)}`, 450, currentY, { width: 100 });
+        doc.text(`${currencySymbol} ${item.price.toFixed(2)}`, 450, currentY, { width: 100 });
         doc.moveDown();
       });
 
