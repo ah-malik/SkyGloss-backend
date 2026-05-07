@@ -50,8 +50,15 @@ export class ProductsService {
           .exec();
       } 
       // Priority 2: Dynamic matching by country (only if no explicit group)
-      else if (user.role === UserRole.CERTIFIED_SHOP) {
-        console.log(`[ProductsService] Resolving dynamic group for shop user by country: ${user.country}`);
+      else if (
+        [
+          UserRole.CERTIFIED_SHOP,
+          UserRole.MASTER_PARTNER,
+          UserRole.REGIONAL_PARTNER,
+          UserRole.PARTNER,
+        ].includes(user.role)
+      ) {
+        console.log(`[ProductsService] Resolving dynamic group for ${user.role} user by country: ${user.country}`);
         if (user.country) {
           groupToUse = await this.productGroupModel
             .findOne({ 
@@ -130,7 +137,14 @@ export class ProductsService {
           .findById(user.productGroup)
           .populate('products.productId')
           .exec();
-      } else if (user.role === UserRole.CERTIFIED_SHOP) {
+      } else if (
+        [
+          UserRole.CERTIFIED_SHOP,
+          UserRole.MASTER_PARTNER,
+          UserRole.REGIONAL_PARTNER,
+          UserRole.PARTNER,
+        ].includes(user.role)
+      ) {
         if (user.country) {
           groupToUse = await this.productGroupModel
             .findOne({ 

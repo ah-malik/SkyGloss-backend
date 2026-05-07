@@ -82,11 +82,18 @@ export class ProductGroupsService {
           return;
         }
 
-        // 2. Dynamic matching for shop users
-        if (user.role === UserRole.CERTIFIED_SHOP) {
+        // 2. Dynamic matching for shops and partners
+        if (
+          [
+            UserRole.CERTIFIED_SHOP,
+            UserRole.MASTER_PARTNER,
+            UserRole.REGIONAL_PARTNER,
+            UserRole.PARTNER,
+          ].includes(user.role)
+        ) {
           // Does the user match any of the countries in this group?
           const userInThisGroup = groupCountries.includes(user.country);
-          
+
           if (userInThisGroup) {
             count++;
           }
@@ -104,8 +111,10 @@ export class ProductGroupsService {
 
       return {
         ...group,
+        products: group.products.filter(item => item.productId !== null),
         userCount: count,
       };
+
     });
 
     return groupsWithCounts;
@@ -121,6 +130,14 @@ export class ProductGroupsService {
     if (!group) {
       throw new NotFoundException(`Product Group with ID ${id} not found`);
     }
+
+    // Filter out items where the product has been deleted (productId is null)
+    const filteredProducts = group.products.filter(item => item.productId !== null);
+    if (filteredProducts.length !== group.products.length) {
+      console.log(`[ProductGroupsService] Filtered out ${group.products.length - filteredProducts.length} deleted products from group ${group.name}`);
+      group.products = filteredProducts;
+    }
+
     return group;
   }
 
