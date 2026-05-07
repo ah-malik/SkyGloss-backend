@@ -759,11 +759,11 @@ export class MailService {
                       <table width="100%" cellpadding="5" cellspacing="0" style="margin-top: 20px; border-top: 2px solid #0ea0dc; padding-top: 10px;">
                         <tr>
                           <td align="right" style="color: #666;">Subtotal:</td>
-                          <td align="right" width="100" style="font-weight: bold;">${symbol}${subtotal.toFixed(2)}</td>
+                          <td align="right" width="100" style="font-weight: bold;">${symbol} ${subtotal.toFixed(2)}</td>
                         </tr>
                         <tr>
                           <td align="right" style="font-size: 18px; color: #272727; font-weight: bold;">Estimated Total:</td>
-                          <td align="right" style="font-size: 18px; color: #0ea0dc; font-weight: bold;">${symbol}${order.totalAmount.toFixed(2)} <span style="font-size:12px; color:#666;">${currency}</span></td>
+                          <td align="right" style="font-size: 18px; color: #0ea0dc; font-weight: bold;">${symbol} ${order.totalAmount.toFixed(2)} <span style="font-size:12px; color:#666;">${currency}</span></td>
                         </tr>
                       </table>
 
