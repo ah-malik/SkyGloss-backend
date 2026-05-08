@@ -49,6 +49,12 @@ export class Product {
   @Prop()
   technicalSheetUrl?: string;
 
+  @Prop()
+  sdsUrl?: string;
+
+  @Prop()
+  applicationGuideUrl?: string;
+
   @Prop({ default: 'published', enum: ['published', 'draft'] })
   status: string;
 

@@ -86,6 +86,14 @@ export class CreateProductDto {
 
   @IsString()
   @IsOptional()
+  sdsUrl?: string;
+
+  @IsString()
+  @IsOptional()
+  applicationGuideUrl?: string;
+
+  @IsString()
+  @IsOptional()
   @IsEnum(['published', 'draft'])
   status?: string;
 
