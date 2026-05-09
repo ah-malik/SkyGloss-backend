@@ -90,6 +90,10 @@ export class CreateProductDto {
 
   @IsString()
   @IsOptional()
+  sdsUrlDutch?: string;
+
+  @IsString()
+  @IsOptional()
   applicationGuideUrl?: string;
 
   @IsString()

@@ -53,6 +53,9 @@ export class Product {
   sdsUrl?: string;
 
   @Prop()
+  sdsUrlDutch?: string;
+
+  @Prop()
   applicationGuideUrl?: string;
 
   @Prop({ default: 'published', enum: ['published', 'draft'] })
