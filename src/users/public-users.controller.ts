@@ -30,7 +30,7 @@ export class PublicUsersController {
 
 
     }).select(
-      'firstName lastName shopName companyName country city address latitude longitude role phoneNumber ' +
+      'firstName lastName shopName companyName country city address latitude longitude role phoneNumber email ' +
       'facebook instagram linkedin youtube tiktok website'
     ).lean();
 
@@ -44,6 +44,7 @@ export class PublicUsersController {
       role: user.role,
       address: user.address || '',
       phoneNumber: user.phoneNumber || '',
+      email: user.email || '',
       socials: {
         facebook: user.facebook,
         instagram: user.instagram,
