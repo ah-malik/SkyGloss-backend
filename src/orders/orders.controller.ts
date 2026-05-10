@@ -7,6 +7,7 @@ import {
   Param,
   Req,
   BadRequestException,
+  Delete,
 } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
@@ -98,8 +99,19 @@ export class OrdersController {
   @Post('admin/:id/status')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
-  updateStatus(@Param('id') id: string, @Body('status') status: any) {
-    return this.ordersService.updateStatus(id, status);
+  updateStatus(
+    @Param('id') id: string, 
+    @Body('status') status: any,
+    @Body('trackingId') trackingId?: string
+  ) {
+    return this.ordersService.updateStatus(id, status, trackingId);
+  }
+
+  @Delete('admin/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  deleteOrder(@Param('id') id: string) {
+    return this.ordersService.deleteOrder(id);
   }
 
   @Get('admin/stats')

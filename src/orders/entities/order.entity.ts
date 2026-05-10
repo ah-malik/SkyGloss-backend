@@ -96,6 +96,9 @@ export class Order {
 
   @Prop()
   stripeSessionId: string;
+
+  @Prop()
+  trackingId: string;
 }
 
 export const OrderSchema = SchemaFactory.createForClass(Order);
