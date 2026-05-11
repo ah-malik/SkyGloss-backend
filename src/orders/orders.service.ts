@@ -731,15 +731,46 @@ export class OrdersService {
     return updatedOrder;
   }
 
-  async createOrderRequest(userId: string, createOrderDto: CreateOrderDto) {
-    const currentUser = await this.usersService.findOne(userId);
-    const orderCurrency = await this.getCurrencyForUser(currentUser);
+  // async createOrderRequest(userId: string, createOrderDto: CreateOrderDto) {
+  //   const currentUser = await this.usersService.findOne(userId);
+  //   const orderCurrency = await this.getCurrencyForUser(currentUser);
 
-    const { items, shippingAddress } = createOrderDto;
-    const totalAmount = items.reduce(
-      (sum, item) => sum + item.price * item.quantity,
-      0,
-    );
+  //   const { items, shippingAddress } = createOrderDto;
+  //   const totalAmount = items.reduce(
+  //     (sum, item) => sum + item.price * item.quantity,
+  //     0,
+  //   );
+
+  async createOrderRequest(
+  userId: string,
+  createOrderDto: CreateOrderDto,
+) {
+  const currentUser = await this.usersService.findOne(userId);
+
+  if (!currentUser) {
+    throw new NotFoundException('User not found');
+  }
+
+  const { items, shippingAddress } = createOrderDto;
+
+  if (!items || !Array.isArray(items) || items.length === 0) {
+    throw new BadRequestException('Items are required');
+  }
+
+  const orderCurrency = await this.getCurrencyForUser(currentUser);
+
+  const totalAmount = items.reduce((sum, item) => {
+    const price = Number(item.price || 0);
+    const quantity = Number(item.quantity || 0);
+
+    return sum + price * quantity;
+  }, 0);
+
+  return {
+    totalAmount,
+    orderCurrency,
+  };
+}
 
     // Shipping and tax are free
     const shippingRate = 0;
