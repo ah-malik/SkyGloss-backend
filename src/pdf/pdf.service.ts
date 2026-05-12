@@ -48,10 +48,10 @@ export class PdfService {
       doc.fontSize(11)
         .fillColor('#222222')
         .font('Helvetica-Bold')
-        .text('CERTIFICATE NUMBER:', leftMargin, contentY + 20);
+        .text('CERTIFICATE NUMBER:', leftMargin, contentY + 22);
 
       const certNo = (user as any).certificateNumber || '14943212';
-      doc.fontSize(11)
+      doc.fontSize(15)
         .fillColor('#222222')
         .font('Helvetica-Bold')
         .text(certNo.toString(), leftMargin + 135, contentY + 20);
