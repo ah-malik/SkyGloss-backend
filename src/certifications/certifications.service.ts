@@ -375,6 +375,7 @@ export class CertificationsService {
         partnerCode: shop.referredByPartnerCode || 'N/A',
         isTrainingComplete: shop.isTrainingComplete,
         isCertified: shop.isCertified,
+        certificateNumber: shop.certificateNumber || 'N/A',
         status,
         appliedDate: (shopRequest as any)?.createdAt,
       };
@@ -398,6 +399,7 @@ export class CertificationsService {
       'Partner Code': item.partnerCode,
       'Training Complete': item.isTrainingComplete ? 'Yes' : 'No',
       'Certified': item.isCertified ? 'Yes' : 'No',
+      'Certificate Number': item.certificateNumber,
       'Status': item.status,
       'Applied Date': item.appliedDate ? new Date(item.appliedDate).toLocaleDateString() : 'N/A'
     }));

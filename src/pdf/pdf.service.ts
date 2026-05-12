@@ -44,8 +44,21 @@ export class PdfService {
         .font('Helvetica-Bold')
         .text('MASTER DISTRIBUTOR', leftMargin, contentY);
 
+      // "CERTIFICATE NUMBER" label START
+      doc.fontSize(11)
+        .fillColor('#222222')
+        .font('Helvetica-Bold')
+        .text('CERTIFICATE NUMBER:', leftMargin, contentY + 20);
+
+      const certNo = (user as any).certificateNumber || '14943212';
+      doc.fontSize(11)
+        .fillColor('#222222')
+        .font('Helvetica-Bold')
+        .text(certNo.toString(), leftMargin + 135, contentY + 20);
+      // "CERTIFICATE NUMBER" label END
+
       // ── Signature Image (center area) ──
-      const signUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1777952544/wtxf8shuj7ouv3tj6fnv.png';
+      const signUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1778551478/bmitulyne2fueroz5fyg.png';
       const signImg = await axios.get(signUrl, { responseType: 'arraybuffer' });
       const signWidth = 150;
       const signY = contentY - 15;
@@ -78,10 +91,10 @@ export class PdfService {
       doc.fontSize(11)
         .fillColor('#222222')
         .font('Helvetica-Bold')
-        .text(dateStr, rightX, contentY);
+        .text(dateStr, rightX, contentY + 20);
 
       // Line under date
-      const dateLine = contentY + 20;
+      const dateLine = contentY + 35;
       doc.lineWidth(0.5)
         .strokeColor('#333333')
         .moveTo(rightX, dateLine)

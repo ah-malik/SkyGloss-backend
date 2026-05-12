@@ -154,6 +154,9 @@ export class User {
 
   @Prop()
   blockedReason?: string;
+
+  @Prop({ unique: true, sparse: true })
+  certificateNumber?: number;
 }
 
 

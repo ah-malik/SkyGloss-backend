@@ -287,6 +287,12 @@ export class UsersService implements OnModuleInit {
     // Auto-enable map visibility when a shop is certified
     if (updatePayload.isCertified === true) {
       updatePayload.isVisibleOnMap = true;
+      
+      // Assign certificate number if not already present
+      const targetUser = await this.userModel.findById(id);
+      if (targetUser && !targetUser.certificateNumber) {
+        updatePayload.certificateNumber = await this.getNextCertificateNumber();
+      }
     }
 
     // Explicitly sync isPartnerPaid to its DB name isDistributorPaid to ensure persistence during raw updates
@@ -498,6 +504,18 @@ export class UsersService implements OnModuleInit {
     if (!shop) throw new BadRequestException('Shop not found');
 
     return shop;
+  }
+
+  private async getNextCertificateNumber(): Promise<number> {
+    const lastUser = await this.userModel
+      .findOne({ certificateNumber: { $exists: true } })
+      .sort({ certificateNumber: -1 })
+      .exec();
+    
+    if (lastUser && lastUser.certificateNumber) {
+      return lastUser.certificateNumber + 1;
+    }
+    return 14943212; // Starting number
   }
 }
 
