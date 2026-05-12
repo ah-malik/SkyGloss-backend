@@ -336,6 +336,25 @@ export class CertificationsService {
     });
     const requests = await this.certificationModel.find().sort({ createdAt: -1 });
 
+    // Backfill certificate numbers for certified users who don't have one
+    const certifiedWithoutNumber = shops.filter(
+      (s) => s.isCertified === true && !s.certificateNumber,
+    );
+    if (certifiedWithoutNumber.length > 0) {
+      // Get the current highest certificate number
+      const lastUser = await this.userModel
+        .findOne({ certificateNumber: { $exists: true, $ne: null } })
+        .sort({ certificateNumber: -1 })
+        .exec();
+      let nextNumber = lastUser?.certificateNumber ? lastUser.certificateNumber + 1 : 14943212;
+
+      for (const shop of certifiedWithoutNumber) {
+        await this.userModel.findByIdAndUpdate(shop._id, { certificateNumber: nextNumber });
+        shop.certificateNumber = nextNumber;
+        nextNumber++;
+      }
+    }
+
     const summary = await Promise.all(shops.map(async (shop) => {
       // Find partner details
       const partner = await this.userModel.findOne({ partnerCode: shop.referredByPartnerCode });
