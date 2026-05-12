@@ -61,7 +61,7 @@ export class OrdersService {
     const userCountry = (user?.country || '').toLowerCase().trim();
     let orderCurrency = 'usd';
 
-    if (user.productGroup) {
+    if (user && user.productGroup) {
       const explicitGroup = await this.productGroupModel.findById(user.productGroup);
       if (explicitGroup && explicitGroup.currency) {
         orderCurrency = explicitGroup.currency.toLowerCase();
@@ -732,62 +732,82 @@ export class OrdersService {
   }
 
   async createOrderRequest(userId: string, createOrderDto: CreateOrderDto) {
-    const currentUser = await this.usersService.findOne(userId);
-    const orderCurrency = await this.getCurrencyForUser(currentUser);
-
-    const { items, shippingAddress } = createOrderDto;
-    const totalAmount = items.reduce(
-      (sum, item) => sum + item.price * item.quantity,
-      0,
-    );
-
-    // Shipping and tax are free
-    const shippingRate = 0;
-    const taxRate = 0;
-    const finalAmount = totalAmount;
-
-    const orderNumber = await this.generateOrderNumber('REQ-');
-    const order = new this.orderModel({
-      user: userId,
-      items,
-      totalAmount: finalAmount,
-      shippingAddress,
-      status: OrderStatus.PENDING,
-      orderNumber,
-      currency: orderCurrency.toUpperCase(),
-    });
-
-    const savedOrder = await order.save();
-
-    // Create notification for admin
-    const notification = await this.notificationsService.create({
-      type: NotificationType.ORDER_PLACED,
-      title: 'New Order Request',
-      message: `A new order request ${savedOrder.orderNumber} has been submitted.`,
-      metadata: {
-        orderId: savedOrder._id,
-        orderNumber: savedOrder.orderNumber,
-      },
-      user: userId,
-      triggeredBy: userId,
-      link: `/orders/${savedOrder._id}`,
-    });
-    this.notificationsGateway.broadcastNotification(notification);
-
-    // Send Email to sales@skygloss.com
-    const user = await this.usersService.findOne(userId);
-    if (user) {
-      await this.mailService.sendNewOrderRequestNotification(savedOrder, user).catch(err => {
-        console.error('Failed to send order request email to sales', err);
-      });
+    try {
+      const currentUser = await this.usersService.findOne(userId);
+      if (!currentUser) {
+        throw new NotFoundException('User not found');
+      }
       
-      // Send Confirmation Email to the Customer
-      await this.mailService.sendOrderRequestCustomerConfirmation(savedOrder, user).catch(err => {
-        console.error('Failed to send order request confirmation email to customer', err);
-      });
-    }
+      const orderCurrency = await this.getCurrencyForUser(currentUser);
 
-    return savedOrder;
+      const { items, shippingAddress } = createOrderDto;
+      
+      if (!items || !Array.isArray(items) || items.length === 0) {
+        throw new BadRequestException('Order items are required');
+      }
+
+      const totalAmount = items.reduce(
+        (sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0),
+        0,
+      );
+
+      // Shipping and tax are free
+      const shippingRate = 0;
+      const taxRate = 0;
+      const finalAmount = totalAmount;
+
+      const orderNumber = await this.generateOrderNumber('REQ-');
+      const order = new this.orderModel({
+        user: userId,
+        items,
+        totalAmount: finalAmount,
+        shippingAddress,
+        status: OrderStatus.PENDING,
+        orderNumber,
+        currency: (orderCurrency || 'usd').toUpperCase(),
+      });
+
+      const savedOrder = await order.save();
+
+      // Create notification for admin
+      try {
+        const notification = await this.notificationsService.create({
+          type: NotificationType.ORDER_PLACED,
+          title: 'New Order Request',
+          message: `A new order request ${savedOrder.orderNumber} has been submitted.`,
+          metadata: {
+            orderId: savedOrder._id,
+            orderNumber: savedOrder.orderNumber,
+          },
+          user: userId,
+          triggeredBy: userId,
+          link: `/orders/${savedOrder._id}`,
+        });
+        this.notificationsGateway.broadcastNotification(notification);
+      } catch (notifErr) {
+        console.error('Failed to create/broadcast notification for order request:', notifErr);
+      }
+
+      // Send Email to sales@skygloss.com
+      if (currentUser) {
+        await this.mailService.sendNewOrderRequestNotification(savedOrder, currentUser).catch(err => {
+          console.error('Failed to send order request email to sales', err);
+        });
+        
+        // Send Confirmation Email to the Customer
+        await this.mailService.sendOrderRequestCustomerConfirmation(savedOrder, currentUser).catch(err => {
+          console.error('Failed to send order request confirmation email to customer', err);
+        });
+      }
+
+      return savedOrder;
+    } catch (error) {
+      console.error('[OrdersService] createOrderRequest error:', error);
+      if (error instanceof BadRequestException || error instanceof NotFoundException) {
+        throw error;
+      }
+      throw new BadRequestException(`Failed to create order request: ${error.message}`);
+    }
   }
 
   async getDashboardStats() {
