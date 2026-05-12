@@ -756,18 +756,30 @@ export class OrdersService {
       const taxRate = 0;
       const finalAmount = totalAmount;
 
-      const orderNumber = await this.generateOrderNumber('REQ-');
-      const order = new this.orderModel({
-        user: userId,
-        items,
-        totalAmount: finalAmount,
-        shippingAddress,
-        status: OrderStatus.PENDING,
-        orderNumber,
-        currency: (orderCurrency || 'usd').toUpperCase(),
-      });
-
-      const savedOrder = await order.save();
+      let savedOrder;
+      let retries = 3;
+      while (retries > 0) {
+        try {
+          const orderNumber = await this.generateOrderNumber('REQ-');
+          const order = new this.orderModel({
+            user: userId,
+            items,
+            totalAmount: finalAmount,
+            shippingAddress,
+            status: OrderStatus.PENDING,
+            orderNumber,
+            currency: (orderCurrency || 'usd').toUpperCase(),
+          });
+          savedOrder = await order.save();
+          break;
+        } catch (saveError: any) {
+          if (saveError.code === 11000 && retries > 1) {
+            retries--;
+            continue;
+          }
+          throw saveError;
+        }
+      }
 
       // Create notification for admin
       try {
@@ -873,8 +885,22 @@ export class OrdersService {
   }
 
   private async generateOrderNumber(prefix: string): Promise<string> {
-    const count = await this.orderModel.countDocuments();
-    const baseOffset = prefix === 'REQ-' ? 254700 : 0;
-    return `${prefix}${(count + 1 + baseOffset).toString().padStart(6, '0')}`;
+    const lastOrder = await this.orderModel
+      .findOne({ orderNumber: new RegExp(`^${prefix}`) })
+      .sort({ orderNumber: -1 })
+      .exec();
+
+    let nextNumber = 1;
+    if (lastOrder && lastOrder.orderNumber) {
+      const numPart = lastOrder.orderNumber.replace(prefix, '');
+      const currentNum = parseInt(numPart, 10);
+      if (!isNaN(currentNum)) {
+        nextNumber = currentNum + 1;
+      }
+    } else if (prefix === 'REQ-') {
+      nextNumber = 254701;
+    }
+
+    return `${prefix}${nextNumber.toString().padStart(6, '0')}`;
   }
 }
