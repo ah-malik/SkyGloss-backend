@@ -17,7 +17,7 @@ export class ProductsService {
     @InjectModel(Product.name) private productModel: Model<ProductDocument>,
     @InjectModel(ProductGroup.name)
     private productGroupModel: Model<ProductGroupDocument>,
-  ) {}
+  ) { }
 
   async create(createProductDto: CreateProductDto): Promise<ProductDocument> {
     console.log(
@@ -48,7 +48,7 @@ export class ProductsService {
           .findById(user.productGroup)
           .populate('products.productId')
           .exec();
-      } 
+      }
       // Priority 2: Dynamic matching by country (only if no explicit group)
       else if (
         [
@@ -61,17 +61,17 @@ export class ProductsService {
         console.log(`[ProductsService] Resolving dynamic group for ${user.role} user by country: ${user.country}`);
         if (user.country) {
           groupToUse = await this.productGroupModel
-            .findOne({ 
+            .findOne({
               $or: [
                 { countries: user.country },
                 { country: user.country }
               ],
-              isActive: true 
+              isActive: true
             })
             .populate('products.productId')
             .exec();
         }
-        
+
         if (!groupToUse) {
           console.log(`[ProductsService] No group found for country ${user.country}, falling back to default group.`);
           groupToUse = await this.productGroupModel
@@ -147,12 +147,12 @@ export class ProductsService {
       ) {
         if (user.country) {
           groupToUse = await this.productGroupModel
-            .findOne({ 
+            .findOne({
               $or: [
                 { countries: user.country },
                 { country: user.country }
               ],
-              isActive: true 
+              isActive: true
             })
             .populate('products.productId')
             .exec();

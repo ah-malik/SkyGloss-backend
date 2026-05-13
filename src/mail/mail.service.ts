@@ -681,6 +681,11 @@ export class MailService {
                           <td align="right" style="color: #666;">Subtotal:</td>
                           <td align="right" width="100" style="font-weight: bold;">${symbol}${subtotal.toFixed(2)}</td>
                         </tr>
+                        ${Math.max(0, order.totalAmount - subtotal) > 0.01 ? `
+                        <tr>
+                          <td align="right" style="color: #666;">Shipping:</td>
+                          <td align="right" width="100" style="font-weight: bold;">${symbol}${Math.max(0, order.totalAmount - subtotal).toFixed(2)}</td>
+                        </tr>` : ''}
                         <tr>
                           <td align="right" style="font-size: 18px; color: #272727; font-weight: bold;">Total Paid:</td>
                           <td align="right" style="font-size: 18px; color: #0ea0dc; font-weight: bold;">${symbol}${order.totalAmount.toFixed(2)} <span style="font-size:12px; color:#666;">${currency}</span></td>
@@ -761,6 +766,11 @@ export class MailService {
                           <td align="right" style="color: #666;">Subtotal:</td>
                           <td align="right" width="100" style="font-weight: bold;">${symbol} ${subtotal.toFixed(2)}</td>
                         </tr>
+                        ${Math.max(0, order.totalAmount - subtotal) > 0.01 ? `
+                        <tr>
+                          <td align="right" style="color: #666;">Shipping:</td>
+                          <td align="right" width="100" style="font-weight: bold;">${symbol} ${Math.max(0, order.totalAmount - subtotal).toFixed(2)}</td>
+                        </tr>` : ''}
                         <tr>
                           <td align="right" style="font-size: 18px; color: #272727; font-weight: bold;">Estimated Total:</td>
                           <td align="right" style="font-size: 18px; color: #0ea0dc; font-weight: bold;">${symbol} ${order.totalAmount.toFixed(2)} <span style="font-size:12px; color:#666;">${currency}</span></td>
@@ -830,6 +840,11 @@ export class MailService {
                           <td align="right" style="color: #666;">Subtotal:</td>
                           <td align="right" width="100" style="font-weight: bold;">${symbol}${subtotal.toFixed(2)}</td>
                         </tr>
+                        ${Math.max(0, order.totalAmount - subtotal) > 0.01 ? `
+                        <tr>
+                          <td align="right" style="color: #666;">Shipping:</td>
+                          <td align="right" width="100" style="font-weight: bold;">${symbol}${Math.max(0, order.totalAmount - subtotal).toFixed(2)}</td>
+                        </tr>` : ''}
                         <tr>
                           <td align="right" style="font-size: 18px; color: #272727; font-weight: bold;">Estimated Total:</td>
                           <td align="right" style="font-size: 18px; color: #0ea0dc; font-weight: bold;">${symbol}${order.totalAmount.toFixed(2)} <span style="font-size:12px; color:#666;">${currency}</span></td>
@@ -899,6 +914,11 @@ export class MailService {
                           <td align="right" style="color: #666;">Subtotal:</td>
                           <td align="right" width="100" style="font-weight: bold;">${symbol}${subtotal.toFixed(2)}</td>
                         </tr>
+                        ${Math.max(0, order.totalAmount - subtotal) > 0.01 ? `
+                        <tr>
+                          <td align="right" style="color: #666;">Shipping:</td>
+                          <td align="right" width="100" style="font-weight: bold;">${symbol}${Math.max(0, order.totalAmount - subtotal).toFixed(2)}</td>
+                        </tr>` : ''}
                         <tr>
                           <td align="right" style="font-size: 18px; color: #272727; font-weight: bold;">Total Paid:</td>
                           <td align="right" style="font-size: 18px; color: #0ea0dc; font-weight: bold;">${symbol}${order.totalAmount.toFixed(2)} <span style="font-size:12px; color:#666;">${currency}</span></td>

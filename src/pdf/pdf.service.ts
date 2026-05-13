@@ -212,7 +212,10 @@ export class PdfService {
       console.log(`[PdfService] Resolved symbol: ${currencySymbol}`);
 
       doc.font('Helvetica');
+      let subtotal = 0;
       order.items.forEach((item) => {
+        const itemTotal = item.price * item.quantity;
+        subtotal += itemTotal;
         const currentY = doc.y;
         doc.text(item.name, 50, currentY, { width: 250 });
         doc.text(item.size, 300, currentY, { width: 100 });
@@ -224,6 +227,15 @@ export class PdfService {
       doc.moveDown();
       doc.lineWidth(1).moveTo(50, doc.y).lineTo(550, doc.y).stroke();
       doc.moveDown();
+
+      const shippingFee = Math.max(0, order.totalAmount - subtotal);
+      
+      if (shippingFee > 0.01) {
+        doc.fontSize(12).font('Helvetica').text(`Subtotal: ${currencySymbol}${subtotal.toFixed(2)}`, { align: 'right' });
+        doc.moveDown(0.5);
+        doc.fontSize(12).font('Helvetica').text(`Shipping: ${currencySymbol}${shippingFee.toFixed(2)}`, { align: 'right' });
+        doc.moveDown(0.5);
+      }
 
       doc.fontSize(16).font('Helvetica-Bold').text(`Total Amount: ${currencySymbol}${order.totalAmount.toFixed(2)}`, { align: 'right' });
 

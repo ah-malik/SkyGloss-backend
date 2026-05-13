@@ -17,6 +17,7 @@ import { MailService } from '../mail/mail.service';
 import { UserRole, UserStatus } from '../users/entities/user.entity';
 import { ProductGroup, ProductGroupDocument } from '../product-groups/entities/product-group.entity';
 import { RegistrationFeesService } from '../registration-fees/registration-fees.service';
+import { calculateShippingFee, getShippingRegion, SHIPPING_FEE_AMOUNT } from '../common/shipping-config';
 
 @Injectable()
 export class OrdersService {
@@ -247,9 +248,24 @@ export class OrdersService {
           };
         });
 
-      // Shipping and tax are free
-      const shippingRate = 0;
-      const taxAmount = 0;
+      // Calculate shipping fee based on user's country
+      const shippingFee = calculateShippingFee(currentUser?.country || '', totalAmount);
+      const shippingRegion = getShippingRegion((currentUser?.country || '').toLowerCase().trim());
+
+      // Add shipping line item if applicable
+      if (shippingFee > 0) {
+        line_items.push({
+          price_data: {
+            currency: orderCurrency,
+            product_data: {
+              name: 'Shipping',
+              description: `Standard shipping for orders under ${shippingRegion === 'EU' ? '€' : '$'}500`,
+            },
+            unit_amount: Math.round(shippingFee * 100),
+          },
+          quantity: 1,
+        });
+      }
 
       // Prepare metadata carefully (max 50 keys, 500 chars per value)
       const sessionMetadata = {
@@ -272,8 +288,8 @@ export class OrdersService {
       });
 
       order.stripeSessionId = session.id;
-      // Update total to include shipping/tax
-      order.totalAmount = (totalAmount * 100 + shippingRate + taxAmount) / 100;
+      // Update total to include shipping
+      order.totalAmount = totalAmount + shippingFee;
 
       await order.save();
 
@@ -751,10 +767,9 @@ export class OrdersService {
         0,
       );
 
-      // Shipping and tax are free
-      const shippingRate = 0;
-      const taxRate = 0;
-      const finalAmount = totalAmount;
+      // Calculate shipping fee based on user's country
+      const shippingFee = calculateShippingFee(currentUser?.country || '', totalAmount);
+      const finalAmount = totalAmount + shippingFee;
 
       let savedOrder;
       let retries = 3;
