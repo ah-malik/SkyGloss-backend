@@ -20,6 +20,7 @@ export class PublicUsersController {
           role: UserRole.CERTIFIED_SHOP,
           status: 'active',
           isCertified: true,
+          isVisibleOnMap: { $ne: false },
         },
         // Approved Partners: Must be ACTIVE
         {
