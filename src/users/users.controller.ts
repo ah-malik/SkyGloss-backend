@@ -77,6 +77,12 @@ export class UsersController {
     return this.usersService.findReferredShops(user.partnerCode || '');
   }
 
+  @Get('partners-list')
+  @Roles(UserRole.ADMIN, UserRole.MASTER_PARTNER)
+  async getPartnersList() {
+    return this.usersService.findAllPartners();
+  }
+
   @Get(':id')
   @Roles(UserRole.ADMIN)
   findOne(@Param('id') id: string) {
@@ -129,6 +135,40 @@ export class UsersController {
     }
     const result = await this.cloudinaryService.uploadFile(file);
     return this.usersService.updateProfileImage(user._id.toString(), result.secure_url);
+  }
+
+  @Patch('referred-shops/:id/visibility')
+  @Roles(UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER)
+  async updateReferredShopVisibility(
+    @Param('id') id: string,
+    @Body('isVisibleOnMap') isVisibleOnMap: boolean,
+    @GetUser() user: UserDocument,
+  ) {
+    const updatedUser = await this.usersService.updateShopVisibility(
+      id,
+      isVisibleOnMap,
+      user.partnerCode || '',
+    );
+    if (!updatedUser) {
+      throw new BadRequestException('Shop not found or logic error');
+    }
+    return updatedUser;
+  }
+
+  @Patch(':id/transfer-shop')
+  @Roles(UserRole.ADMIN, UserRole.MASTER_PARTNER)
+  async transferShop(
+    @Param('id') id: string,
+    @Body('partnerCode') partnerCode: string,
+    @Req() req: any
+  ) {
+    // Extra security: If it's a partner calling, it must be the Global Partner (GLOBAL77)
+    if (req.user.role === UserRole.MASTER_PARTNER &&
+      req.user.partnerCode !== 'GLOBAL77' &&
+      req.user.email !== 'certified@skygloss.com') {
+      throw new ForbiddenException('Only the Global Partner (GLOBAL77) can re-assign shops.');
+    }
+    return this.usersService.assignPartner(id, partnerCode);
   }
 
   @Patch(':id')
@@ -327,43 +367,5 @@ export class UsersController {
     return { message: 'Training completion submitted successfully.', roomId: (existingRoom as any)._id };
   }
 
-  @Patch('referred-shops/:id/visibility')
-  @Roles(UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER)
-  async updateReferredShopVisibility(
-    @Param('id') id: string,
-    @Body('isVisibleOnMap') isVisibleOnMap: boolean,
-    @GetUser() user: UserDocument,
-  ) {
-    const updatedUser = await this.usersService.updateShopVisibility(
-      id,
-      isVisibleOnMap,
-      user.partnerCode || '',
-    );
-    if (!updatedUser) {
-      throw new BadRequestException('Shop not found or logic error');
-    }
-    return updatedUser;
-  }
-  @Get('partners-list')
-  @Roles(UserRole.ADMIN, UserRole.MASTER_PARTNER) // Include master_partner for Global Partner check
-  async getPartnersList() {
-    return this.usersService.findAllPartners();
-  }
-
-  @Patch(':id/transfer-shop')
-  @Roles(UserRole.ADMIN, UserRole.MASTER_PARTNER)
-  async transferShop(
-    @Param('id') id: string,
-    @Body('partnerCode') partnerCode: string,
-    @Req() req: any
-  ) {
-    // Extra security: If it's a partner calling, it must be the Global Partner (GLOBAL77)
-    if (req.user.role === UserRole.MASTER_PARTNER &&
-      req.user.partnerCode !== 'GLOBAL77' &&
-      req.user.email !== 'certified@skygloss.com') {
-      throw new ForbiddenException('Only the Global Partner (GLOBAL77) can re-assign shops.');
-    }
-    return this.usersService.assignPartner(id, partnerCode);
-  }
 }
 

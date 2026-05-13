@@ -238,6 +238,8 @@ export class UsersService implements OnModuleInit {
     if (updatePayload.status) {
       if (updatePayload.status === UserStatus.BLOCKED) {
         updatePayload.blockedBy = currentUser._id;
+        // Always hide from map when blocked
+        updatePayload.isVisibleOnMap = false;
       } else if (updatePayload.status === UserStatus.ACTIVE) {
         const targetUser = await this.userModel.findById(id);
         if (targetUser && targetUser.status === UserStatus.BLOCKED) {
