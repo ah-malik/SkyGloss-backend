@@ -74,6 +74,10 @@ class ShippingAddressDto {
   @IsString()
   @IsNotEmpty()
   phoneNumber: string;
+
+  @IsString()
+  @IsOptional()
+  taxId?: string;
 }
 
 export class CreateOrderDto {

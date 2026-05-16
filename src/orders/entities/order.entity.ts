@@ -69,6 +69,9 @@ export class ShippingAddress {
 
   @Prop({ required: true })
   phoneNumber: string;
+
+  @Prop()
+  taxId: string;
 }
 
 @Schema({ timestamps: true })

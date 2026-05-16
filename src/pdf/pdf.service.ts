@@ -250,6 +250,7 @@ export class PdfService {
       doc.text(`${order.shippingAddress.city}, ${order.shippingAddress.state} ${order.shippingAddress.zipCode}`);
       doc.text(order.shippingAddress.country);
       doc.text(`Phone: ${order.shippingAddress.phoneNumber}`);
+      if (order.shippingAddress.taxId) doc.text(`Tax ID: ${order.shippingAddress.taxId}`);
       doc.moveDown();
 
       // Items Table

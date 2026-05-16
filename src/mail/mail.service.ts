@@ -668,7 +668,8 @@ export class MailService {
                             Name: ${user.firstName} ${user.lastName}<br>
                             Email: ${user.email}<br>
                             Order Number: ${order.orderNumber}<br>
-                            Currency: ${currency}
+                            Currency: ${currency}<br>
+                            ${order.shippingAddress?.taxId ? `Tax ID: ${order.shippingAddress.taxId}` : ''}
                           </td>
                         </tr>
                       </table>
@@ -753,7 +754,8 @@ export class MailService {
                             Email: ${user.email}<br>
                             Country: ${order.shippingAddress?.country || user?.country || 'N/A'}<br>
                             Order Number: ${order.orderNumber}<br>
-                            Currency: ${currency}
+                            Currency: ${currency}<br>
+                            ${order.shippingAddress?.taxId ? `Tax ID: ${order.shippingAddress.taxId}` : ''}
                           </td>
                         </tr>
                       </table>
