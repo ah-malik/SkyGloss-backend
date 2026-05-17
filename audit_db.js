@@ -8,7 +8,7 @@ async function run() {
         await client.connect();
         const db = client.db('test');
 
-        console.log('--- Checking Used AccessCodes ---');
+        console.log('--- Checking Used AccessCodes ----');
         const usedCodes = await db.collection('accesscodes').find({ isUsed: true }).toArray();
         console.log(`Total used codes: ${usedCodes.length}`);
 
