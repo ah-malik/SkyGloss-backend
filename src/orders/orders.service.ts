@@ -201,16 +201,33 @@ export class OrdersService {
       0,
     );
 
-    const orderNumber = await this.generateOrderNumber('SG');
-    const order = new this.orderModel({
-      user: userId,
-      items,
-      totalAmount,
-      shippingAddress,
-      status: OrderStatus.PENDING,
-      orderNumber,
-      currency: orderCurrency.toUpperCase(),
-    });
+    let order: any;
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        const orderNumber = await this.generateOrderNumber('SG');
+        order = new this.orderModel({
+          user: userId,
+          items,
+          totalAmount,
+          shippingAddress,
+          status: OrderStatus.PENDING,
+          orderNumber,
+          currency: orderCurrency.toUpperCase(),
+        });
+        await order.save();
+        break;
+      } catch (saveError: any) {
+        if (saveError.code === 11000 && retries > 1) {
+          retries--;
+          continue;
+        }
+        console.error('Order save error:', saveError);
+        throw new BadRequestException(
+          `Failed to create order: ${saveError.message}`,
+        );
+      }
+    }
 
     try {
       // Determine baseUrl once
@@ -276,12 +293,15 @@ export class OrdersService {
       console.log('[Stripe Session] Creating with metadata:', JSON.stringify(sessionMetadata));
       console.log('[Stripe Session] Line items count:', line_items.length);
 
+      const isPartner = ['master_partner', 'regional_partner', 'partner'].includes(currentUser?.role || role || '');
+      const dashboardPath = isPartner ? '/dashboard/partner' : '/dashboard/shop';
+
       const session = await stripeInstance.checkout.sessions.create({
         payment_method_types: ['card'],
         line_items: line_items,
         mode: 'payment',
-        success_url: `${baseUrl}/dashboard/shop?success=true&order_id=${order._id}`,
-        cancel_url: `${baseUrl}/dashboard/shop?canceled=true`,
+        success_url: `${baseUrl}${dashboardPath}?success=true&order_id=${order._id}`,
+        cancel_url: `${baseUrl}${dashboardPath}?canceled=true`,
         client_reference_id: String(userId),
         customer_email: String(currentUser?.email || shippingAddress.email || ''),
         metadata: sessionMetadata,
@@ -894,25 +914,61 @@ export class OrdersService {
   }
 
   async deleteOrder(id: string): Promise<{ success: boolean }> {
-    const order = await this.orderModel.findByIdAndDelete(id);
+    const order = await this.orderModel.findById(id).populate('user');
     if (!order) throw new NotFoundException('Order not found');
+
+    if (order.status === OrderStatus.PAID && order.stripeSessionId) {
+      try {
+        const userCountry = ((order.user as any)?.country || '').toLowerCase().trim();
+        const isUsaUser = ['united states', 'usa', 'us', 'united states of america'].includes(userCountry);
+        const stripeInstance = isUsaUser && this.usaStripe ? this.usaStripe : this.stripe;
+
+        if (stripeInstance) {
+          const session = await stripeInstance.checkout.sessions.retrieve(order.stripeSessionId);
+          if (session.payment_intent) {
+            await stripeInstance.refunds.create({
+              payment_intent: session.payment_intent as string,
+            });
+            console.log(`[Order Deleted] Refund issued for order ${order.orderNumber}`);
+          }
+        }
+      } catch (error) {
+        console.error(`[Order Deleted] Refund failed for order ${order.orderNumber}:`, error);
+      }
+    }
+
+    if (order.user) {
+      await this.mailService.sendOrderCancelledCustomerNotification(order, order.user).catch(err => {
+        console.error('Failed to send order cancelled email to customer', err);
+      });
+      await this.mailService.sendOrderCancelledAdminNotification(order, order.user).catch(err => {
+        console.error('Failed to send order cancelled email to admin', err);
+      });
+    }
+
+    await this.orderModel.findByIdAndDelete(id);
     return { success: true };
   }
 
   private async generateOrderNumber(prefix: string): Promise<string> {
-    const lastOrder = await this.orderModel
-      .findOne({ orderNumber: new RegExp(`^${prefix}`) })
-      .sort({ orderNumber: -1 })
+    // Find ALL orders with this prefix and determine the true max number
+    const matchingOrders = await this.orderModel
+      .find({ orderNumber: new RegExp(`^${prefix}`) })
+      .select('orderNumber')
+      .lean()
       .exec();
 
-    let nextNumber = 1;
-    if (lastOrder && lastOrder.orderNumber) {
-      const numPart = lastOrder.orderNumber.replace(prefix, '');
-      const currentNum = parseInt(numPart, 10);
-      if (!isNaN(currentNum)) {
-        nextNumber = currentNum + 1;
+    let maxNum = 0;
+    for (const o of matchingOrders) {
+      const numPart = (o as any).orderNumber.replace(prefix, '');
+      const num = parseInt(numPart, 10);
+      if (!isNaN(num) && num > maxNum) {
+        maxNum = num;
       }
-    } else if (prefix === 'REQ-') {
+    }
+
+    let nextNumber = maxNum + 1;
+    if (nextNumber === 1 && prefix === 'REQ-') {
       nextNumber = 254701;
     }
 

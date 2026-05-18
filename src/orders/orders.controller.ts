@@ -24,7 +24,12 @@ export class OrdersController {
 
   @Post('checkout-session')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.CERTIFIED_SHOP)
+  @Roles(
+    UserRole.CERTIFIED_SHOP,
+    UserRole.PARTNER,
+    UserRole.REGIONAL_PARTNER,
+    UserRole.MASTER_PARTNER,
+  )
   createCheckoutSession(
     @GetUser('_id') userId: string,
     @GetUser('role') role: string,

@@ -33,6 +33,10 @@ class OrderItemDto {
   @IsString()
   @IsOptional()
   image: string;
+
+  @IsString()
+  @IsOptional()
+  currency?: string;
 }
 
 class ShippingAddressDto {
@@ -54,6 +58,10 @@ class ShippingAddressDto {
   @IsString()
   @IsNotEmpty()
   address: string;
+
+  @IsString()
+  @IsOptional()
+  address2?: string;
 
   @IsString()
   @IsNotEmpty()
