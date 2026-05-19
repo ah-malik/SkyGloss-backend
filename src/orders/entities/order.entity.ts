@@ -102,6 +102,9 @@ export class Order {
 
   @Prop()
   trackingId: string;
+
+  @Prop()
+  shippingCompany: string;
 }
 
 export const OrderSchema = SchemaFactory.createForClass(Order);

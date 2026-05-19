@@ -53,13 +53,13 @@ export class PdfService {
       // Left block
       // doc.fontSize(12).text('Jonas Svirtautas', 80, 100);
       doc.moveTo(80, 120).lineTo(280, 120).stroke();
-      doc.text('Skygloss Inc.', 80, 130);
+      doc.text('SkyGloss Inc.', 80, 130);
          // "CERTIFICATE NUMBER" label START
       doc.fontSize(11)
         .fillColor('#222222')
         .font('Helvetica-Bold')
-        .text('CERTIFICATE NUMBER:', 80, 205);
-       doc.moveTo(80, 195).lineTo(200, 195).stroke();
+        .text('CERTIFICATE', 80, 200);
+       doc.moveTo(80, 190).lineTo(200, 190).stroke();
 
       const certNo = (user as any).certificateNumber || '14943212';
       doc.fontSize(15)
@@ -74,8 +74,8 @@ export class PdfService {
       // Date (right)
       const date = new Date().toLocaleDateString();
       doc.text(date, 225, 165);
-      doc.moveTo(225, 195).lineTo(300, 195).stroke();
-      doc.text('Date', 225, 205);
+      doc.moveTo(225, 190).lineTo(300, 190).stroke();
+      doc.fontSize(11).text('DATE', 225, 200);
 
       doc.end();
     });

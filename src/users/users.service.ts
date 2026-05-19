@@ -128,6 +128,9 @@ export class UsersService implements OnModuleInit {
     ];
 
     if (partnerRoles.includes(userData.role)) {
+      // Auto-activate partners created by Admin
+      userData.status = UserStatus.ACTIVE;
+      
       if (!userData.partnerCode) {
         throw new BadRequestException('Partner Code is required for this role');
       }

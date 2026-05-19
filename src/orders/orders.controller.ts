@@ -107,9 +107,10 @@ export class OrdersController {
   updateStatus(
     @Param('id') id: string, 
     @Body('status') status: any,
-    @Body('trackingId') trackingId?: string
+    @Body('trackingId') trackingId?: string,
+    @Body('shippingCompany') shippingCompany?: string
   ) {
-    return this.ordersService.updateStatus(id, status, trackingId);
+    return this.ordersService.updateStatus(id, status, trackingId, shippingCompany);
   }
 
   @Delete('admin/:id')

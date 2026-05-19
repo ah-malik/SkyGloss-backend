@@ -719,7 +719,7 @@ export class OrdersService {
       .sort({ createdAt: -1 });
   }
 
-  async updateStatus(id: string, status: OrderStatus, trackingId?: string): Promise<Order> {
+  async updateStatus(id: string, status: OrderStatus, trackingId?: string, shippingCompany?: string): Promise<Order> {
     const order = await this.orderModel.findById(id).populate('user');
     if (!order) throw new NotFoundException('Order not found');
 
@@ -727,6 +727,9 @@ export class OrdersService {
     order.status = status;
     if (trackingId) {
       order.trackingId = trackingId;
+    }
+    if (shippingCompany) {
+      order.shippingCompany = shippingCompany;
     }
 
     if (status === OrderStatus.CANCELLED && oldStatus !== OrderStatus.CANCELLED) {
