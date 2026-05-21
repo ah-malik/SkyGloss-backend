@@ -350,15 +350,54 @@ export class OrdersService {
     // Determine which Stripe to use based on the order's user country
     const orderUser = await this.usersService.findOne(String((order as any).user));
     const userCountry = (orderUser?.country || '').toLowerCase().trim();
-    const isUsaUser = ['United States', 'usa', 'us', 'united states of america'].includes(userCountry);
+    const isUsaUser = ['united states', 'usa', 'us', 'united states of america'].includes(userCountry);
     const stripeInstance = isUsaUser && this.usaStripe ? this.usaStripe : this.stripe;
 
     const session = await stripeInstance.checkout.sessions.retrieve(
       order.stripeSessionId,
     );
     if (session.payment_status === 'paid') {
-      order.status = OrderStatus.PAID;
-      await order.save();
+      if (order.status !== OrderStatus.PAID) {
+        order.status = OrderStatus.PAID;
+        await order.save();
+
+        const populatedOrder = await this.orderModel
+          .findById(order._id)
+          .populate('user', 'firstName lastName email');
+
+        if (populatedOrder) {
+          // Send notification
+          try {
+            const notification = await this.notificationsService.create({
+              type: NotificationType.ORDER_PAID,
+              title: 'Order Paid',
+              message: `Order ${populatedOrder.orderNumber} has been paid by ${populatedOrder.user ? (populatedOrder.user as any).firstName : 'a user'}.`,
+              metadata: {
+                orderId: populatedOrder._id,
+                orderNumber: populatedOrder.orderNumber,
+              },
+              user: (populatedOrder.user as any)?._id,
+              triggeredBy: (populatedOrder.user as any)?._id,
+              link: `/orders/${populatedOrder._id}`,
+            });
+            this.notificationsGateway.broadcastNotification(notification);
+          } catch (notifErr) {
+            console.error('Failed to create/broadcast notification for verified order:', notifErr);
+          }
+
+          // Send Email to sales@skygloss.com
+          await this.mailService.sendNewOrderNotification(populatedOrder, populatedOrder.user).catch(err => {
+            console.error('Failed to send order email to sales (verifyPayment)', err);
+          });
+
+          // Send Confirmation Email to the Customer
+          await this.mailService.sendOrderPaidCustomerConfirmation(populatedOrder, populatedOrder.user).catch(err => {
+            console.error('Failed to send order paid confirmation email to customer (verifyPayment)', err);
+          });
+
+          return populatedOrder;
+        }
+      }
     } else if (session.status === 'expired' || session.status === 'open') {
       // If open but timed out or explicitly expired
       if (session.status === 'expired') {
@@ -458,6 +497,12 @@ export class OrdersService {
 
       if (!orderId) {
         console.error('[USA Stripe Webhook] No orderId found in metadata.');
+        return { received: true };
+      }
+
+      const existingOrder = await this.orderModel.findById(orderId);
+      if (existingOrder && existingOrder.status === OrderStatus.PAID) {
+        console.log(`[USA Stripe Webhook] Order ${existingOrder.orderNumber} is already PAID. Skipping duplicate notifications/emails.`);
         return { received: true };
       }
 
@@ -653,6 +698,12 @@ export class OrdersService {
 
         if (!orderId) {
           console.error('[Stripe Webhook] No orderId found in metadata for shop_order event.');
+          return { received: true };
+        }
+
+        const existingOrder = await this.orderModel.findById(orderId);
+        if (existingOrder && existingOrder.status === OrderStatus.PAID) {
+          console.log(`[Stripe Webhook] Order ${existingOrder.orderNumber} is already PAID. Skipping duplicate notifications/emails.`);
           return { received: true };
         }
 

@@ -5,12 +5,12 @@ async function checkAdminMessages() {
   try {
     await mongoose.connect(MONGO_URI);
     console.log('Connected to MongoDB');
-    
+
     const adminMessages = await mongoose.connection.collection('chatmessages').find({ senderType: 'admin' }).sort({ createdAt: -1 }).limit(5).toArray();
     console.log('Admin messages:', JSON.stringify(adminMessages, null, 2));
 
     const allTypes = await mongoose.connection.collection('chatmessages').distinct('senderType');
-    console.log('All senderTypes in DB:', allTypes);
+    console.log('All senderTypes in DBs:', allTypes);
 
     process.exit(0);
   } catch (err) {
