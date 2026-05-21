@@ -770,6 +770,17 @@ export class OrdersService {
       .sort({ createdAt: -1 });
   }
 
+  async getNetworkOrders(partnerCode: string): Promise<Order[]> {
+    const { shops } = await this.usersService.findReferredShops(partnerCode);
+    const shopIds = shops.map(shop => shop._id);
+    
+    return await this.orderModel
+      .find({ user: { $in: shopIds } } as any)
+      .populate('user', 'firstName lastName email shopName role')
+      .sort({ createdAt: -1 })
+      .exec();
+  }
+
   async updateStatus(id: string, status: OrderStatus, trackingId?: string, shippingCompany?: string): Promise<Order> {
     const order = await this.orderModel.findById(id).populate('user');
     if (!order) throw new NotFoundException('Order not found');

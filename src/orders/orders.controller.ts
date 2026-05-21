@@ -69,6 +69,22 @@ export class OrdersController {
     return this.ordersService.getMyOrders(userId);
   }
 
+  @Get('network-orders')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    UserRole.PARTNER,
+    UserRole.REGIONAL_PARTNER,
+    UserRole.MASTER_PARTNER,
+  )
+  async getNetworkOrders(@GetUser() user: any) {
+    try {
+      return await this.ordersService.getNetworkOrders(user?.partnerCode || '');
+    } catch (error) {
+      console.error('[NetworkOrders Error]:', error);
+      throw error;
+    }
+  }
+
   @Get(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -100,6 +116,8 @@ export class OrdersController {
   getAllOrders() {
     return this.ordersService.getAllOrders();
   }
+
+
 
   @Post('admin/:id/status')
   @UseGuards(JwtAuthGuard, RolesGuard)
