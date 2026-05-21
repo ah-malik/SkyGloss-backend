@@ -6,11 +6,15 @@ import { User, UserDocument, UserRole, UserStatus } from './entities/user.entity
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import axios from 'axios';
+import { ProductGroup, ProductGroupDocument } from '../product-groups/entities/product-group.entity';
 
 @Injectable()
 export class UsersService implements OnModuleInit {
   private readonly logger = new Logger(UsersService.name);
-  constructor(@InjectModel(User.name) private userModel: Model<UserDocument>) { }
+  constructor(
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(ProductGroup.name) private productGroupModel: Model<ProductGroupDocument>,
+  ) { }
 
   async onModuleInit() {
     // One-time cleanup to remove null emails that cause duplicate key errors with sparse index
@@ -167,8 +171,14 @@ export class UsersService implements OnModuleInit {
       delete userData.email;
     }
 
-    if (userData.productGroup === '') {
-      delete userData.productGroup;
+    if (!userData.productGroup || userData.productGroup === '') {
+      const defaultGroup = await this.productGroupModel.findOne({ isDefault: true }).exec();
+      if (defaultGroup) {
+        userData.productGroup = defaultGroup._id;
+        console.log(`[UsersService] Assigned default product group ${defaultGroup.name} to new user.`);
+      } else {
+        delete userData.productGroup;
+      }
     }
 
     const createdUser = new this.userModel(userData);

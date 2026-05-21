@@ -9,10 +9,14 @@ import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { ChatModule } from '../chat/chat.module';
 import { MailModule } from 'src/mail/mail.module';
+import { ProductGroup, ProductGroupSchema } from '../product-groups/entities/product-group.entity';
 
 @Module({
   imports: [
-    MongooseModule.forFeature([{ name: User.name, schema: UserSchema }]),
+    MongooseModule.forFeature([
+      { name: User.name, schema: UserSchema },
+      { name: ProductGroup.name, schema: ProductGroupSchema }
+    ]),
     CloudinaryModule,
     NotificationsModule,
     forwardRef(() => ChatModule),
