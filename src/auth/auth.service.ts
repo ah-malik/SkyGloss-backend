@@ -462,4 +462,29 @@ export class AuthService {
   async verifyRegistrationPayment(userId: string) {
     return this.ordersService.verifyRegistrationPayment(userId);
   }
+
+  async impersonate(targetUserId: string) {
+    const user = await (this.usersService as any).userModel.findById(targetUserId);
+    if (!user) {
+      throw new BadRequestException('User not found');
+    }
+    const userId = user._id.toString();
+    const payload = { email: user.email, sub: userId, role: user.role };
+    return {
+      access_token: this.jwtService.sign(payload),
+      user: {
+        _id: userId,
+        id: userId,
+        email: user.email,
+        role: user.role,
+        country: user.country,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        productGroup: user.productGroup,
+        isPartnerPaid: user.isPartnerPaid,
+        partnerCode: user.partnerCode,
+        hasSeenWelcomePopup: user.hasSeenWelcomePopup,
+      },
+    };
+  }
 }
