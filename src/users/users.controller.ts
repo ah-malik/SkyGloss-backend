@@ -225,6 +225,7 @@ export class UsersController {
     const COURSE_STEPS = {
       WELCOME_TO_SKYGLOSS: 16,
       UNDERSTANDING_SKYGLOSS: 9,
+      SOCIAL_MEDIA_COMMUNICATION: 11,
       SKYGLOSS_SHOP_SETUP: 4,
       FUSION: 20,
       RESIN_FILM: 7,
@@ -248,8 +249,8 @@ export class UsersController {
 
     completedCount = Math.max(completedCount, legacyCount);
 
-    if (completedCount < 8) {
-      throw new BadRequestException('You must complete all 8 courses before uploading a certification video.');
+    if (completedCount < 9) {
+      throw new BadRequestException('You must complete all 9 courses before uploading a certification video.');
     }
 
     // Upload to Cloudinary
@@ -289,6 +290,7 @@ export class UsersController {
     const COURSE_STEPS = {
       WELCOME_TO_SKYGLOSS: 16,
       UNDERSTANDING_SKYGLOSS: 9,
+      SOCIAL_MEDIA_COMMUNICATION: 11,
       SKYGLOSS_SHOP_SETUP: 4,
       FUSION: 20,
       RESIN_FILM: 7,
@@ -312,8 +314,8 @@ export class UsersController {
 
     completedCount = Math.max(completedCount, legacyCount);
 
-    if (completedCount < 8) {
-      throw new BadRequestException('You must complete all 8 training courses before finalizing certification.');
+    if (completedCount < 9) {
+      throw new BadRequestException('You must complete all 9 training courses before finalizing certification.');
     }
     const updatedUser = await this.usersService.update(user._id.toString(), {
       isTrainingComplete: true,
