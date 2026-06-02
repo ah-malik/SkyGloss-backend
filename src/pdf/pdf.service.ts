@@ -7,7 +7,7 @@ import axios from 'axios';
 @Injectable()
 export class PdfService {
 
- async generateCertificate(user: User): Promise<Buffer> {
+  async generateCertificate(user: User): Promise<Buffer> {
     return new Promise(async (resolve) => {
       const doc = new PDFDocument({
         size: 'A4',
@@ -37,7 +37,7 @@ export class PdfService {
       });
 
       // ✅ TEXT (perfect positioning)
-        const storeName = user.shopName || user.companyName || `${user.firstName} ${user.lastName}`;
+      const storeName = user.shopName || user.companyName || `${user.firstName} ${user.lastName}`;
 
       // Main Title
       doc.fontSize(42)
@@ -54,19 +54,19 @@ export class PdfService {
       // doc.fontSize(12).text('Jonas Svirtautas', 80, 100);
       doc.moveTo(80, 120).lineTo(280, 120).stroke();
       doc.text('SkyGloss Inc.', 80, 130);
-         // "CERTIFICATE NUMBER" label START
+      // "CERTIFICATE NUMBER" label START
       doc.fontSize(11)
         .fillColor('#222222')
         .font('Helvetica-Bold')
         .text('CERTIFICATE', 80, 200);
-       doc.moveTo(80, 190).lineTo(200, 190).stroke();
+      doc.moveTo(80, 190).lineTo(200, 190).stroke();
 
       const certNo = (user as any).certificateNumber || '14943212';
       doc.fontSize(15)
         .fillColor('#222222')
         .font('Helvetica-Bold')
         .text(certNo.toString(), 80, 165);
-//       // "CERTIFICATE NUMBER" label END
+      //       // "CERTIFICATE NUMBER" label END
       // doc.text('12831154', 80, 165);
       // doc.moveTo(80, 195).lineTo(200, 195).stroke();
       // doc.text('Certification No', 80, 205);
@@ -80,141 +80,141 @@ export class PdfService {
       doc.end();
     });
   }
-//   async generateCertificate(user: User): Promise<Buffer> {
-//     return new Promise(async (resolve) => {
-//       const doc = new PDFDocument({
-//         size: 'A4',
-//         layout: 'landscape',
-//         margin: 0,
-//       });
-// d
-//       const chunks: Buffer[] = [];
-//       doc.on('data', (chunk) => chunks.push(chunk));
-//       doc.on('end', () => resolve(Buffer.concat(chunks)));
+  //   async generateCertificate(user: User): Promise<Buffer> {
+  //     return new Promise(async (resolve) => {
+  //       const doc = new PDFDocument({
+  //         size: 'A4',
+  //         layout: 'landscape',
+  //         margin: 0,
+  //       });
+  // d
+  //       const chunks: Buffer[] = [];
+  //       doc.on('data', (chunk) => chunks.push(chunk));
+  //       doc.on('end', () => resolve(Buffer.concat(chunks)));
 
-//       const pageWidth = doc.page.width;   // 842
-//       const pageHeight = doc.page.height; // 595
+  //       const pageWidth = doc.page.width;   // 842
+  //       const pageHeight = doc.page.height; // 595
 
-//       // ── SECTION 1: Blue Header Banner Image ──
-//       const headerUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1777952451/u0a7gcyy9mpis8e0opwz.png';
-//       const headerImg = await axios.get(headerUrl, { responseType: 'arraybuffer' });
-//       const headerHeight = 280;
-//       doc.image(Buffer.from(headerImg.data), 0, 0, {
-//         width: pageWidth,
-//         height: headerHeight,
-//       });
+  //       // ── SECTION 1: Blue Header Banner Image ──
+  //       const headerUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1777952451/u0a7gcyy9mpis8e0opwz.png';
+  //       const headerImg = await axios.get(headerUrl, { responseType: 'arraybuffer' });
+  //       const headerHeight = 280;
+  //       doc.image(Buffer.from(headerImg.data), 0, 0, {
+  //         width: pageWidth,
+  //         height: headerHeight,
+  //       });
 
-//       // ── SECTION 2: White Content Area ──
-//       const contentY = headerHeight + 30;
-//       const leftMargin = 60;
-//       const midX = pageWidth * 0.52;
-//       const rightX = pageWidth * 0.78;
+  //       // ── SECTION 2: White Content Area ──
+  //       const contentY = headerHeight + 30;
+  //       const leftMargin = 60;
+  //       const midX = pageWidth * 0.52;
+  //       const rightX = pageWidth * 0.78;
 
-//       // "MASTER DISTRIBUTOR" label
-//       doc.fontSize(11)
-//         .fillColor('#222222')
-//         .font('Helvetica-Bold')
-//         .text('MASTER DISTRIBUTOR', leftMargin, contentY);
+  //       // "MASTER DISTRIBUTOR" label
+  //       doc.fontSize(11)
+  //         .fillColor('#222222')
+  //         .font('Helvetica-Bold')
+  //         .text('MASTER DISTRIBUTOR', leftMargin, contentY);
 
-//       // "CERTIFICATE NUMBER" label START
-//       doc.fontSize(11)
-//         .fillColor('#222222')
-//         .font('Helvetica-Bold')
-//         .text('CERTIFICATE NUMBER:', leftMargin, contentY + 22);
+  //       // "CERTIFICATE NUMBER" label START
+  //       doc.fontSize(11)
+  //         .fillColor('#222222')
+  //         .font('Helvetica-Bold')
+  //         .text('CERTIFICATE NUMBER:', leftMargin, contentY + 22);
 
-//       const certNo = (user as any).certificateNumber || '14943212';
-//       doc.fontSize(15)
-//         .fillColor('#222222')
-//         .font('Helvetica-Bold')
-//         .text(certNo.toString(), leftMargin + 135, contentY + 20);
-//       // "CERTIFICATE NUMBER" label END
+  //       const certNo = (user as any).certificateNumber || '14943212';
+  //       doc.fontSize(15)
+  //         .fillColor('#222222')
+  //         .font('Helvetica-Bold')
+  //         .text(certNo.toString(), leftMargin + 135, contentY + 20);
+  //       // "CERTIFICATE NUMBER" label END
 
-//       // ── Signature Image (center area) ──
-//       const signUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1778551478/bmitulyne2fueroz5fyg.png';
-//       const signImg = await axios.get(signUrl, { responseType: 'arraybuffer' });
-//       const signWidth = 150;
-//       const signY = contentY - 15;
-//       doc.image(Buffer.from(signImg.data), midX, signY, {
-//         width: signWidth,
-//       });
+  //       // ── Signature Image (center area) ──
+  //       const signUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1778551478/bmitulyne2fueroz5fyg.png';
+  //       const signImg = await axios.get(signUrl, { responseType: 'arraybuffer' });
+  //       const signWidth = 150;
+  //       const signY = contentY - 15;
+  //       doc.image(Buffer.from(signImg.data), midX, signY, {
+  //         width: signWidth,
+  //       });
 
-//       // Line under signature
-//       const signLineY = signY + 50;
-//       doc.lineWidth(0.5)
-//         .strokeColor('#333333')
-//         .moveTo(midX, signLineY)
-//         .lineTo(midX + signWidth + 10, signLineY)
-//         .stroke();
+  //       // Line under signature
+  //       const signLineY = signY + 50;
+  //       doc.lineWidth(0.5)
+  //         .strokeColor('#333333')
+  //         .moveTo(midX, signLineY)
+  //         .lineTo(midX + signWidth + 10, signLineY)
+  //         .stroke();
 
-//       // "Skygloss Inc." label under signature
-//       doc.fontSize(9)
-//         .fillColor('#555555')
-//         .font('Helvetica')
-//         .text('Skygloss Inc.', midX, signLineY + 5);
+  //       // "Skygloss Inc." label under signature
+  //       doc.fontSize(9)
+  //         .fillColor('#555555')
+  //         .font('Helvetica')
+  //         .text('Skygloss Inc.', midX, signLineY + 5);
 
-//       // ── Date (right side) ──
-//       const months = ['January', 'February', 'March', 'April', 'May', 'June',
-//         'July', 'August', 'September', 'October', 'November', 'December'];
-//       const now = new Date();
-//       const day = now.getDate();
-//       const suffix = day === 1 || day === 21 || day === 31 ? 'st' : day === 2 || day === 22 ? 'nd' : day === 3 || day === 23 ? 'rd' : 'th';
-//       const dateStr = `${day}${suffix} ${months[now.getMonth()]} ${now.getFullYear()}`;
+  //       // ── Date (right side) ──
+  //       const months = ['January', 'February', 'March', 'April', 'May', 'June',
+  //         'July', 'August', 'September', 'October', 'November', 'December'];
+  //       const now = new Date();
+  //       const day = now.getDate();
+  //       const suffix = day === 1 || day === 21 || day === 31 ? 'st' : day === 2 || day === 22 ? 'nd' : day === 3 || day === 23 ? 'rd' : 'th';
+  //       const dateStr = `${day}${suffix} ${months[now.getMonth()]} ${now.getFullYear()}`;
 
-//       doc.fontSize(11)
-//         .fillColor('#222222')
-//         .font('Helvetica-Bold')
-//         .text(dateStr, rightX, contentY + 20);
+  //       doc.fontSize(11)
+  //         .fillColor('#222222')
+  //         .font('Helvetica-Bold')
+  //         .text(dateStr, rightX, contentY + 20);
 
-//       // Line under date
-//       const dateLine = contentY + 35;
-//       doc.lineWidth(0.5)
-//         .strokeColor('#333333')
-//         .moveTo(rightX, dateLine)
-//         .lineTo(rightX + 130, dateLine)
-//         .stroke();
+  //       // Line under date
+  //       const dateLine = contentY + 35;
+  //       doc.lineWidth(0.5)
+  //         .strokeColor('#333333')
+  //         .moveTo(rightX, dateLine)
+  //         .lineTo(rightX + 130, dateLine)
+  //         .stroke();
 
-//       // "Date" label
-//       doc.fontSize(9)
-//         .fillColor('#555555')
-//         .font('Helvetica')
-//         .text('Date', rightX, dateLine + 5);
+  //       // "Date" label
+  //       doc.fontSize(9)
+  //         .fillColor('#555555')
+  //         .font('Helvetica')
+  //         .text('Date', rightX, dateLine + 5);
 
-//       // ── Store Name (large, left side) ──
-//       const storeName = user.shopName || user.companyName || `${user.firstName} ${user.lastName}`;
-//       const storeNameY = contentY + 55;
-//       doc.fontSize(36)
-//         .fillColor('#111111')
-//         .font('Helvetica-Bold')
-//         .text(storeName, leftMargin, storeNameY, {
-//           width: pageWidth * 0.45,
-//         });
+  //       // ── Store Name (large, left side) ──
+  //       const storeName = user.shopName || user.companyName || `${user.firstName} ${user.lastName}`;
+  //       const storeNameY = contentY + 55;
+  //       doc.fontSize(36)
+  //         .fillColor('#111111')
+  //         .font('Helvetica-Bold')
+  //         .text(storeName, leftMargin, storeNameY, {
+  //           width: pageWidth * 0.45,
+  //         });
 
-//       // ── Territory (right side, aligned with store name) ──
-//       const territoryY = storeNameY + 15;
-//       doc.fontSize(10)
-//         .fillColor('#555555')
-//         .font('Helvetica')
-//         .text('Territory:', midX, territoryY);
+  //       // ── Territory (right side, aligned with store name) ──
+  //       const territoryY = storeNameY + 15;
+  //       doc.fontSize(10)
+  //         .fillColor('#555555')
+  //         .font('Helvetica')
+  //         .text('Territory:', midX, territoryY);
 
-//       // Territory line
-//       const territoryLineY = territoryY + 15;
-//       doc.lineWidth(0.5)
-//         .strokeColor('#333333')
-//         .moveTo(midX + 55, territoryLineY)
-//         .lineTo(pageWidth - 60, territoryLineY)
-//         .stroke();
+  //       // Territory line
+  //       const territoryLineY = territoryY + 15;
+  //       doc.lineWidth(0.5)
+  //         .strokeColor('#333333')
+  //         .moveTo(midX + 55, territoryLineY)
+  //         .lineTo(pageWidth - 60, territoryLineY)
+  //         .stroke();
 
-//       // Territory value (country)
-//       if (user.country) {
-//         doc.fontSize(10)
-//           .fillColor('#222222')
-//           .font('Helvetica')
-//           .text(user.country, midX + 60, territoryY);
-//       }
+  //       // Territory value (country)
+  //       if (user.country) {
+  //         doc.fontSize(10)
+  //           .fillColor('#222222')
+  //           .font('Helvetica')
+  //           .text(user.country, midX + 60, territoryY);
+  //       }
 
-//       doc.end();
-//     });
-//   }
+  //       doc.end();
+  //     });
+  //   }
 
   async generateOrderDetails(order: Order): Promise<Buffer> {
     return new Promise((resolve) => {
@@ -290,7 +290,7 @@ export class PdfService {
         const itemTotal = item.price * item.quantity;
         subtotal += itemTotal;
         const currentY = doc.y;
-        doc.text(item.name, 50, currentY, { width: 250 });
+        doc.text(item.name.toUpperCase(), 50, currentY, { width: 250 });
         doc.text(item.size, 300, currentY, { width: 100 });
         doc.text(item.quantity.toString(), 400, currentY, { width: 50 });
         doc.text(`${currencySymbol} ${item.price.toFixed(2)}`, 450, currentY, { width: 100 });
@@ -302,7 +302,7 @@ export class PdfService {
       doc.moveDown();
 
       const shippingFee = Math.max(0, order.totalAmount - subtotal);
-      
+
       if (shippingFee > 0.01) {
         doc.fontSize(12).font('Helvetica').text(`Subtotal: ${currencySymbol}${subtotal.toFixed(2)}`, { align: 'right' });
         doc.moveDown(0.5);
