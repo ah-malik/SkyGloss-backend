@@ -94,8 +94,24 @@ export class OrdersController {
     UserRole.MASTER_PARTNER,
     UserRole.ADMIN,
   )
-  getOrderById(@Param('id') id: string) {
-    return this.ordersService.getOrderById(id);
+  getOrderById(@Param('id') id: string, @GetUser('_id') userId: string, @GetUser('role') role: string) {
+    return this.ordersService.getOrderById(id, userId, role);
+  }
+
+  @Post(':id/pay')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    UserRole.CERTIFIED_SHOP,
+    UserRole.PARTNER,
+    UserRole.REGIONAL_PARTNER,
+    UserRole.MASTER_PARTNER,
+  )
+  payForOrder(
+    @Param('id') id: string,
+    @GetUser('_id') userId: string,
+    @GetUser('role') role: string,
+  ) {
+    return this.ordersService.createPaymentSessionForOrder(id, userId, role);
   }
 
   @Get('verify/:orderId')

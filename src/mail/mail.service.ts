@@ -93,11 +93,11 @@ export class MailService {
     }
   }
 
-  async sendDistributorRegistrationUserConfirmation(to: string, userDetails: any) {
+  async sendDistributorRegistrationUserConfirmation(to: string, userDetails: any, invoiceBuffer?: Buffer, orderNumber?: string) {
     const loginLink = `https://portal.skygloss.com/login/distributor`;
     const recipients = [to, 'certified@skygloss.com'];
 
-    const mailOptions = {
+    const mailOptions: any = {
       from: `"SkyGloss Sales" <certified@skygloss.com>`,
       to: recipients.join(', '),
       subject: 'Welcome to SkyGloss - Registration Confirmation',
@@ -240,6 +240,12 @@ export class MailService {
     </tr>
   </table>
 </body>`,
+      attachments: invoiceBuffer ? [
+        {
+          filename: `Invoice_${orderNumber || 'Registration'}.pdf`,
+          content: invoiceBuffer,
+        }
+      ] : undefined,
     };
 
     try {
@@ -422,10 +428,10 @@ export class MailService {
     }
   }
 
-  async sendDistributorPaymentConfirmation(to: string, userDetails: any) {
+  async sendDistributorPaymentConfirmation(to: string, userDetails: any, invoiceBuffer?: Buffer, orderNumber?: string) {
     const recipients = [to, 'sales@skygloss.com'];
 
-    const mailOptions = {
+    const mailOptions: any = {
       from: `"SkyGloss Sales" <sales@skygloss.com>`,
       to: recipients.join(', '),
       subject: 'SkyGloss - Payment & Activation Confirmed',
@@ -533,7 +539,13 @@ export class MailService {
             </td>
           </tr>
         </table>
-      </body>`
+      </body>`,
+      attachments: invoiceBuffer ? [
+        {
+          filename: `Invoice_${orderNumber || 'Registration'}.pdf`,
+          content: invoiceBuffer,
+        }
+      ] : undefined,
     };
 
     try {
@@ -1087,13 +1099,103 @@ export class MailService {
     }
   }
 
-  async sendOrderCancelledCustomerNotification(order: any, user: any) {
+  async sendPendingPaymentReminder(
+    order: any,
+    user: any,
+    payUrl: string,
+    isFollowUp: boolean,
+  ) {
+    const currencySymbols: { [key: string]: string } = {
+      USD: '$',
+      AUD: '$',
+      CAD: '$',
+      EUR: '€',
+      GBP: '£',
+      INR: '₹',
+      AED: 'AED ',
+    };
     const currency = (order.currency || 'USD').toUpperCase();
-    
+    const symbol = currencySymbols[currency] || currency + ' ';
+
+    const subject = isFollowUp
+      ? `Reminder: Complete payment for order ${order.orderNumber}`
+      : `Complete your payment for order ${order.orderNumber}`;
+
+    const intro = isFollowUp
+      ? `This is a friendly reminder that your order (<strong>${order.orderNumber}</strong>) is still awaiting payment.`
+      : `Your order (<strong>${order.orderNumber}</strong>) has been created and is awaiting payment.`;
+
     const mailOptions = {
       from: `"SkyGloss Portal" <sales@skygloss.com>`,
       to: user.email,
-      subject: `Order Cancelled & Refunded: ${order.orderNumber}`,
+      subject,
+      html: `
+        <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
+            <tr>
+              <td align="center">
+                <table width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="margin:20px 0; border-radius:8px; overflow:hidden; border: 1px solid #e0e0e0;">
+                  <tr><td align="center" bgcolor="#0ea0dc" style="padding:20px; color:#ffffff; font-size:24px; font-weight:bold;">Payment Required</td></tr>
+                  <tr>
+                    <td style="padding:30px; color:#333333; font-size:14px; line-height:1.6;">
+                      <h2 style="color:#272727; margin-bottom: 5px;">Hi ${user.firstName},</h2>
+                      <p style="margin-top: 0; color: #666;">${intro}</p>
+                      <p>Please complete your payment within 3 days to avoid automatic cancellation.</p>
+
+                      <h3 style="color: #272727; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-top: 30px;">Order Summary</h3>
+                      ${this.renderOrderItems(order.items, symbol)}
+
+                      <table width="100%" cellpadding="5" cellspacing="0" style="margin-top: 20px; border-top: 2px solid #0ea0dc; padding-top: 10px;">
+                        <tr>
+                          <td align="right" style="font-size: 18px; color: #272727; font-weight: bold;">Total Due:</td>
+                          <td align="right" style="font-size: 18px; color: #0ea0dc; font-weight: bold;">${symbol}${order.totalAmount.toFixed(2)}</td>
+                        </tr>
+                      </table>
+
+                      <p style="margin-top: 30px; text-align: center;">
+                        <a href="${payUrl}" style="display:inline-block; background-color:#0ea0dc; color:#ffffff; padding:14px 28px; text-decoration:none; border-radius:8px; font-weight:bold;">Pay Now</a>
+                      </p>
+
+                      <p style="margin-top: 20px; text-align: center; color: #999; font-size: 12px;">
+                        If you have already paid, you can ignore this email.
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+      `,
+    };
+
+    try {
+      await this.salesTransporter.sendMail(mailOptions);
+      this.logger.log(
+        `Pending payment ${isFollowUp ? 'reminder' : 'notice'} sent to ${user.email} for ${order.orderNumber}`,
+      );
+    } catch (error) {
+      this.logger.error(`Failed to send pending payment reminder`, error.stack);
+    }
+  }
+
+  async sendOrderCancelledCustomerNotification(
+    order: any,
+    user: any,
+    options?: { wasPaid?: boolean; cancellationReason?: string },
+  ) {
+    const wasPaid = options?.wasPaid !== false;
+    const reason =
+      options?.cancellationReason ||
+      order.cancellationReason ||
+      'Your order was cancelled.';
+
+    const mailOptions = {
+      from: `"SkyGloss Portal" <sales@skygloss.com>`,
+      to: user.email,
+      subject: wasPaid
+        ? `Order Cancelled & Refunded: ${order.orderNumber}`
+        : `Order Cancelled: ${order.orderNumber}`,
       html: `
         <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
@@ -1106,7 +1208,13 @@ export class MailService {
                       <h2 style="color:#272727; margin-bottom: 5px;">Hi ${user.firstName},</h2>
                       <p style="margin-top: 0; color: #666;">Your order (<strong>${order.orderNumber}</strong>) has been cancelled.</p>
                       
-                      <p>The total amount for this order has been automatically refunded to your original payment method. Please allow a few business days for the funds to appear in your account.</p>
+                      <p><strong>Reason:</strong> ${reason}</p>
+
+                      ${
+                        wasPaid
+                          ? `<p>The total amount for this order has been automatically refunded to your original payment method. Please allow a few business days for the funds to appear in your account.</p>`
+                          : `<p>No payment was received for this order. You can place a new order at any time from your dashboard.</p>`
+                      }
 
                       <p style="margin-top: 30px; text-align: center; color: #999; font-size: 12px;">
                         If you have any questions, please contact our support team.

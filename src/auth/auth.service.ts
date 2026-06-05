@@ -341,7 +341,23 @@ export class AuthService {
 
       // Send Emails
       if (user.email) {
-        this.mailService.sendDistributorRegistrationUserConfirmation(user.email, user).catch(err => console.error(err));
+        let invoiceBuffer: Buffer | undefined;
+        let orderNumber: string | undefined;
+        if (isCouponBypass) {
+          try {
+            const regOrder = await this.ordersService.createRegistrationOrder(user, undefined, true);
+            invoiceBuffer = await this.ordersService.generateInvoicePdf(regOrder);
+            orderNumber = regOrder.orderNumber;
+          } catch (orderErr) {
+            console.error('[AuthService] Failed to create registration order for coupon bypass:', orderErr);
+          }
+        }
+        this.mailService.sendDistributorRegistrationUserConfirmation(
+          user.email,
+          user,
+          invoiceBuffer,
+          orderNumber,
+        ).catch(err => console.error(err));
       }
 
       try {

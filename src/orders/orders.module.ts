@@ -1,13 +1,15 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
+import { OrdersSchedulerService } from './orders-scheduler.service';
 import { Order, OrderSchema } from './entities/order.entity';
 import { ConfigModule } from '@nestjs/config';
 import { UsersModule } from '../users/users.module';
 import { MailModule } from '../mail/mail.module';
 import { ProductGroup, ProductGroupSchema } from '../product-groups/entities/product-group.entity';
 import { RegistrationFeesModule } from '../registration-fees/registration-fees.module';
+import { PdfModule } from '../pdf/pdf.module';
 
 @Module({
   imports: [
@@ -19,9 +21,10 @@ import { RegistrationFeesModule } from '../registration-fees/registration-fees.m
     UsersModule,
     MailModule,
     RegistrationFeesModule,
+    forwardRef(() => PdfModule),
   ],
   controllers: [OrdersController],
-  providers: [OrdersService],
+  providers: [OrdersService, OrdersSchedulerService],
   exports: [OrdersService],
 })
 export class OrdersModule { }

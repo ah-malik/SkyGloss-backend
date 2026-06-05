@@ -2,12 +2,19 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
+  ForbiddenException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
 import Stripe from 'stripe';
-import { Order, OrderDocument, OrderStatus } from './entities/order.entity';
+import {
+  Order,
+  OrderDocument,
+  OrderStatus,
+} from './entities/order.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
@@ -18,6 +25,15 @@ import { UserRole, UserStatus } from '../users/entities/user.entity';
 import { ProductGroup, ProductGroupDocument } from '../product-groups/entities/product-group.entity';
 import { RegistrationFeesService } from '../registration-fees/registration-fees.service';
 import { calculateShippingFee, getShippingRegion, SHIPPING_FEE_AMOUNT } from '../common/shipping-config';
+import { getItemsSubtotal } from '../common/order-totals';
+import { PdfService } from '../pdf/pdf.service';
+
+const USA_COUNTRIES = ['united states', 'usa', 'us', 'united states of america'];
+const PENDING_PAYMENT_CANCEL_DAYS = 3;
+const PAYMENT_REMINDER_INTERVALS_MS = [
+  24 * 60 * 60 * 1000,
+  48 * 60 * 60 * 1000,
+];
 
 @Injectable()
 export class OrdersService {
@@ -33,6 +49,8 @@ export class OrdersService {
     private usersService: UsersService,
     private mailService: MailService,
     private registrationFeesService: RegistrationFeesService,
+    @Inject(forwardRef(() => PdfService))
+    private pdfService: PdfService,
   ) {
     const stripeSecretKey = this.configService.get<string>('STRIPE_SECRET_KEY');
     const usaStripeSecretKey = this.configService.get<string>('USA_STRIPE_SECRET_KEY');
@@ -178,10 +196,10 @@ export class OrdersService {
     // Fetch the logged-in user's country from database
     const currentUser = await this.usersService.findOne(userId);
     const userCountry = (currentUser?.country || '').toLowerCase().trim();
-    const isUsaUser = ['united states', 'usa', 'us', 'united states of america'].includes(userCountry);
+    const isUsaUser = this.isUsaCountry(userCountry);
 
     // Route to appropriate Stripe based on user's country
-    const stripeInstance = isUsaUser && this.usaStripe ? this.usaStripe : this.stripe;
+    const stripeInstance = this.getStripeForUsaUser(isUsaUser);
 
     if (!stripeInstance) {
       throw new BadRequestException('Stripe is not configured on the server.');
@@ -196,10 +214,10 @@ export class OrdersService {
     // Calculate total amount from items
     // Note: In a real app, we should fetch product prices from DB to secure against client-side manipulation.
     // For this implementation, we'll use the prices sent from frontend but ensure strict types.
-    const totalAmount = items.reduce(
-      (sum, item) => sum + item.price * item.quantity,
-      0,
-    );
+    const itemsSubtotal = getItemsSubtotal(items);
+    const shippingCountry =
+      shippingAddress?.country || currentUser?.country || '';
+    const shippingFee = calculateShippingFee(shippingCountry, itemsSubtotal);
 
     let order: any;
     let retries = 3;
@@ -209,11 +227,13 @@ export class OrdersService {
         order = new this.orderModel({
           user: userId,
           items,
-          totalAmount,
+          totalAmount: itemsSubtotal + shippingFee,
+          shippingFee,
           shippingAddress,
-          status: OrderStatus.PENDING,
+          status: isUsaUser ? OrderStatus.PENDING_PAYMENT : OrderStatus.PENDING,
           orderNumber,
           currency: orderCurrency.toUpperCase(),
+          paymentReminderCount: 0,
         });
         await order.save();
         break;
@@ -230,88 +250,26 @@ export class OrdersService {
     }
 
     try {
-      // Determine baseUrl once
-      let baseUrl = (this.configService.get<string>('FRONTEND_URL') || '').replace(/\/+$/, '');
-      if (!baseUrl) {
-        baseUrl = process.env.NODE_ENV === 'production'
-          ? 'https://portal.skygloss.com'
-          : 'http://localhost:3000'; // Default for local
+      const session = await this.createStripeCheckoutForOrder(
+        order,
+        currentUser,
+        role,
+        stripeInstance,
+        orderCurrency,
+      );
+
+      if (isUsaUser) {
+        const payUrl = this.getOrderPayUrl(order._id.toString(), currentUser?.role || role);
+        await this.mailService
+          .sendPendingPaymentReminder(order, currentUser, payUrl, false)
+          .catch((err) =>
+            console.error('Failed to send initial pending payment email', err),
+          );
       }
 
-      // Create Stripe Line Items with aggressive sanitization
-      const line_items: Stripe.Checkout.SessionCreateParams.LineItem[] =
-        items.map((item) => {
-          // Stripe images must be publicly accessible URLs. 
-          // Base64 or local paths will cause errors.
-          const images: string[] = [];
-          if (item.image && typeof item.image === 'string' && item.image.startsWith('http')) {
-            images.push(item.image);
-          }
-
-          return {
-            price_data: {
-              currency: orderCurrency,
-              product_data: {
-                name: String(item.name || 'Product'),
-                images: images,
-                metadata: {
-                  size: String(item.size || ''),
-                  productId: String(item.product || ''),
-                },
-              },
-              unit_amount: Math.round(Number(item.price || 0) * 100), // cents
-            },
-            quantity: Math.max(1, Number(item.quantity || 1)),
-          };
-        });
-
-      // Calculate shipping fee based on user's country
-      const shippingFee = calculateShippingFee(currentUser?.country || '', totalAmount);
-      const shippingRegion = getShippingRegion((currentUser?.country || '').toLowerCase().trim());
-
-      // Add shipping line item if applicable
-      if (shippingFee > 0) {
-        line_items.push({
-          price_data: {
-            currency: orderCurrency,
-            product_data: {
-              name: 'Shipping',
-              description: `Standard shipping for orders under ${shippingRegion === 'EU' ? '€' : '$'}500`,
-            },
-            unit_amount: Math.round(shippingFee * 100),
-          },
-          quantity: 1,
-        });
+      if (!session.url) {
+        throw new BadRequestException('Failed to create Stripe checkout session.');
       }
-
-      // Prepare metadata carefully (max 50 keys, 500 chars per value)
-      const sessionMetadata = {
-        orderId: String(order._id),
-        type: 'shop_order',
-      };
-
-      console.log('[Stripe Session] Creating with metadata:', JSON.stringify(sessionMetadata));
-      console.log('[Stripe Session] Line items count:', line_items.length);
-
-      const isPartner = ['master_partner', 'regional_partner', 'partner'].includes(currentUser?.role || role || '');
-      const dashboardPath = isPartner ? '/dashboard/partner' : '/dashboard/shop';
-
-      const session = await stripeInstance.checkout.sessions.create({
-        payment_method_types: ['card'],
-        line_items: line_items,
-        mode: 'payment',
-        success_url: `${baseUrl}${dashboardPath}?success=true&order_id=${order._id}`,
-        cancel_url: `${baseUrl}${dashboardPath}?canceled=true`,
-        client_reference_id: String(userId),
-        customer_email: String(currentUser?.email || shippingAddress.email || ''),
-        metadata: sessionMetadata,
-      });
-
-      order.stripeSessionId = session.id;
-      // Update total to include shipping
-      order.totalAmount = totalAmount + shippingFee;
-
-      await order.save();
 
       return { url: session.url };
     } catch (error) {
@@ -328,15 +286,150 @@ export class OrdersService {
       .sort({ createdAt: -1 });
   }
 
-  async getOrderById(id: string): Promise<Order> {
+  async getOrderById(id: string, userId?: string, userRole?: string): Promise<Order> {
     const order = await this.orderModel
       .findById(id)
-      .populate('user', 'firstName lastName email role')
+      .populate('user', 'firstName lastName email role country')
       .lean();
     if (!order) {
       throw new NotFoundException('Order not found');
     }
+    const orderUserId = String((order as any).user?._id || (order as any).user);
+    if (
+      userId &&
+      userRole !== UserRole.ADMIN &&
+      orderUserId !== String(userId)
+    ) {
+      throw new ForbiddenException('You do not have access to this order');
+    }
     return order;
+  }
+
+  async createPaymentSessionForOrder(
+    orderId: string,
+    userId: string,
+    role?: string,
+  ): Promise<{ url: string }> {
+    const order = await this.orderModel.findById(orderId);
+    if (!order) throw new NotFoundException('Order not found');
+    if (String(order.user) !== String(userId)) {
+      throw new ForbiddenException('You do not have access to this order');
+    }
+
+    const payableStatuses = [OrderStatus.PENDING_PAYMENT, OrderStatus.PENDING];
+    if (!payableStatuses.includes(order.status)) {
+      throw new BadRequestException(
+        'This order is not awaiting payment.',
+      );
+    }
+
+    const currentUser = await this.usersService.findOne(userId);
+    const userCountry = (currentUser?.country || '').toLowerCase().trim();
+    if (!this.isUsaCountry(userCountry)) {
+      throw new BadRequestException(
+        'Online payment is only available for USA orders.',
+      );
+    }
+
+    const stripeInstance = this.getStripeForUsaUser(true);
+    const orderCurrency = (order.currency || 'USD').toLowerCase();
+
+    const session = await this.createStripeCheckoutForOrder(
+      order,
+      currentUser,
+      role,
+      stripeInstance,
+      orderCurrency,
+    );
+
+    if (!session.url) {
+      throw new BadRequestException('Failed to create Stripe checkout session.');
+    }
+
+    return { url: session.url };
+  }
+
+  async cancelExpiredPendingPaymentOrders(): Promise<number> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - PENDING_PAYMENT_CANCEL_DAYS);
+
+    const expiredOrders = await this.orderModel
+      .find({
+        status: OrderStatus.PENDING_PAYMENT,
+        createdAt: { $lte: cutoff },
+      })
+      .populate('user', 'firstName lastName email country role');
+
+    let cancelled = 0;
+    for (const order of expiredOrders) {
+      const reason =
+        'Payment was not completed within 3 days. The order was automatically cancelled.';
+      order.status = OrderStatus.CANCELLED;
+      order.cancellationReason = reason;
+      await order.save();
+
+      if (order.user) {
+        await this.mailService
+          .sendOrderCancelledCustomerNotification(order, order.user, {
+            wasPaid: false,
+            cancellationReason: reason,
+          })
+          .catch((err) =>
+            console.error('Failed to send auto-cancel email to customer', err),
+          );
+      }
+      cancelled++;
+    }
+    return cancelled;
+  }
+
+  async sendPendingPaymentReminders(): Promise<number> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - PENDING_PAYMENT_CANCEL_DAYS);
+
+    const pendingOrders = await this.orderModel
+      .find({
+        status: OrderStatus.PENDING_PAYMENT,
+        createdAt: { $gt: cutoff },
+      })
+      .populate('user', 'firstName lastName email role country');
+
+    let sent = 0;
+    const now = Date.now();
+
+    for (const order of pendingOrders) {
+      const reminderIndex = order.paymentReminderCount ?? 0;
+      if (reminderIndex >= PAYMENT_REMINDER_INTERVALS_MS.length) {
+        continue;
+      }
+
+      const ageMs = now - new Date((order as any).createdAt).getTime();
+      if (ageMs < PAYMENT_REMINDER_INTERVALS_MS[reminderIndex]) {
+        continue;
+      }
+
+      const user = order.user as any;
+      if (!user?.email) continue;
+
+      const payUrl = this.getOrderPayUrl(
+        order._id.toString(),
+        user?.role,
+      );
+      await this.mailService
+        .sendPendingPaymentReminder(order, user, payUrl, true)
+        .catch((err) =>
+          console.error(
+            `Failed to send payment reminder for ${order.orderNumber}`,
+            err,
+          ),
+        );
+
+      order.paymentReminderCount = reminderIndex + 1;
+      await order.save();
+      sent++;
+    }
+
+    return sent;
   }
 
   // Webhook handler will reuse logic or be separate.
@@ -357,8 +450,14 @@ export class OrdersService {
       order.stripeSessionId,
     );
     if (session.payment_status === 'paid') {
-      if (order.status !== OrderStatus.PAID) {
+      if (
+        order.status !== OrderStatus.PAID &&
+        [OrderStatus.PENDING_PAYMENT, OrderStatus.PENDING, OrderStatus.FAILED].includes(
+          order.status,
+        )
+      ) {
         order.status = OrderStatus.PAID;
+        order.cancellationReason = undefined;
         await order.save();
 
         const populatedOrder = await this.orderModel
@@ -398,14 +497,86 @@ export class OrdersService {
           return populatedOrder;
         }
       }
-    } else if (session.status === 'expired' || session.status === 'open') {
-      // If open but timed out or explicitly expired
-      if (session.status === 'expired') {
-        order.status = OrderStatus.FAILED;
-        await order.save();
-      }
     }
     return order;
+  }
+
+  async createRegistrationOrder(user: any, stripeSessionId?: string, isCouponBypass: boolean = false): Promise<Order> {
+    // Check if registration order already exists for this user to avoid duplicates
+    const existingOrder = await this.orderModel.findOne({
+      user: user._id,
+      'items.product': 'registration_fee',
+    });
+    if (existingOrder) {
+      console.log(`[Registration Order] Found existing registration order: ${existingOrder.orderNumber}`);
+      return existingOrder as any;
+    }
+
+    // Determine the registration fee and tax for user's country
+    let currency = 'USD';
+    let feeAmount = 250;
+    let taxAmount = 0;
+
+    try {
+      const feeGroup = await this.registrationFeesService.findByCountry(user.country || '');
+      if (feeGroup) {
+        currency = (feeGroup.currency || 'USD').toUpperCase();
+        feeAmount = feeGroup.feeAmount;
+        taxAmount = feeGroup.taxAmount || 0;
+      }
+    } catch (err) {
+      console.error('[Registration Order] Failed to fetch fee group:', err);
+    }
+
+    const subtotal = feeAmount + taxAmount;
+    const discount = isCouponBypass ? subtotal : 0;
+    const totalAmount = isCouponBypass ? 0 : subtotal;
+    const couponCode = isCouponBypass ? 'CERTIFICATIONONUS' : undefined;
+
+    // Prefill shippingAddress using user's details
+    const shippingAddress = {
+      email: user.email || '',
+      firstName: user.firstName || '',
+      lastName: user.lastName || '',
+      companyName: user.companyName || '',
+      address: user.address || 'N/A',
+      address2: '',
+      city: user.city || 'N/A',
+      state: user.state || 'N/A',
+      zipCode: user.zipCode || 'N/A',
+      country: user.country || 'N/A',
+      phoneNumber: user.phoneNumber || 'N/A',
+    };
+
+    const orderNumber = await this.generateOrderNumber('REG');
+
+    const order = new this.orderModel({
+      user: user._id,
+      items: [
+        {
+          product: 'registration_fee',
+          name: user.role === UserRole.CERTIFIED_SHOP ? 'Shop Registration Fee' : 'Partner Registration Fee',
+          size: 'N/A',
+          quantity: 1,
+          price: subtotal,
+        }
+      ],
+      totalAmount,
+      discount,
+      couponCode,
+      shippingAddress,
+      status: OrderStatus.PAID,
+      orderNumber,
+      currency,
+      stripeSessionId,
+    });
+
+    console.log(`[Registration Order] Creating registration order ${orderNumber} for user ${user._id}`);
+    return await order.save();
+  }
+
+  async generateInvoicePdf(order: any): Promise<Buffer> {
+    return this.pdfService.generateOrderDetails(order);
   }
 
   async verifyRegistrationPayment(userId: string): Promise<any> {
@@ -429,6 +600,17 @@ export class OrdersService {
 
       // Trigger Notifications (Same logic as webhook)
       if (updatedUser) {
+        // Create paid registration order
+        let invoiceBuffer: Buffer | undefined;
+        let orderNumber: string | undefined;
+        try {
+          const regOrder = await this.createRegistrationOrder(updatedUser, session.id, false);
+          invoiceBuffer = await this.generateInvoicePdf(regOrder);
+          orderNumber = regOrder.orderNumber;
+        } catch (orderErr) {
+          console.error('[Manual Verify] Failed to create registration order:', orderErr);
+        }
+
         // 1. Notify Admin
         // Admin notification is now handled internally by MailService for sales@skygloss.com
         await this.mailService.sendDistributorPaymentCompletedAdminNotification(
@@ -441,6 +623,8 @@ export class OrdersService {
           await this.mailService.sendDistributorPaymentConfirmation(
             updatedUser.email,
             updatedUser,
+            invoiceBuffer,
+            orderNumber,
           );
         }
 
@@ -554,8 +738,22 @@ export class OrdersService {
     ) {
       const orderId = metadata?.orderId;
       if (orderId) {
-        console.log(`[USA Stripe Webhook] Marking order ${orderId} as FAILED due to: ${event.type}`);
-        await this.orderModel.findByIdAndUpdate(orderId, { status: OrderStatus.FAILED });
+        const existing = await this.orderModel.findById(orderId);
+        if (
+          existing &&
+          existing.status !== OrderStatus.PENDING_PAYMENT
+        ) {
+          console.log(
+            `[USA Stripe Webhook] Marking order ${orderId} as FAILED due to: ${event.type}`,
+          );
+          await this.orderModel.findByIdAndUpdate(orderId, {
+            status: OrderStatus.FAILED,
+          });
+        } else {
+          console.log(
+            `[USA Stripe Webhook] Checkout session expired for ${orderId}; order remains pending payment until auto-cancel.`,
+          );
+        }
       }
     }
 
@@ -598,6 +796,17 @@ export class OrdersService {
 
         if (updatedUser) {
           console.log(`[Stripe Webhook] User ${userId} activated as partner.`);
+
+          let invoiceBuffer: Buffer | undefined;
+          let orderNumber: string | undefined;
+          try {
+            const regOrder = await this.createRegistrationOrder(updatedUser, session.id, false);
+            invoiceBuffer = await this.generateInvoicePdf(regOrder);
+            orderNumber = regOrder.orderNumber;
+          } catch (orderErr) {
+            console.error('[Stripe Webhook] Failed to create registration order:', orderErr);
+          }
+
           // Admin notification is now handled internally by MailService for sales@skygloss.com
           await this.mailService.sendDistributorPaymentCompletedAdminNotification(
             [],
@@ -609,6 +818,8 @@ export class OrdersService {
             await this.mailService.sendDistributorPaymentConfirmation(
               updatedUser.email,
               updatedUser,
+              invoiceBuffer,
+              orderNumber,
             );
           }
 
@@ -642,6 +853,16 @@ export class OrdersService {
         if (updatedUser) {
           console.log(`[Stripe Webhook] Shop ${userId} activated.`);
 
+          let invoiceBuffer: Buffer | undefined;
+          let orderNumber: string | undefined;
+          try {
+            const regOrder = await this.createRegistrationOrder(updatedUser, session.id, false);
+            invoiceBuffer = await this.generateInvoicePdf(regOrder);
+            orderNumber = regOrder.orderNumber;
+          } catch (orderErr) {
+            console.error('[Stripe Webhook] Failed to create registration order:', orderErr);
+          }
+
           // 1. Notify Admin (Sales Dept)
           await this.mailService.sendDistributorPaymentCompletedAdminNotification(
             [],
@@ -653,6 +874,8 @@ export class OrdersService {
             await this.mailService.sendDistributorPaymentConfirmation(
               updatedUser.email,
               updatedUser,
+              invoiceBuffer,
+              orderNumber,
             );
           }
 
@@ -754,13 +977,48 @@ export class OrdersService {
     ) {
       const orderId = metadata?.orderId;
       if (orderId) {
-        console.log(`[Stripe Webhook] Marking order ${orderId} as FAILED due to event: ${event.type}`);
-        await this.orderModel.findByIdAndUpdate(orderId, {
-          status: OrderStatus.FAILED,
-        });
+        const existing = await this.orderModel.findById(orderId);
+        if (existing && existing.status !== OrderStatus.PENDING_PAYMENT) {
+          console.log(
+            `[Stripe Webhook] Marking order ${orderId} as FAILED due to event: ${event.type}`,
+          );
+          await this.orderModel.findByIdAndUpdate(orderId, {
+            status: OrderStatus.FAILED,
+          });
+        } else {
+          console.log(
+            `[Stripe Webhook] Checkout session expired for ${orderId}; order remains pending payment until auto-cancel.`,
+          );
+        }
       }
     }
     return { received: true };
+  }
+
+  async getMyOrders(userId: string): Promise<Order[]> {
+    return this.orderModel
+      .find({ user: userId })
+      .sort({ createdAt: -1 })
+      .exec();
+  }
+
+  async getOrderById(orderId: string, userId: string, role: string): Promise<Order> {
+    const isAdmin = role === 'admin';
+    const order = await this.orderModel
+      .findById(orderId)
+      .populate('user', 'firstName lastName email role country')
+      .exec();
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    // Non-admins can only see their own orders
+    if (!isAdmin && String((order as any).user?._id || order.user) !== String(userId)) {
+      throw new ForbiddenException('You do not have permission to view this order');
+    }
+
+    return order;
   }
 
   async getAllOrders(): Promise<Order[]> {
@@ -819,9 +1077,18 @@ export class OrdersService {
 
       // Send cancellation emails
       if (order.user) {
-        await this.mailService.sendOrderCancelledCustomerNotification(order, order.user).catch(err => {
-          console.error('Failed to send order cancelled email to customer', err);
-        });
+        if (!order.cancellationReason) {
+          order.cancellationReason =
+            'This order was cancelled by an administrator.';
+        }
+        await this.mailService
+          .sendOrderCancelledCustomerNotification(order, order.user, {
+            wasPaid: oldStatus === OrderStatus.PAID,
+            cancellationReason: order.cancellationReason,
+          })
+          .catch((err) => {
+            console.error('Failed to send order cancelled email to customer', err);
+          });
         await this.mailService.sendOrderCancelledAdminNotification(order, order.user).catch(err => {
           console.error('Failed to send order cancelled email to admin', err);
         });
@@ -847,14 +1114,11 @@ export class OrdersService {
         throw new BadRequestException('Order items are required');
       }
 
-      const totalAmount = items.reduce(
-        (sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0),
-        0,
-      );
-
-      // Calculate shipping fee based on user's country
-      const shippingFee = calculateShippingFee(currentUser?.country || '', totalAmount);
-      const finalAmount = totalAmount + shippingFee;
+      const itemsSubtotal = getItemsSubtotal(items);
+      const shippingCountry =
+        shippingAddress?.country || currentUser?.country || '';
+      const shippingFee = calculateShippingFee(shippingCountry, itemsSubtotal);
+      const finalAmount = itemsSubtotal + shippingFee;
 
       let savedOrder;
       let retries = 3;
@@ -865,6 +1129,7 @@ export class OrdersService {
             user: userId,
             items,
             totalAmount: finalAmount,
+            shippingFee,
             shippingAddress,
             status: OrderStatus.PENDING,
             orderNumber,
@@ -1013,6 +1278,129 @@ export class OrdersService {
 
     await this.orderModel.findByIdAndDelete(id);
     return { success: true };
+  }
+
+  private isUsaCountry(country: string): boolean {
+    return USA_COUNTRIES.includes((country || '').toLowerCase().trim());
+  }
+
+  private getStripeForUsaUser(isUsaUser: boolean): Stripe {
+    const stripeInstance = isUsaUser && this.usaStripe ? this.usaStripe : this.stripe;
+    if (!stripeInstance) {
+      throw new BadRequestException('Stripe is not configured on the server.');
+    }
+    return stripeInstance;
+  }
+
+  private getFrontendBaseUrl(): string {
+    let baseUrl = (this.configService.get<string>('FRONTEND_URL') || '').replace(
+      /\/+$/,
+      '',
+    );
+    if (!baseUrl) {
+      baseUrl =
+        process.env.NODE_ENV === 'production'
+          ? 'https://portal.skygloss.com'
+          : 'http://localhost:3000';
+    }
+    return baseUrl;
+  }
+
+  private getDashboardPath(role?: string): string {
+    const isPartner = ['master_partner', 'regional_partner', 'partner'].includes(
+      role || '',
+    );
+    return isPartner ? '/dashboard/partner' : '/dashboard/shop';
+  }
+
+  getOrderPayUrl(orderId: string, role?: string): string {
+    const baseUrl = this.getFrontendBaseUrl();
+    const dashboardPath = this.getDashboardPath(role);
+    return `${baseUrl}${dashboardPath}/receipt/${orderId}`;
+  }
+
+  private async createStripeCheckoutForOrder(
+    order: OrderDocument,
+    currentUser: any,
+    role: string | undefined,
+    stripeInstance: Stripe,
+    orderCurrency: string,
+  ): Promise<Stripe.Checkout.Session> {
+    const items = order.items;
+    const itemsSubtotal = getItemsSubtotal(items);
+    const shippingFee =
+      order.shippingFee != null && order.shippingFee >= 0
+        ? order.shippingFee
+        : Math.max(0, order.totalAmount - itemsSubtotal);
+    const shippingCountry =
+      order.shippingAddress?.country || currentUser?.country || '';
+
+    const line_items: Stripe.Checkout.SessionCreateParams.LineItem[] = items.map(
+      (item) => {
+        const images: string[] = [];
+        if (item.image && typeof item.image === 'string' && item.image.startsWith('http')) {
+          images.push(item.image);
+        }
+
+        return {
+          price_data: {
+            currency: orderCurrency,
+            product_data: {
+              name: String(item.name || 'Product'),
+              images,
+              metadata: {
+                size: String(item.size || ''),
+                productId: String(item.product || ''),
+              },
+            },
+            unit_amount: Math.round(Number(item.price || 0) * 100),
+          },
+          quantity: Math.max(1, Number(item.quantity || 1)),
+        };
+      },
+    );
+
+    if (shippingFee > 0) {
+      const shippingRegion = getShippingRegion(
+        shippingCountry.toLowerCase().trim(),
+      );
+      line_items.push({
+        price_data: {
+          currency: orderCurrency,
+          product_data: {
+            name: 'Shipping',
+            description: `Standard shipping for orders under ${shippingRegion === 'EU' ? '€' : '$'}500`,
+          },
+          unit_amount: Math.round(shippingFee * 100),
+        },
+        quantity: 1,
+      });
+    }
+
+    const baseUrl = this.getFrontendBaseUrl();
+    const dashboardPath = this.getDashboardPath(currentUser?.role || role);
+    const sessionMetadata = {
+      orderId: String(order._id),
+      type: 'shop_order',
+    };
+
+    const session = await stripeInstance.checkout.sessions.create({
+      payment_method_types: ['card'],
+      line_items,
+      mode: 'payment',
+      success_url: `${baseUrl}${dashboardPath}?success=true&order_id=${order._id}`,
+      cancel_url: `${baseUrl}${dashboardPath}/receipt/${order._id}?canceled=true`,
+      client_reference_id: String(currentUser?._id || order.user),
+      customer_email: String(
+        currentUser?.email || order.shippingAddress?.email || '',
+      ),
+      metadata: sessionMetadata,
+    });
+
+    order.stripeSessionId = session.id;
+    await order.save();
+
+    return session;
   }
 
   private async generateOrderNumber(prefix: string): Promise<string> {

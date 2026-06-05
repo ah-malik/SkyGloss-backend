@@ -2,6 +2,11 @@ import { Injectable } from '@nestjs/common';
 const PDFDocument = require('pdfkit');
 import { User } from '../users/entities/user.entity';
 import { Order } from '../orders/entities/order.entity';
+import {
+  getDiscountDisplayLabel,
+  getOrderTotalsBreakdown,
+  isRegistrationOrder,
+} from '../common/order-totals';
 import axios from 'axios';
 
 @Injectable()
@@ -223,8 +228,13 @@ export class PdfService {
       doc.on('data', (chunk) => chunks.push(chunk));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
 
+      const registrationOrder = isRegistrationOrder(order);
+
       // Header
-      doc.fontSize(24).fillColor('#0EA0DC').font('Helvetica-Bold').text('Order Details', { align: 'center' });
+      doc.fontSize(24).fillColor('#0EA0DC').font('Helvetica-Bold').text(
+        registrationOrder ? 'Registration Invoice' : 'Order Invoice',
+        { align: 'center' },
+      );
       doc.moveDown();
 
       doc.fontSize(12).fillColor('#272727').font('Helvetica');
@@ -285,10 +295,7 @@ export class PdfService {
       console.log(`[PdfService] Resolved symbol: ${currencySymbol}`);
 
       doc.font('Helvetica');
-      let subtotal = 0;
       order.items.forEach((item) => {
-        const itemTotal = item.price * item.quantity;
-        subtotal += itemTotal;
         const currentY = doc.y;
         doc.text(item.name.toUpperCase(), 50, currentY, { width: 250 });
         doc.text(item.size, 300, currentY, { width: 100 });
@@ -301,16 +308,54 @@ export class PdfService {
       doc.lineWidth(1).moveTo(50, doc.y).lineTo(550, doc.y).stroke();
       doc.moveDown();
 
-      const shippingFee = Math.max(0, order.totalAmount - subtotal);
+      const userCountry = (order.user as any)?.country;
+      const { subtotal, shippingFee, discount, total } = getOrderTotalsBreakdown(
+        order as any,
+        userCountry,
+      );
 
-      if (shippingFee > 0.01) {
-        doc.fontSize(12).font('Helvetica').text(`Subtotal: ${currencySymbol}${subtotal.toFixed(2)}`, { align: 'right' });
-        doc.moveDown(0.5);
-        doc.fontSize(12).font('Helvetica').text(`Shipping: ${currencySymbol}${shippingFee.toFixed(2)}`, { align: 'right' });
-        doc.moveDown(0.5);
+      const totalsY = doc.y;
+      doc.fontSize(12).font('Helvetica');
+      doc.text('Subtotal', 50, totalsY, { width: 380, align: 'right' });
+      doc.text(`${currencySymbol}${subtotal.toFixed(2)}`, 430, totalsY, {
+        width: 115,
+        align: 'right',
+      });
+      doc.moveDown(0.75);
+
+      if (discount > 0.01) {
+        const discountY = doc.y;
+        const discountLabel = getDiscountDisplayLabel(order as any);
+        doc.text(discountLabel, 50, discountY, { width: 380, align: 'right' });
+        doc.text(`-${currencySymbol}${discount.toFixed(2)}`, 430, discountY, {
+          width: 115,
+          align: 'right',
+        });
+        doc.moveDown(0.75);
       }
 
-      doc.fontSize(16).font('Helvetica-Bold').text(`Total Amount: ${currencySymbol}${order.totalAmount.toFixed(2)}`, { align: 'right' });
+      if (!registrationOrder) {
+        const shippingY = doc.y;
+        if (shippingFee > 0.01) {
+          doc.text('Shipping', 50, shippingY, { width: 380, align: 'right' });
+          doc.text(`${currencySymbol}${shippingFee.toFixed(2)}`, 430, shippingY, {
+            width: 115,
+            align: 'right',
+          });
+        } else {
+          doc.text('Shipping', 50, shippingY, { width: 380, align: 'right' });
+          doc.text('FREE', 430, shippingY, { width: 115, align: 'right' });
+        }
+        doc.moveDown(0.75);
+      }
+
+      const totalY = doc.y;
+      doc.fontSize(16).font('Helvetica-Bold');
+      doc.text('Total Amount', 50, totalY, { width: 380, align: 'right' });
+      doc.text(`${currencySymbol}${total.toFixed(2)}`, 430, totalY, {
+        width: 115,
+        align: 'right',
+      });
 
       doc.end();
     });

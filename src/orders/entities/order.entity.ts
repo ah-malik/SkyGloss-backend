@@ -6,6 +6,7 @@ export type OrderDocument = Order & Document;
 
 export enum OrderStatus {
   PENDING = 'PENDING',
+  PENDING_PAYMENT = 'PENDING_PAYMENT',
   PAID = 'PAID',
   SHIPPED = 'SHIPPED',
   DELIVERED = 'DELIVERED',
@@ -85,6 +86,9 @@ export class Order {
   @Prop({ required: true })
   totalAmount: number;
 
+  @Prop({ default: 0 })
+  shippingFee?: number;
+
   @Prop({ type: ShippingAddress, required: true })
   shippingAddress: ShippingAddress;
 
@@ -97,6 +101,12 @@ export class Order {
   @Prop({ default: 'USD' })
   currency: string;
 
+  @Prop({ default: 0 })
+  discount?: number;
+
+  @Prop()
+  couponCode?: string;
+
   @Prop()
   stripeSessionId: string;
 
@@ -105,6 +115,12 @@ export class Order {
 
   @Prop()
   shippingCompany: string;
+
+  @Prop()
+  cancellationReason?: string;
+
+  @Prop({ default: 0 })
+  paymentReminderCount?: number;
 }
 
 export const OrderSchema = SchemaFactory.createForClass(Order);
