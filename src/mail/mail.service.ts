@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
+import { formatRoleLabel } from '../common/role-labels';
 @Injectable()
 export class MailService {
   private transporter: nodemailer.Transporter;
@@ -261,14 +262,16 @@ export class MailService {
     const recipients = ['sales@skygloss.com'];
     if (userDetails.email) recipients.push(userDetails.email);
 
+    const roleLabel = formatRoleLabel(userDetails.role);
+
     const mailOptions = {
       from: `"SkyGloss System" <sales@skygloss.com>`,
       to: recipients.join(', '),
-      subject: `New Distributor Registration: ${userDetails.firstName} ${userDetails.lastName}`,
+      subject: `New ${roleLabel} Registration: ${userDetails.firstName} ${userDetails.lastName}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
           <h2 style="color: #ff9800; text-align: center;">New Registration Received</h2>
-          <p>A new user has registered as a Distributor and is currently pending payment.</p>
+          <p>A new user has registered as a ${roleLabel} and is currently pending payment.</p>
           <h3>User Details:</h3>
           <ul>
             <li><strong>Name:</strong> ${userDetails.firstName} ${userDetails.lastName}</li>
@@ -1248,7 +1251,7 @@ export class MailService {
           <h2 style="color: #0EA0DC;">Certification Status Report</h2>
           <p>Hello,</p>
           <p>The requested shop certification status report has been generated and is attached to this email as an Excel file.</p>
-          <p>This report includes details on shop training progress, partner references, and current certification application statuses.</p>
+          <p>This report includes details on shop training progress, hub/promoter references, and current certification application statuses.</p>
           <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
           <p style="font-size: 12px; color: #999;">SkyGloss Admin System</p>
         </div>

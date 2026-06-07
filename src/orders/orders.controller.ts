@@ -16,6 +16,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { UserRole } from '../users/entities/user.entity';
 import { GetUser } from '../common/decorators/get-user.decorator';
+import { UserDocument } from '../users/entities/user.entity';
 import type { RawBodyRequest } from '@nestjs/common';
 
 @Controller('orders')
@@ -78,7 +79,7 @@ export class OrdersController {
   )
   async getNetworkOrders(@GetUser() user: any) {
     try {
-      return await this.ordersService.getNetworkOrders(user?.partnerCode || '');
+      return await this.ordersService.getNetworkOrders(user);
     } catch (error) {
       console.error('[NetworkOrders Error]:', error);
       throw error;
@@ -94,8 +95,8 @@ export class OrdersController {
     UserRole.MASTER_PARTNER,
     UserRole.ADMIN,
   )
-  getOrderById(@Param('id') id: string, @GetUser('_id') userId: string, @GetUser('role') role: string) {
-    return this.ordersService.getOrderById(id, userId, role);
+  getOrderById(@Param('id') id: string, @GetUser() user: UserDocument) {
+    return this.ordersService.getOrderById(id, user);
   }
 
   @Post(':id/pay')

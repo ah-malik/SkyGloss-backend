@@ -121,6 +121,16 @@ export class Order {
 
   @Prop({ default: 0 })
   paymentReminderCount?: number;
+
+  @Prop({ type: [Object], default: [] })
+  commissions?: {
+    recipientUserId: string;
+    recipientPartnerCode: string;
+    recipientRole: string;
+    percentage: number;
+    amount: number;
+    status: 'pending' | 'earned';
+  }[];
 }
 
 export const OrderSchema = SchemaFactory.createForClass(Order);

@@ -74,7 +74,7 @@ export class UsersController {
   @Get('referred-shops')
   @Roles(UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER)
   async getReferredShops(@GetUser() user: UserDocument) {
-    return this.usersService.findReferredShops(user.partnerCode || '');
+    return this.usersService.findNetworkUsersForViewer(user);
   }
 
   @Get('partners-list')
@@ -147,7 +147,7 @@ export class UsersController {
     const updatedUser = await this.usersService.updateShopVisibility(
       id,
       isVisibleOnMap,
-      user.partnerCode || '',
+      user,
     );
     if (!updatedUser) {
       throw new BadRequestException('Shop not found or logic error');

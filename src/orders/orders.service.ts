@@ -21,12 +21,21 @@ import { NotificationsGateway } from '../notifications/notifications.gateway';
 import { NotificationType } from '../notifications/entities/notification.entity';
 import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
-import { UserRole, UserStatus } from '../users/entities/user.entity';
+import { UserDocument, UserRole, UserStatus } from '../users/entities/user.entity';
 import { ProductGroup, ProductGroupDocument } from '../product-groups/entities/product-group.entity';
 import { RegistrationFeesService } from '../registration-fees/registration-fees.service';
 import { calculateShippingFee, getShippingRegion, SHIPPING_FEE_AMOUNT } from '../common/shipping-config';
 import { getItemsSubtotal } from '../common/order-totals';
+import {
+  formatRoleLabel,
+  getRegistrationFeeDescription,
+  getRegistrationFeeName,
+} from '../common/role-labels';
 import { PdfService } from '../pdf/pdf.service';
+import {
+  calculateCommissionEntries,
+  resolveShopCommissionChain,
+} from '../common/commission-distribution';
 
 const USA_COUNTRIES = ['united states', 'usa', 'us', 'united states of america'];
 const PENDING_PAYMENT_CANCEL_DAYS = 3;
@@ -131,15 +140,25 @@ export class OrdersService {
       tax_amount = Math.round((feeGroup.taxAmount || 0) * 100);
     }
 
+    const user = await this.usersService.findOne(userId);
+    const feeName = user
+      ? getRegistrationFeeName(user.role)
+      : type === 'shop_registration'
+        ? 'Shop Registration Fee'
+        : 'Hub Registration Fee';
+    const feeDescription = user
+      ? getRegistrationFeeDescription(user.role)
+      : type === 'shop_registration'
+        ? 'One-time fee to activate your SkyGloss Shop account.'
+        : 'One-time fee to activate your SkyGloss Hub account.';
+
     const line_items: Stripe.Checkout.SessionCreateParams.LineItem[] = [
       {
         price_data: {
           currency,
           product_data: {
-            name: type === 'shop_registration' ? 'Shop Registration Fee' : 'Partner Registration Fee',
-            description: type === 'shop_registration'
-              ? 'One-time fee to activate your SkyGloss Shop account.'
-              : 'One-time fee to activate your SkyGloss partner account.',
+            name: feeName,
+            description: feeDescription,
           },
           unit_amount,
         },
@@ -287,23 +306,45 @@ export class OrdersService {
       .sort({ createdAt: -1 });
   }
 
-  async getOrderById(id: string, userId?: string, userRole?: string): Promise<Order> {
+  async getOrderById(id: string, viewer?: UserDocument): Promise<Order> {
     const order = await this.orderModel
       .findById(id)
-      .populate('user', 'firstName lastName email role country')
+      .populate('user', 'firstName lastName email role country shopName')
       .lean();
     if (!order) {
       throw new NotFoundException('Order not found');
     }
-    const orderUserId = String((order as any).user?._id || (order as any).user);
-    if (
-      userId &&
-      userRole !== UserRole.ADMIN &&
-      orderUserId !== String(userId)
-    ) {
-      throw new ForbiddenException('You do not have access to this order');
+
+    if (!viewer) {
+      return order;
     }
-    return order;
+
+    const orderUserId = String((order as any).user?._id || (order as any).user);
+
+    if (viewer.role === UserRole.ADMIN) {
+      return order;
+    }
+
+    if (orderUserId === viewer._id.toString()) {
+      return order;
+    }
+
+    const networkRoles = [
+      UserRole.PARTNER,
+      UserRole.MASTER_PARTNER,
+      UserRole.REGIONAL_PARTNER,
+    ];
+    if (networkRoles.includes(viewer.role as UserRole)) {
+      const inNetwork = await this.usersService.isUserInViewerNetwork(
+        viewer,
+        orderUserId,
+      );
+      if (inNetwork) {
+        return order;
+      }
+    }
+
+    throw new ForbiddenException('You do not have access to this order');
   }
 
   async createPaymentSessionForOrder(
@@ -586,7 +627,7 @@ export class OrdersService {
       items: [
         {
           product: 'registration_fee',
-          name: user.role === UserRole.CERTIFIED_SHOP ? 'Shop Registration Fee' : 'Partner Registration Fee',
+          name: getRegistrationFeeName(user.role),
           size: 'N/A',
           quantity: 1,
           price: subtotal,
@@ -768,6 +809,11 @@ export class OrdersService {
         await this.mailService.sendOrderPaidCustomerConfirmation(updatedOrder, updatedOrder.user).catch(err => {
           console.error('[USA Stripe Webhook] Failed to send order paid confirmation email to customer', err);
         });
+
+        await this.applyOrderCommissions(
+          updatedOrder._id.toString(),
+          OrderStatus.PAID,
+        );
       } else {
         console.error(`[USA Stripe Webhook] Order ${orderId} not found in DB.`);
       }
@@ -868,7 +914,7 @@ export class OrdersService {
 
           const notification = await this.notificationsService.create({
             type: NotificationType.ORDER_PAID,
-            title: 'Partner Registration Paid',
+            title: `${formatRoleLabel(updatedUser.role)} Registration Paid`,
             message: `User ${updatedUser.firstName} ${updatedUser.lastName} has paid the registration fee and is now active.`,
             metadata: { userId: updatedUser._id },
             user: updatedUser._id as any,
@@ -1018,6 +1064,11 @@ export class OrdersService {
           await this.mailService.sendOrderPaidCustomerConfirmation(updatedOrder, updatedOrder.user).catch(err => {
             console.error('Failed to send order paid confirmation email to customer', err);
           });
+
+          await this.applyOrderCommissions(
+            updatedOrder._id.toString(),
+            OrderStatus.PAID,
+          );
         } else {
           console.error(`[Stripe Webhook] Order with id ${orderId} not found in DB.`);
         }
@@ -1059,15 +1110,67 @@ export class OrdersService {
       .sort({ createdAt: -1 });
   }
 
-  async getNetworkOrders(partnerCode: string): Promise<Order[]> {
-    const { shops } = await this.usersService.findReferredShops(partnerCode);
-    const shopIds = shops.map(shop => shop._id);
+  async getNetworkOrders(viewer: UserDocument): Promise<Order[]> {
+    const { shops } = await this.usersService.findNetworkUsersForViewer(viewer);
+    const shopIds = shops.map((shop) => shop._id);
     
     return await this.orderModel
       .find({ user: { $in: shopIds } } as any)
-      .populate('user', 'firstName lastName email shopName role')
+      .populate('user', 'firstName lastName email shopName role couponCode')
       .sort({ createdAt: -1 })
       .exec();
+  }
+
+  async applyOrderCommissions(
+    orderId: string,
+    newStatus: OrderStatus,
+  ): Promise<void> {
+    if (newStatus !== OrderStatus.PAID && newStatus !== OrderStatus.SHIPPED) {
+      return;
+    }
+
+    const order = await this.orderModel.findById(orderId);
+    if (!order) return;
+
+    const shopUserId =
+      typeof order.user === 'object' && order.user !== null && '_id' in (order.user as object)
+        ? String((order.user as any)._id)
+        : String(order.user);
+
+    if (!shopUserId) return;
+
+    const shopUser = await this.usersService.findOne(shopUserId);
+    if (!shopUser || shopUser.role !== UserRole.CERTIFIED_SHOP) return;
+
+    if (order.commissions && order.commissions.length > 0) {
+      if (newStatus === OrderStatus.SHIPPED) {
+        order.commissions = order.commissions.map((entry) => ({
+          ...entry,
+          status: 'earned' as const,
+        }));
+        await order.save();
+      }
+      return;
+    }
+
+    const chain = await resolveShopCommissionChain(shopUser, (code) =>
+      this.usersService.findByPartnerCode(code),
+    );
+    const entries = calculateCommissionEntries(order.totalAmount, chain);
+    const commissionStatus =
+      newStatus === OrderStatus.SHIPPED ? ('earned' as const) : ('pending' as const);
+
+    order.commissions = entries.map((entry) => ({
+      ...entry,
+      status: commissionStatus,
+    }));
+    await order.save();
+
+    if (entries.length > 0) {
+      console.log(
+        `[Commission] Order ${order.orderNumber}: ${entries.length} recipient(s), status=${commissionStatus}`,
+      );
+    }
   }
 
   async updateStatus(id: string, status: OrderStatus, trackingId?: string, shippingCompany?: string): Promise<Order> {
@@ -1127,6 +1230,14 @@ export class OrdersService {
     }
 
     const updatedOrder = await order.save();
+
+    if (
+      status === OrderStatus.PAID ||
+      status === OrderStatus.SHIPPED
+    ) {
+      await this.applyOrderCommissions(updatedOrder._id.toString(), status);
+    }
+
     return updatedOrder;
   }
 

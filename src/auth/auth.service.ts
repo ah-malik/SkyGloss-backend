@@ -21,6 +21,11 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
 import { NotificationType } from '../notifications/entities/notification.entity';
 import { ProductGroupsService } from '../product-groups/product-groups.service';
+import {
+  formatRoleLabel,
+  NETWORK_REFERENCE_ID_LABEL,
+  isPartnerNetworkRole,
+} from '../common/role-labels';
 
 @Injectable()
 export class AuthService {
@@ -54,7 +59,7 @@ export class AuthService {
 
     // Enforce payment for self-registered regional distributors
     if (
-      user.role === UserRole.REGIONAL_PARTNER &&
+      isPartnerNetworkRole(user.role) &&
       user.isSelfRegistered &&
       !user.isPartnerPaid
     ) {
@@ -198,7 +203,7 @@ export class AuthService {
     // Override role and status for a new partner registration
     const partnerDto = {
       ...createUserDto,
-      role: UserRole.REGIONAL_PARTNER, // Assuming Regional Partner by default for this flow
+      role: UserRole.MASTER_PARTNER,
       status: UserStatus.PENDING,
       isSelfRegistered: true,
       partnerCode,
@@ -216,8 +221,8 @@ export class AuthService {
     try {
       const notification = await this.notificationsService.create({
         type: NotificationType.NEW_USER,
-        title: 'New Partner Registration',
-        message: `A new partner (${user.firstName} ${user.lastName}) has registered and is pending payment.`,
+        title: `New ${formatRoleLabel(user.role)} Registration`,
+        message: `A new ${formatRoleLabel(user.role).toLowerCase()} (${user.firstName} ${user.lastName}) has registered and is pending payment.`,
         metadata: {
           userId: user._id.toString(),
           email: user.email,
@@ -251,55 +256,33 @@ export class AuthService {
   }
 
   async registerShop(createUserDto: CreateUserDto) {
-    let partnerId = createUserDto.referredByPartnerCode?.trim();
+    const partnerId = createUserDto.referredByPartnerCode?.trim().toUpperCase();
 
-    // If user has no partner ID (checked the "Don't have Partner ID" box), default to GLOBAL77
     if (!partnerId) {
-      partnerId = 'GLOBAL77';
-      createUserDto.referredByPartnerCode = partnerId;
+      throw new BadRequestException(`${NETWORK_REFERENCE_ID_LABEL} is required`);
     }
 
-    // Validate Partner ID length and format (4-10 alphanumeric)
-    if (!/^[a-zA-Z0-9]{4,10}$/.test(partnerId)) {
-      throw new BadRequestException('Partner ID must be 4-10 alphanumeric characters');
+    if (!/^[A-Z0-9]{4,10}$/.test(partnerId)) {
+      throw new BadRequestException(
+        `${NETWORK_REFERENCE_ID_LABEL} must be 4-10 alphanumeric characters`,
+      );
     }
 
-    // Validate Partner ID exists and belongs to a partner
-    let partner = await (this.usersService as any).userModel.findOne({
+    const partner = await (this.usersService as any).userModel.findOne({
       partnerCode: partnerId,
-      role: { $in: [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER] }
+      role: {
+        $in: [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER],
+      },
+      status: 'active',
     });
 
-    // Self-healing: If Global Partner is requested but missing, create it
-    if (!partner && partnerId === 'GLOBAL77') {
-      try {
-        console.log('[AuthService] Global Partner missing during registration. Creating...');
-        const hashedPass = await bcrypt.hash('SkyGlossGlobal77!', 10);
-        partner = await (this.usersService as any).userModel.create({
-          firstName: 'Global',
-          lastName: 'Partner',
-          email: 'certified@skygloss.com',
-          password: hashedPass,
-          role: UserRole.MASTER_PARTNER,
-          status: 'active',
-          country: 'United States',
-          address: 'Main Office',
-          city: 'Global',
-          partnerCode: 'GLOBAL77',
-          isSelfRegistered: false,
-        });
-        console.log('[AuthService] Global Partner created at certified@skygloss.com');
-      } catch (err: any) {
-        console.error('[AuthService] Failed to create Global Partner:', err);
-        // If it failed because it exists now (race condition), try finding it one last time
-        partner = await (this.usersService as any).userModel.findOne({ partnerCode: 'GLOBAL77' });
-        if (!partner) throw err;
-      }
+    if (!partner) {
+      throw new BadRequestException(
+        `Invalid ${NETWORK_REFERENCE_ID_LABEL}. Please check and try again.`,
+      );
     }
 
-    if (!partner) {
-      throw new BadRequestException('Invalid Partner ID. Please check and try again.');
-    }
+    createUserDto.referredByPartnerCode = partnerId;
 
 
     // Handle Coupon Code Bypass (free registration)

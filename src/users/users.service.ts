@@ -7,6 +7,26 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import axios from 'axios';
 import { ProductGroup, ProductGroupDocument } from '../product-groups/entities/product-group.entity';
+import { getNetworkIdLabel, HUB_ID_LABEL } from '../common/role-labels';
+import {
+  normalizePartnerCode,
+  validatePartnerCode,
+} from '../common/partner-code';
+import {
+  canTraverseNetwork,
+  canCertifyShops,
+  getParentLinkLabel,
+  requiresParentLink,
+  validateParentRole,
+} from '../common/user-hierarchy';
+
+export interface NetworkUsersResult {
+  shops: UserDocument[];
+  promoters: UserDocument[];
+  represented: UserDocument[];
+  partners: UserDocument[];
+  viewerRole: string;
+}
 
 @Injectable()
 export class UsersService implements OnModuleInit {
@@ -122,9 +142,19 @@ export class UsersService implements OnModuleInit {
     const userData: any = {
       ...createUserDto,
       password: hashedPassword,
+      role: createUserDto.role,
     };
 
-    // Validate Partner Code for partner roles
+    if (userData.role === UserRole.PARTNER) {
+      delete userData.referredByPartnerCode;
+    } else {
+      await this.validateHierarchyLink(
+        userData.role,
+        userData.referredByPartnerCode,
+      );
+    }
+
+    // Validate partner network code for Represented users
     const partnerRoles = [
       UserRole.MASTER_PARTNER,
       UserRole.REGIONAL_PARTNER,
@@ -134,20 +164,21 @@ export class UsersService implements OnModuleInit {
     if (partnerRoles.includes(userData.role)) {
       // Auto-activate partners created by Admin
       userData.status = UserStatus.ACTIVE;
-      
-      if (!userData.partnerCode) {
-        throw new BadRequestException('Partner Code is required for this role');
+
+      const codeError = validatePartnerCode(userData.partnerCode, userData.role);
+      if (codeError) {
+        throw new BadRequestException(codeError);
       }
 
-      if (!/^[a-zA-Z0-9]{4,10}$/.test(userData.partnerCode)) {
-        throw new BadRequestException('Partner Code must be 4-10 alphanumeric characters');
-      }
+      userData.partnerCode = normalizePartnerCode(userData.partnerCode);
 
       const existingCode = await this.userModel.findOne({
         partnerCode: userData.partnerCode,
       });
       if (existingCode) {
-        throw new BadRequestException('Partner Code already exists');
+        throw new BadRequestException(
+          `${getNetworkIdLabel(userData.role)} already exists — choose a unique ID`,
+        );
       }
     } else {
       // Clear partnerCode if NOT a partner role (optional but consistency is good)
@@ -233,12 +264,23 @@ export class UsersService implements OnModuleInit {
       // Allow self-update (e.g., training-complete)
       const isSelfUpdate = currentUser._id.toString() === targetUser._id.toString();
 
-      // Check if this is a shop referred by the current partner OR a self-update
       const isGlobalPartner = currentUser.partnerCode === 'GLOBAL77';
-      const isReferredShop = targetUser.referredByPartnerCode === currentUser.partnerCode;
+      const inNetwork = await this.isUserInViewerNetwork(
+        currentUser,
+        targetUser._id.toString(),
+      );
 
-      if (!isSelfUpdate && !isGlobalPartner && !isReferredShop) {
+      if (!isSelfUpdate && !isGlobalPartner && !inNetwork) {
         throw new ForbiddenException('You do not have permission to update this user');
+      }
+
+      if (
+        updateUserDto.isCertified === true &&
+        !canCertifyShops(currentUser.role, currentUser.partnerCode)
+      ) {
+        throw new ForbiddenException(
+          'Only Hub users can certify shops. Represented and Promoter users have view-only access.',
+        );
       }
 
       // Optional: Restrict what fields a Partner can update
@@ -246,6 +288,10 @@ export class UsersService implements OnModuleInit {
     }
 
     const updatePayload: any = { ...updateUserDto };
+    const targetUserForHierarchy = await this.userModel.findById(id);
+    if (!targetUserForHierarchy) {
+      throw new BadRequestException('User not found');
+    }
 
     // Handle Blocking/Unblocking Logic and Overrides
     if (updatePayload.status) {
@@ -277,12 +323,46 @@ export class UsersService implements OnModuleInit {
       }
     }
 
+    const partnerRoles = [
+      UserRole.MASTER_PARTNER,
+      UserRole.REGIONAL_PARTNER,
+      UserRole.PARTNER,
+    ];
+
     // partnerCode cleanup to avoid duplicate key errors on empty strings (sparse index only allows one "")
     if (updatePayload.partnerCode) {
       updatePayload.partnerCode = updatePayload.partnerCode.toString().trim();
       if (updatePayload.partnerCode === '') delete updatePayload.partnerCode;
     } else if (updatePayload.partnerCode === '') {
       delete updatePayload.partnerCode;
+    }
+
+    const roleAfterUpdate =
+      (updatePayload.role ?? targetUserForHierarchy.role) as UserRole;
+
+    if (
+      updatePayload.partnerCode !== undefined &&
+      partnerRoles.includes(roleAfterUpdate)
+    ) {
+      const codeError = validatePartnerCode(
+        updatePayload.partnerCode,
+        roleAfterUpdate,
+      );
+      if (codeError) {
+        throw new BadRequestException(codeError);
+      }
+
+      updatePayload.partnerCode = normalizePartnerCode(updatePayload.partnerCode);
+
+      const duplicateCode = await this.userModel.findOne({
+        partnerCode: updatePayload.partnerCode,
+        _id: { $ne: id },
+      });
+      if (duplicateCode) {
+        throw new BadRequestException(
+          `${getNetworkIdLabel(roleAfterUpdate)} already exists — choose a unique ID`,
+        );
+      }
     }
 
     // Clean up other unique fields if they are empty strings
@@ -297,6 +377,24 @@ export class UsersService implements OnModuleInit {
     }
     if (updatePayload.referredByPartnerCode === '') {
       updatePayload.referredByPartnerCode = null;
+    }
+
+    const hierarchyFieldsTouched =
+      updatePayload.role !== undefined ||
+      updatePayload.referredByPartnerCode !== undefined;
+
+    if (hierarchyFieldsTouched) {
+      const finalRole = (updatePayload.role ?? targetUserForHierarchy.role) as UserRole;
+      const finalReferral =
+        updatePayload.referredByPartnerCode !== undefined
+          ? updatePayload.referredByPartnerCode
+          : targetUserForHierarchy.referredByPartnerCode;
+
+      if (finalRole === UserRole.PARTNER) {
+        updatePayload.referredByPartnerCode = null;
+      } else if (requiresParentLink(finalRole)) {
+        await this.validateHierarchyLink(finalRole, finalReferral);
+      }
     }
 
     // Auto-enable map visibility when a shop is certified
@@ -354,6 +452,24 @@ export class UsersService implements OnModuleInit {
     // Role-based deletion blocks removed per user request to allow full management of all accounts
     return this.userModel.findByIdAndDelete(id).exec();
     return this.userModel.findByIdAndDelete(id).exec();
+  }
+
+  async migratePartnerRolesToRepresented(): Promise<{
+    partner: number;
+    regional: number;
+  }> {
+    const hubResult = await this.userModel.updateMany(
+      { role: UserRole.PARTNER },
+      { $set: { role: UserRole.MASTER_PARTNER } },
+    );
+    const promoterResult = await this.userModel.updateMany(
+      { role: UserRole.REGIONAL_PARTNER },
+      { $set: { role: UserRole.MASTER_PARTNER } },
+    );
+    return {
+      partner: hubResult.modifiedCount,
+      regional: promoterResult.modifiedCount,
+    };
   }
 
   async getStats() {
@@ -429,42 +545,145 @@ export class UsersService implements OnModuleInit {
       .exec();
   }
 
-  async findReferredShops(partnerCode: string): Promise<{ shops: UserDocument[], partners: any[] }> {
-    if (!partnerCode) return { shops: [], partners: [] };
-
-    const query: any = {
-      role: UserRole.CERTIFIED_SHOP,
+  /**
+   * Returns users visible to the viewer based on hierarchy:
+   * Hub → Represented, Promoter, Shop (full subtree)
+   * Represented → Promoter, Shop (subtree)
+   * Promoter → Shop (direct only)
+   */
+  async findNetworkUsersForViewer(
+    viewer: UserDocument,
+  ): Promise<NetworkUsersResult> {
+    const empty: NetworkUsersResult = {
+      shops: [],
+      promoters: [],
+      represented: [],
+      partners: [],
+      viewerRole: viewer.role,
     };
 
-    // If it's NOT the Global Partner, filter by their specific code
+    const partnerCode = viewer.partnerCode;
+    if (!partnerCode) return empty;
+
     const isGlobal = partnerCode === 'GLOBAL77';
 
-    if (!isGlobal) {
-      query.referredByPartnerCode = partnerCode;
-    }
-
-    const shops = await this.userModel.find(query).exec();
-
-    // Include partners list if it's the Global Partner
-    let partners: any[] = [];
     if (isGlobal) {
-      partners = await this.findAllPartners();
+      const shops = await this.userModel
+        .find({ role: UserRole.CERTIFIED_SHOP })
+        .exec();
+      const partners = await this.findAllPartners();
+      return {
+        shops,
+        represented: partners.filter((p) => p.role === UserRole.MASTER_PARTNER),
+        promoters: partners.filter((p) => p.role === UserRole.REGIONAL_PARTNER),
+        partners,
+        viewerRole: viewer.role,
+      };
     }
 
-    return { shops, partners };
+    if (viewer.role === UserRole.REGIONAL_PARTNER) {
+      const shops = await this.userModel
+        .find({
+          role: UserRole.CERTIFIED_SHOP,
+          referredByPartnerCode: partnerCode,
+        })
+        .exec();
+      return { ...empty, shops };
+    }
+
+    const collected: UserDocument[] = [];
+    const seenIds = new Set<string>();
+    let frontier = [partnerCode];
+
+    for (let depth = 0; depth < 20 && frontier.length > 0; depth++) {
+      const batch = await this.userModel
+        .find({ referredByPartnerCode: { $in: frontier } })
+        .exec();
+
+      const nextFrontier: string[] = [];
+      for (const u of batch) {
+        const id = u._id.toString();
+        if (seenIds.has(id)) continue;
+        seenIds.add(id);
+        collected.push(u);
+
+        if (u.partnerCode && canTraverseNetwork(u.role)) {
+          nextFrontier.push(u.partnerCode);
+        }
+      }
+      frontier = nextFrontier;
+    }
+
+    const represented = collected.filter(
+      (u) => u.role === UserRole.MASTER_PARTNER,
+    );
+    const promoters = collected.filter(
+      (u) => u.role === UserRole.REGIONAL_PARTNER,
+    );
+    const shops = collected.filter((u) => u.role === UserRole.CERTIFIED_SHOP);
+
+    if (viewer.role === UserRole.PARTNER) {
+      return {
+        shops,
+        promoters,
+        represented,
+        partners: [...represented, ...promoters],
+        viewerRole: viewer.role,
+      };
+    }
+
+    if (viewer.role === UserRole.MASTER_PARTNER) {
+      return {
+        shops,
+        promoters,
+        represented: [],
+        partners: promoters,
+        viewerRole: viewer.role,
+      };
+    }
+
+    return empty;
   }
 
-  async updateShopVisibility(shopId: string, isVisibleOnMap: boolean, partnerCode: string): Promise<UserDocument | null> {
-    const query: any = {
+  async isUserInViewerNetwork(
+    viewer: UserDocument,
+    targetUserId: string,
+  ): Promise<boolean> {
+    if (viewer._id.toString() === targetUserId) return true;
+    if (viewer.partnerCode === 'GLOBAL77') return true;
+
+    const network = await this.findNetworkUsersForViewer(viewer);
+    const all = [
+      ...network.shops,
+      ...network.promoters,
+      ...network.represented,
+    ];
+    return all.some((u) => u._id.toString() === targetUserId);
+  }
+
+  /** @deprecated Use findNetworkUsersForViewer */
+  async findReferredShops(partnerCode: string): Promise<{
+    shops: UserDocument[];
+    partners: any[];
+  }> {
+    const viewer = await this.findByPartnerCode(partnerCode);
+    if (!viewer) return { shops: [], partners: [] };
+    const network = await this.findNetworkUsersForViewer(viewer);
+    return { shops: network.shops, partners: network.partners };
+  }
+
+  async updateShopVisibility(
+    shopId: string,
+    isVisibleOnMap: boolean,
+    viewer: UserDocument,
+  ): Promise<UserDocument | null> {
+    const inNetwork = await this.isUserInViewerNetwork(viewer, shopId);
+    if (!inNetwork) return null;
+
+    const shop = await this.userModel.findOne({
       _id: shopId,
-      role: UserRole.CERTIFIED_SHOP
-    };
-
-    if (partnerCode !== 'GLOBAL77') {
-      query.referredByPartnerCode = partnerCode;
-    }
-
-    const shop = await this.userModel.findOne(query);
+      role: UserRole.CERTIFIED_SHOP,
+    });
 
     if (!shop) return null;
 
@@ -519,6 +738,32 @@ export class UsersService implements OnModuleInit {
     if (!shop) throw new BadRequestException('Shop not found');
 
     return shop;
+  }
+
+  private async validateHierarchyLink(
+    role: UserRole,
+    referredByPartnerCode?: string | null,
+  ): Promise<void> {
+    if (!requiresParentLink(role)) {
+      return;
+    }
+
+    const code = referredByPartnerCode?.trim();
+    if (!code) {
+      throw new BadRequestException(`${getParentLinkLabel(role)} is required`);
+    }
+
+    const parent = await this.findByPartnerCode(code);
+    if (!parent) {
+      throw new BadRequestException(
+        `${getParentLinkLabel(role)} is invalid: partner code not found`,
+      );
+    }
+
+    const roleError = validateParentRole(role, parent.role);
+    if (roleError) {
+      throw new BadRequestException(roleError);
+    }
   }
 
   private async getNextCertificateNumber(): Promise<number> {

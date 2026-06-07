@@ -1,0 +1,78 @@
+import { UserRole } from '../users/entities/user.entity';
+
+export const PARTNER_NETWORK_ROLES = [
+  UserRole.PARTNER,
+  UserRole.REGIONAL_PARTNER,
+  UserRole.MASTER_PARTNER,
+] as const;
+
+export const HUB_ID_LABEL = 'Hub ID';
+export const NETWORK_REFERENCE_ID_LABEL = 'Hub, Represented, or Promoter ID';
+
+export function getNetworkIdLabel(role?: string): string {
+  switch (role) {
+    case UserRole.PARTNER:
+    case 'partner':
+      return 'Hub ID';
+    case UserRole.MASTER_PARTNER:
+    case 'master_partner':
+      return 'Represented ID';
+    case UserRole.REGIONAL_PARTNER:
+    case 'regional_partner':
+      return 'Promoter ID';
+    default:
+      return HUB_ID_LABEL;
+  }
+}
+
+export function isPartnerNetworkRole(role?: string): boolean {
+  return PARTNER_NETWORK_ROLES.includes(role as (typeof PARTNER_NETWORK_ROLES)[number]);
+}
+
+export function formatRoleLabel(role?: string): string {
+  switch (role) {
+    case UserRole.PARTNER:
+    case 'partner':
+      return 'Hub';
+    case UserRole.MASTER_PARTNER:
+    case 'master_partner':
+      return 'Represented';
+    case UserRole.REGIONAL_PARTNER:
+    case 'regional_partner':
+      return 'Promoter';
+    case UserRole.CERTIFIED_SHOP:
+    case 'certified_shop':
+      return 'Certified Shop';
+    case UserRole.ADMIN:
+    case 'admin':
+      return 'Admin';
+    default:
+      return role || '';
+  }
+}
+
+export function getRegistrationFeeName(role?: string): string {
+  if (role === UserRole.CERTIFIED_SHOP || role === 'certified_shop') {
+    return 'Shop Registration Fee';
+  }
+  if (role === UserRole.PARTNER || role === 'partner') {
+    return 'Hub Registration Fee';
+  }
+  if (role === UserRole.REGIONAL_PARTNER || role === 'regional_partner') {
+    return 'Promoter Registration Fee';
+  }
+  if (role === UserRole.MASTER_PARTNER || role === 'master_partner') {
+    return 'Represented Registration Fee';
+  }
+  return 'Registration Fee';
+}
+
+export function getRegistrationFeeDescription(role?: string): string {
+  if (role === UserRole.CERTIFIED_SHOP || role === 'certified_shop') {
+    return 'One-time fee to activate your SkyGloss Shop account.';
+  }
+  if (isPartnerNetworkRole(role)) {
+    return `One-time fee to activate your SkyGloss ${formatRoleLabel(role)} account.`;
+  }
+  return 'One-time fee to activate your SkyGloss account.';
+}
