@@ -163,6 +163,7 @@ export class OrdersService {
     try {
       const session = await this.stripe.checkout.sessions.create({
         payment_method_types: ['card'],
+        allow_promotion_codes: true,
         line_items,
         mode: 'payment',
         success_url: `${baseUrl}${success_path}&user_id=${userId}`,
@@ -501,7 +502,7 @@ export class OrdersService {
     return order;
   }
 
-  async createRegistrationOrder(user: any, stripeSessionId?: string, isCouponBypass: boolean = false): Promise<Order> {
+  async createRegistrationOrder(user: any, stripeSessionOrId?: any, isCouponBypass: boolean = false): Promise<Order> {
     // Check if registration order already exists for this user to avoid duplicates
     const existingOrder = await this.orderModel.findOne({
       user: user._id,
@@ -529,9 +530,39 @@ export class OrdersService {
     }
 
     const subtotal = feeAmount + taxAmount;
-    const discount = isCouponBypass ? subtotal : 0;
-    const totalAmount = isCouponBypass ? 0 : subtotal;
-    const couponCode = isCouponBypass ? 'CERTIFICATIONONUS' : undefined;
+    let discount = isCouponBypass ? subtotal : 0;
+    let totalAmount = isCouponBypass ? 0 : subtotal;
+    let couponCode = isCouponBypass ? 'CERTIFICATIONONUS' : undefined;
+    let stripeSessionId: string | undefined = undefined;
+
+    if (stripeSessionOrId) {
+      if (typeof stripeSessionOrId === 'string') {
+        stripeSessionId = stripeSessionOrId;
+        if (this.stripe) {
+          try {
+            const isUsa = user.country?.toLowerCase() === 'united states' || user.country?.toLowerCase() === 'usa';
+            const stripeInstance = this.getStripeForUsaUser(isUsa) || this.stripe;
+            const session = await stripeInstance.checkout.sessions.retrieve(stripeSessionId);
+            if (session) {
+              totalAmount = (session.amount_total || 0) / 100;
+              discount = (session.total_details?.amount_discount || 0) / 100;
+              if (discount > 0.01) {
+                couponCode = 'STRIPECOUPON';
+              }
+            }
+          } catch (stripeErr) {
+            console.error('[Registration Order] Failed to retrieve stripe session details:', stripeErr);
+          }
+        }
+      } else {
+        stripeSessionId = stripeSessionOrId.id;
+        totalAmount = (stripeSessionOrId.amount_total || 0) / 100;
+        discount = (stripeSessionOrId.total_details?.amount_discount || 0) / 100;
+        if (discount > 0.01) {
+          couponCode = 'STRIPECOUPON';
+        }
+      }
+    }
 
     // Prefill shippingAddress using user's details
     const shippingAddress = {
@@ -604,7 +635,7 @@ export class OrdersService {
         let invoiceBuffer: Buffer | undefined;
         let orderNumber: string | undefined;
         try {
-          const regOrder = await this.createRegistrationOrder(updatedUser, session.id, false);
+          const regOrder = await this.createRegistrationOrder(updatedUser, session, false);
           invoiceBuffer = await this.generateInvoicePdf(regOrder);
           orderNumber = regOrder.orderNumber;
         } catch (orderErr) {
@@ -690,10 +721,22 @@ export class OrdersService {
         return { received: true };
       }
 
+      const actualTotal = (session.amount_total || 0) / 100;
+      const actualDiscount = (session.total_details?.amount_discount || 0) / 100;
+      let couponCode = existingOrder?.couponCode;
+      if (actualDiscount > 0.01 && !couponCode) {
+        couponCode = 'STRIPECOUPON';
+      }
+
       const updatedOrder = await this.orderModel
         .findByIdAndUpdate(
           orderId,
-          { status: OrderStatus.PAID },
+          { 
+            status: OrderStatus.PAID,
+            totalAmount: actualTotal,
+            discount: actualDiscount,
+            couponCode
+          },
           { new: true },
         )
         .populate('user', 'firstName lastName email');
@@ -800,7 +843,7 @@ export class OrdersService {
           let invoiceBuffer: Buffer | undefined;
           let orderNumber: string | undefined;
           try {
-            const regOrder = await this.createRegistrationOrder(updatedUser, session.id, false);
+            const regOrder = await this.createRegistrationOrder(updatedUser, session, false);
             invoiceBuffer = await this.generateInvoicePdf(regOrder);
             orderNumber = regOrder.orderNumber;
           } catch (orderErr) {
@@ -856,7 +899,7 @@ export class OrdersService {
           let invoiceBuffer: Buffer | undefined;
           let orderNumber: string | undefined;
           try {
-            const regOrder = await this.createRegistrationOrder(updatedUser, session.id, false);
+            const regOrder = await this.createRegistrationOrder(updatedUser, session, false);
             invoiceBuffer = await this.generateInvoicePdf(regOrder);
             orderNumber = regOrder.orderNumber;
           } catch (orderErr) {
@@ -930,10 +973,22 @@ export class OrdersService {
           return { received: true };
         }
 
+        const actualTotal = (session.amount_total || 0) / 100;
+        const actualDiscount = (session.total_details?.amount_discount || 0) / 100;
+        let couponCode = existingOrder?.couponCode;
+        if (actualDiscount > 0.01 && !couponCode) {
+          couponCode = 'STRIPECOUPON';
+        }
+
         const updatedOrder = await this.orderModel
           .findByIdAndUpdate(
             orderId,
-            { status: OrderStatus.PAID },
+            { 
+              status: OrderStatus.PAID,
+              totalAmount: actualTotal,
+              discount: actualDiscount,
+              couponCode
+            },
             { new: true },
           )
           .populate('user', 'firstName lastName email');
@@ -995,31 +1050,7 @@ export class OrdersService {
     return { received: true };
   }
 
-  async getMyOrders(userId: string): Promise<Order[]> {
-    return this.orderModel
-      .find({ user: userId })
-      .sort({ createdAt: -1 })
-      .exec();
-  }
 
-  async getOrderById(orderId: string, userId: string, role: string): Promise<Order> {
-    const isAdmin = role === 'admin';
-    const order = await this.orderModel
-      .findById(orderId)
-      .populate('user', 'firstName lastName email role country')
-      .exec();
-
-    if (!order) {
-      throw new NotFoundException('Order not found');
-    }
-
-    // Non-admins can only see their own orders
-    if (!isAdmin && String((order as any).user?._id || order.user) !== String(userId)) {
-      throw new ForbiddenException('You do not have permission to view this order');
-    }
-
-    return order;
-  }
 
   async getAllOrders(): Promise<Order[]> {
     return this.orderModel
@@ -1386,6 +1417,7 @@ export class OrdersService {
 
     const session = await stripeInstance.checkout.sessions.create({
       payment_method_types: ['card'],
+      allow_promotion_codes: true,
       line_items,
       mode: 'payment',
       success_url: `${baseUrl}${dashboardPath}?success=true&order_id=${order._id}`,
