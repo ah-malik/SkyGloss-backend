@@ -17,7 +17,7 @@ export class PublicUsersController {
     if (!partnerCode || !/^[A-Z0-9]{4,10}$/.test(partnerCode)) {
       return {
         valid: false,
-        message: 'Hub, Represented, or Promoter ID must be 4-10 alphanumeric characters',
+        message: 'Hub, Distributor, Representative, or Promoter ID must be 4-10 alphanumeric characters',
       };
     }
 
@@ -25,7 +25,12 @@ export class PublicUsersController {
       .findOne({
         partnerCode,
         role: {
-          $in: [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER],
+          $in: [
+            UserRole.MASTER_PARTNER,
+            UserRole.REGIONAL_PARTNER,
+            UserRole.DISTRIBUTOR,
+            UserRole.PARTNER,
+          ],
         },
         status: 'active',
       })
@@ -35,7 +40,7 @@ export class PublicUsersController {
     if (!partner) {
       return {
         valid: false,
-        message: 'This ID was not found. Enter a valid Hub, Represented, or Promoter ID.',
+        message: 'This ID was not found. Enter a valid Hub, Distributor, Representative, or Promoter ID.',
       };
     }
 
@@ -63,7 +68,7 @@ export class PublicUsersController {
         },
         // Approved Partners: Must be ACTIVE
         {
-          role: { $in: [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER] },
+          role: { $in: [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.DISTRIBUTOR, UserRole.PARTNER] },
           status: 'active',
         },
       ],
@@ -80,7 +85,7 @@ export class PublicUsersController {
       city: user.city || '',
       lat: user.latitude,
       lng: user.longitude,
-      type: [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER].includes(user.role) ? 'Partner' : 'shop',
+      type: [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.DISTRIBUTOR, UserRole.PARTNER].includes(user.role) ? 'Partner' : 'shop',
       role: user.role,
       address: user.address || '',
       phoneNumber: user.phoneNumber || '',

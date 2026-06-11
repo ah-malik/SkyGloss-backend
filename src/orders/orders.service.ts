@@ -331,6 +331,7 @@ export class OrdersService {
 
     const networkRoles = [
       UserRole.PARTNER,
+      UserRole.DISTRIBUTOR,
       UserRole.MASTER_PARTNER,
       UserRole.REGIONAL_PARTNER,
     ];
@@ -1173,9 +1174,39 @@ export class OrdersService {
     }
   }
 
-  async updateStatus(id: string, status: OrderStatus, trackingId?: string, shippingCompany?: string): Promise<Order> {
+  async updateStatus(
+    id: string,
+    status: OrderStatus,
+    trackingId?: string,
+    shippingCompany?: string,
+    actor?: UserDocument,
+  ): Promise<Order> {
     const order = await this.orderModel.findById(id).populate('user');
     if (!order) throw new NotFoundException('Order not found');
+
+    if (actor?.role === UserRole.PARTNER) {
+      const orderUserId =
+        typeof order.user === 'object' && order.user !== null && '_id' in (order.user as object)
+          ? String((order.user as any)._id)
+          : String(order.user);
+      const inNetwork = await this.usersService.isUserInViewerNetwork(
+        actor,
+        orderUserId,
+      );
+      if (!inNetwork) {
+        throw new ForbiddenException(
+          'You can only update orders from shops in your network',
+        );
+      }
+    }
+
+    if (status === OrderStatus.SHIPPED) {
+      if (!trackingId?.trim()) {
+        throw new BadRequestException(
+          'Tracking ID is required when marking an order as shipped',
+        );
+      }
+    }
 
     const oldStatus = order.status;
     order.status = status;
@@ -1449,7 +1480,7 @@ export class OrdersService {
   }
 
   private getDashboardPath(role?: string): string {
-    const isPartner = ['master_partner', 'regional_partner', 'partner'].includes(
+    const isPartner = ['master_partner', 'regional_partner', 'distributor', 'partner'].includes(
       role || '',
     );
     return isPartner ? '/dashboard/partner' : '/dashboard/shop';

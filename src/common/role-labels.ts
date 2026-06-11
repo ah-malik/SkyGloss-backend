@@ -2,21 +2,26 @@ import { UserRole } from '../users/entities/user.entity';
 
 export const PARTNER_NETWORK_ROLES = [
   UserRole.PARTNER,
-  UserRole.REGIONAL_PARTNER,
+  UserRole.DISTRIBUTOR,
   UserRole.MASTER_PARTNER,
+  UserRole.REGIONAL_PARTNER,
 ] as const;
 
 export const HUB_ID_LABEL = 'Hub ID';
-export const NETWORK_REFERENCE_ID_LABEL = 'Hub, Represented, or Promoter ID';
+export const NETWORK_REFERENCE_ID_LABEL =
+  'Hub, Distributor, Representative, or Promoter ID';
 
 export function getNetworkIdLabel(role?: string): string {
   switch (role) {
     case UserRole.PARTNER:
     case 'partner':
       return 'Hub ID';
+    case UserRole.DISTRIBUTOR:
+    case 'distributor':
+      return 'Distributor ID';
     case UserRole.MASTER_PARTNER:
     case 'master_partner':
-      return 'Represented ID';
+      return 'Representative ID';
     case UserRole.REGIONAL_PARTNER:
     case 'regional_partner':
       return 'Promoter ID';
@@ -34,9 +39,12 @@ export function formatRoleLabel(role?: string): string {
     case UserRole.PARTNER:
     case 'partner':
       return 'Hub';
+    case UserRole.DISTRIBUTOR:
+    case 'distributor':
+      return 'Distributor';
     case UserRole.MASTER_PARTNER:
     case 'master_partner':
-      return 'Represented';
+      return 'Representative';
     case UserRole.REGIONAL_PARTNER:
     case 'regional_partner':
       return 'Promoter';
@@ -58,11 +66,14 @@ export function getRegistrationFeeName(role?: string): string {
   if (role === UserRole.PARTNER || role === 'partner') {
     return 'Hub Registration Fee';
   }
+  if (role === UserRole.DISTRIBUTOR || role === 'distributor') {
+    return 'Distributor Registration Fee';
+  }
   if (role === UserRole.REGIONAL_PARTNER || role === 'regional_partner') {
     return 'Promoter Registration Fee';
   }
   if (role === UserRole.MASTER_PARTNER || role === 'master_partner') {
-    return 'Represented Registration Fee';
+    return 'Representative Registration Fee';
   }
   return 'Registration Fee';
 }

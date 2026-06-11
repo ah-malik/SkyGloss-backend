@@ -1,8 +1,8 @@
 import { UserRole } from '../users/entities/user.entity';
 
-export const PROMOTER_COMMISSION_RATE = 0.2;
-export const REPRESENTED_WITH_PROMOTER_RATE = 0.1;
-export const REPRESENTED_SOLO_RATE = 0.3;
+export const REPRESENTATIVE_COMMISSION_RATE = 0.2;
+export const PROMOTER_COMMISSION_RATE = 0.1;
+export const REPRESENTATIVE_SOLO_RATE = 0.2;
 
 export interface CommissionChain {
   promoter: { _id: string; partnerCode: string; role: string } | null;
@@ -38,7 +38,7 @@ function toNetworkUser(user: {
   };
 }
 
-/** Walk shop → parent chain to find Promoter and Represented recipients. */
+/** Walk shop → parent chain to find Promoter and Representative recipients. */
 export async function resolveShopCommissionChain(
   shop: { referredByPartnerCode?: string },
   lookup: NetworkUserLookup,
@@ -104,18 +104,18 @@ export function calculateCommissionEntries(
   if (chain.promoter && chain.represented) {
     return [
       {
+        recipientUserId: chain.represented._id,
+        recipientPartnerCode: chain.represented.partnerCode,
+        recipientRole: chain.represented.role,
+        percentage: REPRESENTATIVE_COMMISSION_RATE * 100,
+        amount: amount(REPRESENTATIVE_COMMISSION_RATE),
+      },
+      {
         recipientUserId: chain.promoter._id,
         recipientPartnerCode: chain.promoter.partnerCode,
         recipientRole: chain.promoter.role,
         percentage: PROMOTER_COMMISSION_RATE * 100,
         amount: amount(PROMOTER_COMMISSION_RATE),
-      },
-      {
-        recipientUserId: chain.represented._id,
-        recipientPartnerCode: chain.represented.partnerCode,
-        recipientRole: chain.represented.role,
-        percentage: REPRESENTED_WITH_PROMOTER_RATE * 100,
-        amount: amount(REPRESENTED_WITH_PROMOTER_RATE),
       },
     ];
   }
@@ -126,8 +126,8 @@ export function calculateCommissionEntries(
         recipientUserId: chain.represented._id,
         recipientPartnerCode: chain.represented.partnerCode,
         recipientRole: chain.represented.role,
-        percentage: REPRESENTED_SOLO_RATE * 100,
-        amount: amount(REPRESENTED_SOLO_RATE),
+        percentage: REPRESENTATIVE_SOLO_RATE * 100,
+        amount: amount(REPRESENTATIVE_SOLO_RATE),
       },
     ];
   }

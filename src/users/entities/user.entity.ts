@@ -7,6 +7,7 @@ export enum UserRole {
   ADMIN = 'admin',
   MASTER_PARTNER = 'master_partner',
   REGIONAL_PARTNER = 'regional_partner',
+  DISTRIBUTOR = 'distributor',
   PARTNER = 'partner',
   CERTIFIED_SHOP = 'certified_shop',
 }

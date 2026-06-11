@@ -3,10 +3,12 @@ import { formatRoleLabel } from './role-labels';
 
 /** Roles that must be linked to a parent network user via referredByPartnerCode. */
 export const HIERARCHY_PARENT_ROLES: Partial<Record<UserRole, UserRole[]>> = {
-  [UserRole.MASTER_PARTNER]: [UserRole.PARTNER],
+  [UserRole.DISTRIBUTOR]: [UserRole.PARTNER],
+  [UserRole.MASTER_PARTNER]: [UserRole.DISTRIBUTOR, UserRole.PARTNER],
   [UserRole.REGIONAL_PARTNER]: [UserRole.MASTER_PARTNER],
   [UserRole.CERTIFIED_SHOP]: [
     UserRole.PARTNER,
+    UserRole.DISTRIBUTOR,
     UserRole.MASTER_PARTNER,
     UserRole.REGIONAL_PARTNER,
   ],
@@ -23,10 +25,12 @@ export function getAllowedParentRoles(childRole?: string): UserRole[] {
 
 export function getParentLinkLabel(childRole?: string): string {
   switch (childRole) {
-    case UserRole.MASTER_PARTNER:
+    case UserRole.DISTRIBUTOR:
       return 'Assigned Hub';
+    case UserRole.MASTER_PARTNER:
+      return 'Assigned Distributor';
     case UserRole.REGIONAL_PARTNER:
-      return 'Assigned Represented';
+      return 'Assigned Representative';
     case UserRole.CERTIFIED_SHOP:
       return 'Assigned Network User';
     default:
@@ -36,6 +40,7 @@ export function getParentLinkLabel(childRole?: string): string {
 
 export const NETWORK_TRAVERSAL_ROLES = [
   UserRole.PARTNER,
+  UserRole.DISTRIBUTOR,
   UserRole.MASTER_PARTNER,
   UserRole.REGIONAL_PARTNER,
 ] as const;

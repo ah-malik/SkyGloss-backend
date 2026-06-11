@@ -30,6 +30,7 @@ export class OrdersController {
     UserRole.PARTNER,
     UserRole.REGIONAL_PARTNER,
     UserRole.MASTER_PARTNER,
+    UserRole.DISTRIBUTOR,
   )
   createCheckoutSession(
     @GetUser('_id') userId: string,
@@ -65,6 +66,7 @@ export class OrdersController {
     UserRole.PARTNER,
     UserRole.REGIONAL_PARTNER,
     UserRole.MASTER_PARTNER,
+    UserRole.DISTRIBUTOR,
   )
   getMyOrders(@GetUser('_id') userId: string) {
     return this.ordersService.getMyOrders(userId);
@@ -76,6 +78,7 @@ export class OrdersController {
     UserRole.PARTNER,
     UserRole.REGIONAL_PARTNER,
     UserRole.MASTER_PARTNER,
+    UserRole.DISTRIBUTOR,
   )
   async getNetworkOrders(@GetUser() user: any) {
     try {
@@ -93,6 +96,7 @@ export class OrdersController {
     UserRole.PARTNER,
     UserRole.REGIONAL_PARTNER,
     UserRole.MASTER_PARTNER,
+    UserRole.DISTRIBUTOR,
     UserRole.ADMIN,
   )
   getOrderById(@Param('id') id: string, @GetUser() user: UserDocument) {
@@ -106,6 +110,7 @@ export class OrdersController {
     UserRole.PARTNER,
     UserRole.REGIONAL_PARTNER,
     UserRole.MASTER_PARTNER,
+    UserRole.DISTRIBUTOR,
   )
   payForOrder(
     @Param('id') id: string,
@@ -122,6 +127,7 @@ export class OrdersController {
     UserRole.PARTNER,
     UserRole.REGIONAL_PARTNER,
     UserRole.MASTER_PARTNER,
+    UserRole.DISTRIBUTOR,
   )
   verifyPayment(@Param('orderId') orderId: string) {
     return this.ordersService.verifyPayment(orderId);
@@ -138,14 +144,21 @@ export class OrdersController {
 
   @Post('admin/:id/status')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.PARTNER)
   updateStatus(
-    @Param('id') id: string, 
+    @Param('id') id: string,
     @Body('status') status: any,
     @Body('trackingId') trackingId?: string,
-    @Body('shippingCompany') shippingCompany?: string
+    @Body('shippingCompany') shippingCompany?: string,
+    @GetUser() user?: UserDocument,
   ) {
-    return this.ordersService.updateStatus(id, status, trackingId, shippingCompany);
+    return this.ordersService.updateStatus(
+      id,
+      status,
+      trackingId,
+      shippingCompany,
+      user,
+    );
   }
 
   @Delete('admin/:id')
@@ -205,6 +218,7 @@ export class OrdersController {
   @Roles(
     UserRole.ADMIN,
     UserRole.MASTER_PARTNER,
+    UserRole.DISTRIBUTOR,
     UserRole.REGIONAL_PARTNER,
     UserRole.PARTNER,
     UserRole.CERTIFIED_SHOP,

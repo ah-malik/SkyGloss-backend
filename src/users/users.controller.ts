@@ -64,6 +64,7 @@ export class UsersController {
     UserRole.ADMIN,
     UserRole.MASTER_PARTNER,
     UserRole.REGIONAL_PARTNER,
+    UserRole.DISTRIBUTOR,
     UserRole.PARTNER,
   )
   findAll() {
@@ -72,7 +73,7 @@ export class UsersController {
 
 
   @Get('referred-shops')
-  @Roles(UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER)
+  @Roles(UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.DISTRIBUTOR, UserRole.PARTNER)
   async getReferredShops(@GetUser() user: UserDocument) {
     return this.usersService.findNetworkUsersForViewer(user);
   }
@@ -138,7 +139,7 @@ export class UsersController {
   }
 
   @Patch('referred-shops/:id/visibility')
-  @Roles(UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER)
+  @Roles(UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.DISTRIBUTOR, UserRole.PARTNER)
   async updateReferredShopVisibility(
     @Param('id') id: string,
     @Body('isVisibleOnMap') isVisibleOnMap: boolean,
@@ -172,7 +173,7 @@ export class UsersController {
   }
 
   @Patch(':id')
-  @Roles(UserRole.ADMIN, UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER, UserRole.CERTIFIED_SHOP)
+  @Roles(UserRole.ADMIN, UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.DISTRIBUTOR, UserRole.PARTNER, UserRole.CERTIFIED_SHOP)
   update(
     @Param('id') id: string,
     @Body() updateUserDto: UpdateUserDto,

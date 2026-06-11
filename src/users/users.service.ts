@@ -23,7 +23,10 @@ import {
 export interface NetworkUsersResult {
   shops: UserDocument[];
   promoters: UserDocument[];
+  representatives: UserDocument[];
+  /** @deprecated use representatives */
   represented: UserDocument[];
+  distributors: UserDocument[];
   partners: UserDocument[];
   viewerRole: string;
 }
@@ -154,10 +157,11 @@ export class UsersService implements OnModuleInit {
       );
     }
 
-    // Validate partner network code for Represented users
+    // Validate partner network code for network role users
     const partnerRoles = [
       UserRole.MASTER_PARTNER,
       UserRole.REGIONAL_PARTNER,
+      UserRole.DISTRIBUTOR,
       UserRole.PARTNER,
     ];
 
@@ -279,7 +283,7 @@ export class UsersService implements OnModuleInit {
         !canCertifyShops(currentUser.role, currentUser.partnerCode)
       ) {
         throw new ForbiddenException(
-          'Only Hub users can certify shops. Represented and Promoter users have view-only access.',
+          'Only Hub users can certify shops. Distributor, Representative, and Promoter users have view-only access.',
         );
       }
 
@@ -326,6 +330,7 @@ export class UsersService implements OnModuleInit {
     const partnerRoles = [
       UserRole.MASTER_PARTNER,
       UserRole.REGIONAL_PARTNER,
+      UserRole.DISTRIBUTOR,
       UserRole.PARTNER,
     ];
 
@@ -478,6 +483,9 @@ export class UsersService implements OnModuleInit {
     const master_partner = await this.userModel.countDocuments({
       role: UserRole.MASTER_PARTNER,
     });
+    const distributor = await this.userModel.countDocuments({
+      role: UserRole.DISTRIBUTOR,
+    });
     const regional_partner = await this.userModel.countDocuments({
       role: UserRole.REGIONAL_PARTNER,
     });
@@ -492,6 +500,7 @@ export class UsersService implements OnModuleInit {
       total,
       admin,
       master_partner,
+      distributor,
       regional_partner,
       partner,
       certified_shop,
@@ -547,8 +556,9 @@ export class UsersService implements OnModuleInit {
 
   /**
    * Returns users visible to the viewer based on hierarchy:
-   * Hub → Represented, Promoter, Shop (full subtree)
-   * Represented → Promoter, Shop (subtree)
+   * Hub → Distributor, Representative, Promoter, Shop (full subtree)
+   * Distributor → Representative, Promoter, Shop (subtree)
+   * Representative → Promoter, Shop (subtree)
    * Promoter → Shop (direct only)
    */
   async findNetworkUsersForViewer(
@@ -557,7 +567,9 @@ export class UsersService implements OnModuleInit {
     const empty: NetworkUsersResult = {
       shops: [],
       promoters: [],
+      representatives: [],
       represented: [],
+      distributors: [],
       partners: [],
       viewerRole: viewer.role,
     };
@@ -572,10 +584,19 @@ export class UsersService implements OnModuleInit {
         .find({ role: UserRole.CERTIFIED_SHOP })
         .exec();
       const partners = await this.findAllPartners();
+      const distributors = partners.filter((p) => p.role === UserRole.DISTRIBUTOR);
+      const representatives = partners.filter(
+        (p) => p.role === UserRole.MASTER_PARTNER,
+      );
+      const promoters = partners.filter(
+        (p) => p.role === UserRole.REGIONAL_PARTNER,
+      );
       return {
         shops,
-        represented: partners.filter((p) => p.role === UserRole.MASTER_PARTNER),
-        promoters: partners.filter((p) => p.role === UserRole.REGIONAL_PARTNER),
+        distributors,
+        representatives,
+        represented: representatives,
+        promoters,
         partners,
         viewerRole: viewer.role,
       };
@@ -614,7 +635,8 @@ export class UsersService implements OnModuleInit {
       frontier = nextFrontier;
     }
 
-    const represented = collected.filter(
+    const distributors = collected.filter((u) => u.role === UserRole.DISTRIBUTOR);
+    const representatives = collected.filter(
       (u) => u.role === UserRole.MASTER_PARTNER,
     );
     const promoters = collected.filter(
@@ -626,8 +648,22 @@ export class UsersService implements OnModuleInit {
       return {
         shops,
         promoters,
-        represented,
-        partners: [...represented, ...promoters],
+        distributors,
+        representatives,
+        represented: representatives,
+        partners: [...distributors, ...representatives, ...promoters],
+        viewerRole: viewer.role,
+      };
+    }
+
+    if (viewer.role === UserRole.DISTRIBUTOR) {
+      return {
+        shops,
+        promoters,
+        distributors: [],
+        representatives,
+        represented: representatives,
+        partners: [...representatives, ...promoters],
         viewerRole: viewer.role,
       };
     }
@@ -636,6 +672,8 @@ export class UsersService implements OnModuleInit {
       return {
         shops,
         promoters,
+        distributors: [],
+        representatives: [],
         represented: [],
         partners: promoters,
         viewerRole: viewer.role,
@@ -656,7 +694,9 @@ export class UsersService implements OnModuleInit {
     const all = [
       ...network.shops,
       ...network.promoters,
+      ...network.representatives,
       ...network.represented,
+      ...network.distributors,
     ];
     return all.some((u) => u._id.toString() === targetUserId);
   }
@@ -713,8 +753,15 @@ export class UsersService implements OnModuleInit {
   async findAllPartners() {
     this.logger.log('Fetching all partners for list...');
     const partners = await this.userModel.find({
-      role: { $in: [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER] },
-    }).select('firstName lastName partnerCode email status').sort({ firstName: 1 });
+      role: {
+        $in: [
+          UserRole.MASTER_PARTNER,
+          UserRole.REGIONAL_PARTNER,
+          UserRole.DISTRIBUTOR,
+          UserRole.PARTNER,
+        ],
+      },
+    }).select('firstName lastName partnerCode email status role').sort({ firstName: 1 });
     this.logger.log(`Found ${partners.length} partners.`);
     return partners;
   }
@@ -723,7 +770,14 @@ export class UsersService implements OnModuleInit {
     // 1. Verify Partner exists
     const partner = await this.userModel.findOne({
       partnerCode,
-      role: { $in: [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.PARTNER] }
+      role: {
+        $in: [
+          UserRole.MASTER_PARTNER,
+          UserRole.REGIONAL_PARTNER,
+          UserRole.DISTRIBUTOR,
+          UserRole.PARTNER,
+        ],
+      }
     });
     if (!partner) throw new BadRequestException('Invalid Partner Code');
 
