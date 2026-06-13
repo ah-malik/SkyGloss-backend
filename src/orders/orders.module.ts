@@ -10,6 +10,7 @@ import { MailModule } from '../mail/mail.module';
 import { ProductGroup, ProductGroupSchema } from '../product-groups/entities/product-group.entity';
 import { RegistrationFeesModule } from '../registration-fees/registration-fees.module';
 import { PdfModule } from '../pdf/pdf.module';
+import { ExchangeRatesModule } from '../exchange-rates/exchange-rates.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { PdfModule } from '../pdf/pdf.module';
     MailModule,
     RegistrationFeesModule,
     forwardRef(() => PdfModule),
+    ExchangeRatesModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService, OrdersSchedulerService],

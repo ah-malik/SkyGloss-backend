@@ -5,6 +5,8 @@ import {
   ForbiddenException,
   Inject,
   forwardRef,
+  OnModuleInit,
+  Logger,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -36,6 +38,16 @@ import {
   calculateCommissionEntries,
   resolveShopCommissionChain,
 } from '../common/commission-distribution';
+import { ExchangeRatesService } from '../exchange-rates/exchange-rates.service';
+import {
+  buildLockedMonetaryFields,
+  recalculateBaseWithLockedRate,
+  SALES_REPORT_STATUSES,
+  SYSTEM_BASE_CURRENCY,
+  EFFECTIVE_BASE_AMOUNT_EXPR,
+  EFFECTIVE_ORIGINAL_AMOUNT_EXPR,
+  EFFECTIVE_ORIGINAL_CURRENCY_EXPR,
+} from '../common/order-monetary';
 
 const USA_COUNTRIES = ['united states', 'usa', 'us', 'united states of america'];
 const PENDING_PAYMENT_CANCEL_DAYS = 3;
@@ -45,7 +57,8 @@ const PAYMENT_REMINDER_INTERVALS_MS = [
 ];
 
 @Injectable()
-export class OrdersService {
+export class OrdersService implements OnModuleInit {
+  private readonly logger = new Logger(OrdersService.name);
   private stripe: Stripe;
   private usaStripe: Stripe;
 
@@ -60,6 +73,7 @@ export class OrdersService {
     private registrationFeesService: RegistrationFeesService,
     @Inject(forwardRef(() => PdfService))
     private pdfService: PdfService,
+    private exchangeRatesService: ExchangeRatesService,
   ) {
     const stripeSecretKey = this.configService.get<string>('STRIPE_SECRET_KEY');
     const usaStripeSecretKey = this.configService.get<string>('USA_STRIPE_SECRET_KEY');
@@ -82,6 +96,70 @@ export class OrdersService {
       this.usaStripe = new Stripe(usaStripeSecretKey, {
         apiVersion: stripeApiVersion as Stripe.LatestApiVersion,
       });
+    }
+  }
+
+  async onModuleInit() {
+    await this.repairBrokenFxOrders();
+  }
+
+  /** Fix orders where FX rate was rounded to 0 (e.g. PKR 0.0036 → 0). */
+  private async repairBrokenFxOrders(): Promise<void> {
+    const candidates = await this.orderModel
+      .find({
+        $or: [
+          { exchangeRateAtOrderTime: 0 },
+          {
+            baseCurrencyAmount: 0,
+            totalAmount: { $gt: 0 },
+            $expr: {
+              $ne: [
+                { $toUpper: { $ifNull: ['$originalCurrency', '$currency'] } },
+                'USD',
+              ],
+            },
+          },
+        ],
+      })
+      .limit(500)
+      .exec();
+
+    let repaired = 0;
+    for (const order of candidates) {
+      const currency = (
+        order.originalCurrency ||
+        order.currency ||
+        ''
+      ).toUpperCase();
+      if (!currency || currency === SYSTEM_BASE_CURRENCY) continue;
+
+      const amount = order.originalAmount ?? order.totalAmount;
+      if (!amount || amount <= 0) continue;
+
+      try {
+        const rate = await this.exchangeRatesService.getRateToBase(currency);
+        if (rate <= 0) continue;
+
+        const fields = buildLockedMonetaryFields(amount, currency, rate);
+        if (
+          order.exchangeRateAtOrderTime === fields.exchangeRateAtOrderTime &&
+          order.baseCurrencyAmount === fields.baseCurrencyAmount
+        ) {
+          continue;
+        }
+
+        await this.orderModel.updateOne({ _id: order._id }, { $set: fields });
+        repaired++;
+      } catch (err) {
+        this.logger.warn(
+          `Could not repair FX fields for order ${order.orderNumber}:`,
+          err,
+        );
+      }
+    }
+
+    if (repaired > 0) {
+      this.logger.log(`Repaired FX fields on ${repaired} order(s)`);
     }
   }
 
@@ -111,6 +189,115 @@ export class OrdersService {
       }
     }
     return orderCurrency;
+  }
+
+  private async buildMonetaryFieldsForNewOrder(
+    totalAmount: number,
+    currency: string,
+  ) {
+    const rate = await this.exchangeRatesService.getRateToBase(currency);
+    return buildLockedMonetaryFields(totalAmount, currency, rate);
+  }
+
+  private buildAmountUpdateWithLockedRate(
+    existingOrder: OrderDocument | null | undefined,
+    newTotal: number,
+  ) {
+    if (
+      existingOrder?.exchangeRateAtOrderTime != null &&
+      existingOrder.exchangeRateAtOrderTime > 0
+    ) {
+      return recalculateBaseWithLockedRate(
+        newTotal,
+        existingOrder.exchangeRateAtOrderTime,
+      );
+    }
+    return {
+      totalAmount: newTotal,
+      originalAmount: newTotal,
+    };
+  }
+
+  private async computeSalesReport(matchFilter: Record<string, unknown> = {}) {
+    const statusMatch = {
+      status: { $in: [...SALES_REPORT_STATUSES] },
+      ...matchFilter,
+    };
+
+    const [totalRevenueResult, currencyGroups, dailySales] = await Promise.all([
+      this.orderModel.aggregate([
+        { $match: statusMatch },
+        { $group: { _id: null, total: { $sum: EFFECTIVE_BASE_AMOUNT_EXPR } } },
+      ]),
+      this.orderModel.aggregate([
+        { $match: statusMatch },
+        {
+          $group: {
+            _id: EFFECTIVE_ORIGINAL_CURRENCY_EXPR,
+            orderCount: { $sum: 1 },
+            originalTotal: { $sum: EFFECTIVE_ORIGINAL_AMOUNT_EXPR },
+            baseTotal: { $sum: EFFECTIVE_BASE_AMOUNT_EXPR },
+          },
+        },
+      ]),
+      this.orderModel.aggregate([
+        {
+          $match: {
+            ...statusMatch,
+            createdAt: {
+              $gte: (() => {
+                const d = new Date();
+                d.setDate(d.getDate() - 7);
+                d.setHours(0, 0, 0, 0);
+                return d;
+              })(),
+            },
+          },
+        },
+        {
+          $group: {
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+            sales: { $sum: EFFECTIVE_BASE_AMOUNT_EXPR },
+          },
+        },
+        { $sort: { _id: 1 } },
+      ]),
+    ]);
+
+    const totalRevenue = totalRevenueResult[0]?.total || 0;
+
+    const currencyBreakdown = currencyGroups
+      .filter((group) => group.orderCount > 0 && group._id)
+      .map((group) => ({
+        currency: String(group._id).toUpperCase(),
+        orderCount: group.orderCount,
+        originalTotal: group.originalTotal,
+        baseTotal: group.baseTotal,
+      }))
+      .sort(
+        (a, b) =>
+          b.originalTotal - a.originalTotal ||
+          a.currency.localeCompare(b.currency),
+      );
+
+    const chartData: { date: string; sales: number }[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toISOString().split('T')[0];
+      const found = dailySales.find((day) => day._id === dateStr);
+      chartData.push({
+        date: dateStr,
+        sales: found ? found.sales : 0,
+      });
+    }
+
+    return {
+      totalRevenue,
+      baseCurrency: SYSTEM_BASE_CURRENCY,
+      currencyBreakdown,
+      chartData,
+    };
   }
 
   async createDistributorFeeCheckoutSession(userId: string, email: string, additionalMetadata: any = {}) {
@@ -244,16 +431,19 @@ export class OrdersService {
     while (retries > 0) {
       try {
         const orderNumber = await this.generateOrderNumber('SG');
+        const monetary = await this.buildMonetaryFieldsForNewOrder(
+          itemsSubtotal + shippingFee,
+          orderCurrency,
+        );
         order = new this.orderModel({
           user: userId,
           items,
-          totalAmount: itemsSubtotal + shippingFee,
           shippingFee,
           shippingAddress,
           status: isUsaUser ? OrderStatus.PENDING_PAYMENT : OrderStatus.PENDING,
           orderNumber,
-          currency: orderCurrency.toUpperCase(),
           paymentReminderCount: 0,
+          ...monetary,
         });
         await order.save();
         break;
@@ -622,6 +812,7 @@ export class OrdersService {
     };
 
     const orderNumber = await this.generateOrderNumber('REG');
+    const monetary = await this.buildMonetaryFieldsForNewOrder(totalAmount, currency);
 
     const order = new this.orderModel({
       user: user._id,
@@ -634,14 +825,13 @@ export class OrdersService {
           price: subtotal,
         }
       ],
-      totalAmount,
       discount,
       couponCode,
       shippingAddress,
       status: OrderStatus.PAID,
       orderNumber,
-      currency,
       stripeSessionId,
+      ...monetary,
     });
 
     console.log(`[Registration Order] Creating registration order ${orderNumber} for user ${user._id}`);
@@ -770,14 +960,19 @@ export class OrdersService {
         couponCode = 'STRIPECOUPON';
       }
 
+      const amountUpdate = this.buildAmountUpdateWithLockedRate(
+        existingOrder,
+        actualTotal,
+      );
+
       const updatedOrder = await this.orderModel
         .findByIdAndUpdate(
           orderId,
           { 
             status: OrderStatus.PAID,
-            totalAmount: actualTotal,
             discount: actualDiscount,
-            couponCode
+            couponCode,
+            ...amountUpdate,
           },
           { new: true },
         )
@@ -1027,14 +1222,19 @@ export class OrdersService {
           couponCode = 'STRIPECOUPON';
         }
 
+        const amountUpdate = this.buildAmountUpdateWithLockedRate(
+          existingOrder,
+          actualTotal,
+        );
+
         const updatedOrder = await this.orderModel
           .findByIdAndUpdate(
             orderId,
             { 
               status: OrderStatus.PAID,
-              totalAmount: actualTotal,
               discount: actualDiscount,
-              couponCode
+              couponCode,
+              ...amountUpdate,
             },
             { new: true },
           )
@@ -1112,14 +1312,54 @@ export class OrdersService {
   }
 
   async getNetworkOrders(viewer: UserDocument): Promise<Order[]> {
-    const { shops } = await this.usersService.findNetworkUsersForViewer(viewer);
-    const shopIds = shops.map((shop) => shop._id);
-    
+    const userIds = await this.getNetworkOrderUserIds(viewer);
+    if (userIds.length === 0) {
+      return [];
+    }
+
     return await this.orderModel
-      .find({ user: { $in: shopIds } } as any)
-      .populate('user', 'firstName lastName email shopName role couponCode')
+      .find({ user: { $in: userIds } } as any)
+      .populate(
+        'user',
+        'firstName lastName email shopName role couponCode partnerCode',
+      )
       .sort({ createdAt: -1 })
       .exec();
+  }
+
+  async getNetworkSalesStats(viewer: UserDocument) {
+    const userIds = await this.getNetworkOrderUserIds(viewer);
+    if (userIds.length === 0) {
+      return {
+        totalRevenue: 0,
+        baseCurrency: SYSTEM_BASE_CURRENCY,
+        currencyBreakdown: [],
+      };
+    }
+    return this.computeSalesReport({ user: { $in: userIds } });
+  }
+
+  private async getNetworkOrderUserIds(
+    viewer: UserDocument,
+  ): Promise<string[]> {
+    const network = await this.usersService.findNetworkUsersForViewer(viewer);
+    const idSet = new Set<string>();
+
+    const addUser = (u?: { _id?: unknown }) => {
+      if (u?._id) {
+        idSet.add(String(u._id));
+      }
+    };
+
+    network.shops.forEach(addUser);
+    network.promoters.forEach(addUser);
+    network.representatives.forEach(addUser);
+    network.represented?.forEach(addUser);
+    network.distributors.forEach(addUser);
+    network.partners?.forEach(addUser);
+    addUser(viewer);
+
+    return Array.from(idSet);
   }
 
   async applyOrderCommissions(
@@ -1298,15 +1538,18 @@ export class OrdersService {
       while (retries > 0) {
         try {
           const orderNumber = await this.generateOrderNumber('REQ-');
+          const monetary = await this.buildMonetaryFieldsForNewOrder(
+            finalAmount,
+            orderCurrency || 'usd',
+          );
           const order = new this.orderModel({
             user: userId,
             items,
-            totalAmount: finalAmount,
             shippingFee,
             shippingAddress,
             status: OrderStatus.PENDING,
             orderNumber,
-            currency: (orderCurrency || 'usd').toUpperCase(),
+            ...monetary,
           });
           savedOrder = await order.save();
           break;
@@ -1361,59 +1604,32 @@ export class OrdersService {
   }
 
   async getDashboardStats() {
-    // 1. Recent Orders (5)
     const recentOrders = await this.orderModel
       .find()
       .sort({ createdAt: -1 })
       .limit(5)
       .populate('user', 'firstName lastName email');
 
-    // 2. Total Revenue (Paid only)
-    const totalRevenueResult = await this.orderModel.aggregate([
-      { $match: { status: OrderStatus.PAID } },
-      { $group: { _id: null, total: { $sum: '$totalAmount' } } },
-    ]);
-    const totalRevenue = totalRevenueResult[0]?.total || 0;
-
-    // 3. Daily Sales (Last 7 Days)
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    sevenDaysAgo.setHours(0, 0, 0, 0);
-
-    const dailySales = await this.orderModel.aggregate([
-      {
-        $match: {
-          status: OrderStatus.PAID,
-          createdAt: { $gte: sevenDaysAgo },
-        },
-      },
-      {
-        $group: {
-          _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
-          sales: { $sum: '$totalAmount' },
-        },
-      },
-      { $sort: { _id: 1 } },
-    ]);
-
-    // Fill in missing days
-    const chartData: { date: string; sales: number }[] = [];
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const dateStr = d.toISOString().split('T')[0];
-      const found = dailySales.find((day) => day._id === dateStr);
-      chartData.push({
-        date: dateStr,
-        sales: found ? found.sales : 0,
-      });
-    }
+    const salesReport = await this.computeSalesReport();
 
     return {
       recentOrders,
-      totalRevenue,
-      chartData,
+      totalRevenue: salesReport.totalRevenue,
+      baseCurrency: salesReport.baseCurrency,
+      currencyBreakdown: salesReport.currencyBreakdown,
+      chartData: salesReport.chartData,
     };
+  }
+
+  async getExchangeRates() {
+    return this.exchangeRatesService.getAllRates();
+  }
+
+  async updateExchangeRate(currency: string, rateToBase: number) {
+    if (!currency || typeof rateToBase !== 'number' || rateToBase <= 0) {
+      throw new BadRequestException('Valid currency and rateToBase are required');
+    }
+    return this.exchangeRatesService.updateRate(currency, rateToBase);
   }
 
   async deleteOrder(id: string): Promise<{ success: boolean }> {

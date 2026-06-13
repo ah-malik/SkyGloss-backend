@@ -101,6 +101,25 @@ export class Order {
   @Prop({ default: 'USD' })
   currency: string;
 
+  /** Currency the customer was charged in (locked at order creation). */
+  @Prop()
+  originalCurrency?: string;
+
+  /** Amount in original currency (locked at order creation). */
+  @Prop()
+  originalAmount?: number;
+
+  /** 1 originalCurrency = X baseCurrency at order time (never updated). */
+  @Prop()
+  exchangeRateAtOrderTime?: number;
+
+  @Prop({ default: 'USD' })
+  baseCurrency?: string;
+
+  /** Order value converted to base currency using locked rate. */
+  @Prop()
+  baseCurrencyAmount?: number;
+
   @Prop({ default: 0 })
   discount?: number;
 

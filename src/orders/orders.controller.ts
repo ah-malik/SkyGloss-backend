@@ -89,6 +89,18 @@ export class OrdersController {
     }
   }
 
+  @Get('network-sales-stats')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    UserRole.PARTNER,
+    UserRole.REGIONAL_PARTNER,
+    UserRole.MASTER_PARTNER,
+    UserRole.DISTRIBUTOR,
+  )
+  getNetworkSalesStats(@GetUser() user: UserDocument) {
+    return this.ordersService.getNetworkSalesStats(user);
+  }
+
   @Get(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -173,6 +185,23 @@ export class OrdersController {
   @Roles(UserRole.ADMIN)
   getDashboardStats() {
     return this.ordersService.getDashboardStats();
+  }
+
+  @Get('admin/exchange-rates')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  getExchangeRates() {
+    return this.ordersService.getExchangeRates();
+  }
+
+  @Post('admin/exchange-rates')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  updateExchangeRate(
+    @Body('currency') currency: string,
+    @Body('rateToBase') rateToBase: number,
+  ) {
+    return this.ordersService.updateExchangeRate(currency, rateToBase);
   }
 
   @Post('webhook')
