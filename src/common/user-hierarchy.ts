@@ -6,11 +6,13 @@ export const HIERARCHY_PARENT_ROLES: Partial<Record<UserRole, UserRole[]>> = {
   [UserRole.DISTRIBUTOR]: [UserRole.PARTNER],
   [UserRole.MASTER_PARTNER]: [UserRole.DISTRIBUTOR, UserRole.PARTNER],
   [UserRole.REGIONAL_PARTNER]: [UserRole.MASTER_PARTNER],
+  [UserRole.SUB_PROMOTER]: [UserRole.REGIONAL_PARTNER],
   [UserRole.CERTIFIED_SHOP]: [
     UserRole.PARTNER,
     UserRole.DISTRIBUTOR,
     UserRole.MASTER_PARTNER,
     UserRole.REGIONAL_PARTNER,
+    UserRole.SUB_PROMOTER,
   ],
 };
 
@@ -31,6 +33,8 @@ export function getParentLinkLabel(childRole?: string): string {
       return 'Assigned Distributor';
     case UserRole.REGIONAL_PARTNER:
       return 'Assigned Representative';
+    case UserRole.SUB_PROMOTER:
+      return 'Assigned Main Promoter';
     case UserRole.CERTIFIED_SHOP:
       return 'Assigned Network User';
     default:
@@ -43,6 +47,7 @@ export const NETWORK_TRAVERSAL_ROLES = [
   UserRole.DISTRIBUTOR,
   UserRole.MASTER_PARTNER,
   UserRole.REGIONAL_PARTNER,
+  UserRole.SUB_PROMOTER,
 ] as const;
 
 export function canTraverseNetwork(role?: string): boolean {

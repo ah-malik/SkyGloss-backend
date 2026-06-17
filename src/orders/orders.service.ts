@@ -36,6 +36,7 @@ import {
 import { PdfService } from '../pdf/pdf.service';
 import {
   calculateCommissionEntries,
+  resolveCommissionOrderAmounts,
   resolveShopCommissionChain,
 } from '../common/commission-distribution';
 import { ExchangeRatesService } from '../exchange-rates/exchange-rates.service';
@@ -1353,6 +1354,7 @@ export class OrdersService implements OnModuleInit {
 
     network.shops.forEach(addUser);
     network.promoters.forEach(addUser);
+    network.subPromoters?.forEach(addUser);
     network.representatives.forEach(addUser);
     network.represented?.forEach(addUser);
     network.distributors.forEach(addUser);
@@ -1394,10 +1396,18 @@ export class OrdersService implements OnModuleInit {
       return;
     }
 
-    const chain = await resolveShopCommissionChain(shopUser, (code) =>
-      this.usersService.findByPartnerCode(code),
+    const chain = await resolveShopCommissionChain(
+      shopUser,
+      (code) => this.usersService.findByPartnerCode(code),
+      (mainCode) => this.usersService.findSubPromoterByMain(mainCode),
     );
-    const entries = calculateCommissionEntries(order.totalAmount, chain);
+    const { orderAmount, orderCurrency, exchangeRateToUsd } =
+      resolveCommissionOrderAmounts(order);
+    const entries = calculateCommissionEntries(
+      orderAmount,
+      chain,
+      exchangeRateToUsd,
+    );
     const commissionStatus =
       newStatus === OrderStatus.SHIPPED ? ('earned' as const) : ('pending' as const);
 
@@ -1409,7 +1419,7 @@ export class OrdersService implements OnModuleInit {
 
     if (entries.length > 0) {
       console.log(
-        `[Commission] Order ${order.orderNumber}: ${entries.length} recipient(s), status=${commissionStatus}`,
+        `[Commission] Order ${order.orderNumber}: ${entries.length} recipient(s), status=${commissionStatus}, base=${orderAmount} ${orderCurrency} @ ${exchangeRateToUsd} → USD`,
       );
     }
   }

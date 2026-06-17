@@ -73,7 +73,13 @@ export class UsersController {
 
 
   @Get('referred-shops')
-  @Roles(UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.DISTRIBUTOR, UserRole.PARTNER)
+  @Roles(
+    UserRole.MASTER_PARTNER,
+    UserRole.REGIONAL_PARTNER,
+    UserRole.SUB_PROMOTER,
+    UserRole.DISTRIBUTOR,
+    UserRole.PARTNER,
+  )
   async getReferredShops(@GetUser() user: UserDocument) {
     return this.usersService.findNetworkUsersForViewer(user);
   }

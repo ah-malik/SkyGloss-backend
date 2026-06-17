@@ -5,11 +5,12 @@ export const PARTNER_NETWORK_ROLES = [
   UserRole.DISTRIBUTOR,
   UserRole.MASTER_PARTNER,
   UserRole.REGIONAL_PARTNER,
+  UserRole.SUB_PROMOTER,
 ] as const;
 
 export const HUB_ID_LABEL = 'Hub ID';
 export const NETWORK_REFERENCE_ID_LABEL =
-  'Hub, Distributor, Representative, or Promoter ID';
+  'Hub, Distributor, Representative, Promoter, or Sub-Promoter ID';
 
 export function getNetworkIdLabel(role?: string): string {
   switch (role) {
@@ -25,6 +26,9 @@ export function getNetworkIdLabel(role?: string): string {
     case UserRole.REGIONAL_PARTNER:
     case 'regional_partner':
       return 'Promoter ID';
+    case UserRole.SUB_PROMOTER:
+    case 'sub_promoter':
+      return 'Sub-Promoter ID';
     default:
       return HUB_ID_LABEL;
   }
@@ -48,6 +52,9 @@ export function formatRoleLabel(role?: string): string {
     case UserRole.REGIONAL_PARTNER:
     case 'regional_partner':
       return 'Promoter';
+    case UserRole.SUB_PROMOTER:
+    case 'sub_promoter':
+      return 'Sub-Promoter';
     case UserRole.CERTIFIED_SHOP:
     case 'certified_shop':
       return 'Certified Shop';
@@ -71,6 +78,9 @@ export function getRegistrationFeeName(role?: string): string {
   }
   if (role === UserRole.REGIONAL_PARTNER || role === 'regional_partner') {
     return 'Promoter Registration Fee';
+  }
+  if (role === UserRole.SUB_PROMOTER || role === 'sub_promoter') {
+    return 'Sub-Promoter Registration Fee';
   }
   if (role === UserRole.MASTER_PARTNER || role === 'master_partner') {
     return 'Representative Registration Fee';

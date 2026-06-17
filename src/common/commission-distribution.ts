@@ -1,11 +1,19 @@
 import { UserRole } from '../users/entities/user.entity';
+import {
+  SYSTEM_BASE_CURRENCY,
+  roundExchangeRate,
+  roundMoney,
+} from './order-monetary';
 
 export const REPRESENTATIVE_COMMISSION_RATE = 0.2;
 export const PROMOTER_COMMISSION_RATE = 0.1;
+export const MAIN_PROMOTER_SPLIT_RATE = 0.05;
+export const SUB_PROMOTER_SPLIT_RATE = 0.05;
 export const REPRESENTATIVE_SOLO_RATE = 0.2;
 
 export interface CommissionChain {
   promoter: { _id: string; partnerCode: string; role: string } | null;
+  subPromoter: { _id: string; partnerCode: string; role: string } | null;
   represented: { _id: string; partnerCode: string; role: string } | null;
   isDirectHub: boolean;
 }
@@ -15,7 +23,60 @@ export interface CommissionEntry {
   recipientPartnerCode: string;
   recipientRole: string;
   percentage: number;
+  /** Commission credited in USD (base currency). */
   amount: number;
+}
+
+export interface CommissionOrderAmounts {
+  orderAmount: number;
+  orderCurrency: string;
+  exchangeRateToUsd: number;
+}
+
+/** Order total in original currency + locked FX rate for USD credit. */
+export function resolveCommissionOrderAmounts(order: {
+  totalAmount?: number;
+  originalAmount?: number;
+  originalCurrency?: string;
+  currency?: string;
+  exchangeRateAtOrderTime?: number;
+  baseCurrencyAmount?: number;
+}): CommissionOrderAmounts {
+  const orderCurrency = (
+    order.originalCurrency ||
+    order.currency ||
+    SYSTEM_BASE_CURRENCY
+  ).toUpperCase();
+  const orderAmount = roundMoney(order.originalAmount ?? order.totalAmount ?? 0);
+
+  if (orderCurrency === SYSTEM_BASE_CURRENCY) {
+    return { orderAmount, orderCurrency, exchangeRateToUsd: 1 };
+  }
+
+  if (
+    order.exchangeRateAtOrderTime != null &&
+    order.exchangeRateAtOrderTime > 0
+  ) {
+    return {
+      orderAmount,
+      orderCurrency,
+      exchangeRateToUsd: roundExchangeRate(order.exchangeRateAtOrderTime),
+    };
+  }
+
+  if (
+    typeof order.baseCurrencyAmount === 'number' &&
+    orderAmount > 0 &&
+    order.baseCurrencyAmount > 0
+  ) {
+    return {
+      orderAmount,
+      orderCurrency,
+      exchangeRateToUsd: roundExchangeRate(order.baseCurrencyAmount / orderAmount),
+    };
+  }
+
+  return { orderAmount, orderCurrency, exchangeRateToUsd: 1 };
 }
 
 type NetworkUserLookup = (partnerCode: string) => Promise<{
@@ -23,6 +84,14 @@ type NetworkUserLookup = (partnerCode: string) => Promise<{
   partnerCode?: string;
   role: string;
   referredByPartnerCode?: string;
+} | null>;
+
+type SubPromoterLookup = (
+  mainPromoterPartnerCode: string,
+) => Promise<{
+  _id: { toString(): string };
+  partnerCode?: string;
+  role: string;
 } | null>;
 
 function toNetworkUser(user: {
@@ -38,13 +107,39 @@ function toNetworkUser(user: {
   };
 }
 
-/** Walk shop → parent chain to find Promoter and Representative recipients. */
+function isMainPromoterRole(role?: string): boolean {
+  return role === UserRole.REGIONAL_PARTNER || role === 'regional_partner';
+}
+
+function isSubPromoterRole(role?: string): boolean {
+  return role === UserRole.SUB_PROMOTER || role === 'sub_promoter';
+}
+
+async function resolveRepresentativeForPromoter(
+  promoter: { referredByPartnerCode?: string },
+  lookup: NetworkUserLookup,
+) {
+  if (!promoter.referredByPartnerCode) return null;
+  const repParent = await lookup(promoter.referredByPartnerCode.trim());
+  if (
+    repParent &&
+    (repParent.role === UserRole.MASTER_PARTNER ||
+      repParent.role === 'master_partner')
+  ) {
+    return toNetworkUser(repParent);
+  }
+  return null;
+}
+
+/** Walk shop → parent chain to find Promoter, Sub-Promoter, and Representative recipients. */
 export async function resolveShopCommissionChain(
   shop: { referredByPartnerCode?: string },
   lookup: NetworkUserLookup,
+  findSubPromoterForMain?: SubPromoterLookup,
 ): Promise<CommissionChain> {
   const empty: CommissionChain = {
     promoter: null,
+    subPromoter: null,
     represented: null,
     isDirectHub: true,
   };
@@ -59,22 +154,45 @@ export async function resolveShopCommissionChain(
     return empty;
   }
 
-  if (directParent.role === UserRole.REGIONAL_PARTNER || directParent.role === 'regional_partner') {
-    const promoter = toNetworkUser(directParent);
-    let represented: CommissionChain['represented'] = null;
+  if (isSubPromoterRole(directParent.role)) {
+    const subPromoter = toNetworkUser(directParent);
+    if (!subPromoter) return empty;
 
-    if (directParent.referredByPartnerCode) {
-      const repParent = await lookup(directParent.referredByPartnerCode);
-      if (
-        repParent &&
-        (repParent.role === UserRole.MASTER_PARTNER || repParent.role === 'master_partner')
-      ) {
-        represented = toNetworkUser(repParent);
+    const mainCode = directParent.referredByPartnerCode?.trim();
+    const mainParent = mainCode ? await lookup(mainCode) : null;
+    const promoter =
+      mainParent && isMainPromoterRole(mainParent.role)
+        ? toNetworkUser(mainParent)
+        : null;
+    const represented = promoter
+      ? await resolveRepresentativeForPromoter(mainParent!, lookup)
+      : null;
+
+    return {
+      promoter,
+      subPromoter,
+      represented,
+      isDirectHub: false,
+    };
+  }
+
+  if (isMainPromoterRole(directParent.role)) {
+    const promoter = toNetworkUser(directParent);
+    if (!promoter) return empty;
+
+    const represented = await resolveRepresentativeForPromoter(directParent, lookup);
+    let resolvedSub: CommissionChain['subPromoter'] = null;
+
+    if (findSubPromoterForMain && promoter.partnerCode) {
+      const subUser = await findSubPromoterForMain(promoter.partnerCode);
+      if (subUser) {
+        resolvedSub = toNetworkUser(subUser);
       }
     }
 
     return {
       promoter,
+      subPromoter: resolvedSub,
       represented,
       isDirectHub: false,
     };
@@ -83,6 +201,7 @@ export async function resolveShopCommissionChain(
   if (directParent.role === UserRole.MASTER_PARTNER || directParent.role === 'master_partner') {
     return {
       promoter: null,
+      subPromoter: null,
       represented: toNetworkUser(directParent),
       isDirectHub: false,
     };
@@ -91,34 +210,20 @@ export async function resolveShopCommissionChain(
   return empty;
 }
 
-/** Apply the three documented commission scenarios. */
+/** Apply commission % on order currency, then credit USD using locked FX rate. */
 export function calculateCommissionEntries(
-  totalAmount: number,
+  orderAmountInOriginalCurrency: number,
   chain: CommissionChain,
+  exchangeRateToUsd = 1,
 ): CommissionEntry[] {
-  if (chain.isDirectHub || totalAmount <= 0) return [];
+  if (chain.isDirectHub || orderAmountInOriginalCurrency <= 0) return [];
 
-  const amount = (value: number) =>
-    Math.round(value * totalAmount * 100) / 100;
+  const usdRate = exchangeRateToUsd > 0 ? exchangeRateToUsd : 1;
 
-  if (chain.promoter && chain.represented) {
-    return [
-      {
-        recipientUserId: chain.represented._id,
-        recipientPartnerCode: chain.represented.partnerCode,
-        recipientRole: chain.represented.role,
-        percentage: REPRESENTATIVE_COMMISSION_RATE * 100,
-        amount: amount(REPRESENTATIVE_COMMISSION_RATE),
-      },
-      {
-        recipientUserId: chain.promoter._id,
-        recipientPartnerCode: chain.promoter.partnerCode,
-        recipientRole: chain.promoter.role,
-        percentage: PROMOTER_COMMISSION_RATE * 100,
-        amount: amount(PROMOTER_COMMISSION_RATE),
-      },
-    ];
-  }
+  const toCommissionUsd = (rate: number) => {
+    const inOrderCurrency = roundMoney(rate * orderAmountInOriginalCurrency);
+    return roundMoney(inOrderCurrency * usdRate);
+  };
 
   if (chain.represented && !chain.promoter) {
     return [
@@ -127,9 +232,50 @@ export function calculateCommissionEntries(
         recipientPartnerCode: chain.represented.partnerCode,
         recipientRole: chain.represented.role,
         percentage: REPRESENTATIVE_SOLO_RATE * 100,
-        amount: amount(REPRESENTATIVE_SOLO_RATE),
+        amount: toCommissionUsd(REPRESENTATIVE_SOLO_RATE),
       },
     ];
+  }
+
+  if (chain.promoter && chain.represented) {
+    const entries: CommissionEntry[] = [
+      {
+        recipientUserId: chain.represented._id,
+        recipientPartnerCode: chain.represented.partnerCode,
+        recipientRole: chain.represented.role,
+        percentage: REPRESENTATIVE_COMMISSION_RATE * 100,
+        amount: toCommissionUsd(REPRESENTATIVE_COMMISSION_RATE),
+      },
+    ];
+
+    if (chain.subPromoter) {
+      entries.push(
+        {
+          recipientUserId: chain.promoter._id,
+          recipientPartnerCode: chain.promoter.partnerCode,
+          recipientRole: chain.promoter.role,
+          percentage: MAIN_PROMOTER_SPLIT_RATE * 100,
+          amount: toCommissionUsd(MAIN_PROMOTER_SPLIT_RATE),
+        },
+        {
+          recipientUserId: chain.subPromoter._id,
+          recipientPartnerCode: chain.subPromoter.partnerCode,
+          recipientRole: chain.subPromoter.role,
+          percentage: SUB_PROMOTER_SPLIT_RATE * 100,
+          amount: toCommissionUsd(SUB_PROMOTER_SPLIT_RATE),
+        },
+      );
+    } else {
+      entries.push({
+        recipientUserId: chain.promoter._id,
+        recipientPartnerCode: chain.promoter.partnerCode,
+        recipientRole: chain.promoter.role,
+        percentage: PROMOTER_COMMISSION_RATE * 100,
+        amount: toCommissionUsd(PROMOTER_COMMISSION_RATE),
+      });
+    }
+
+    return entries;
   }
 
   return [];

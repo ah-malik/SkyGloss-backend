@@ -23,6 +23,7 @@ import {
 export interface NetworkUsersResult {
   shops: UserDocument[];
   promoters: UserDocument[];
+  subPromoters: UserDocument[];
   representatives: UserDocument[];
   /** @deprecated use representatives */
   represented: UserDocument[];
@@ -161,6 +162,7 @@ export class UsersService implements OnModuleInit {
     const partnerRoles = [
       UserRole.MASTER_PARTNER,
       UserRole.REGIONAL_PARTNER,
+      UserRole.SUB_PROMOTER,
       UserRole.DISTRIBUTOR,
       UserRole.PARTNER,
     ];
@@ -330,6 +332,7 @@ export class UsersService implements OnModuleInit {
     const partnerRoles = [
       UserRole.MASTER_PARTNER,
       UserRole.REGIONAL_PARTNER,
+      UserRole.SUB_PROMOTER,
       UserRole.DISTRIBUTOR,
       UserRole.PARTNER,
     ];
@@ -398,7 +401,7 @@ export class UsersService implements OnModuleInit {
       if (finalRole === UserRole.PARTNER) {
         updatePayload.referredByPartnerCode = null;
       } else if (requiresParentLink(finalRole)) {
-        await this.validateHierarchyLink(finalRole, finalReferral);
+        await this.validateHierarchyLink(finalRole, finalReferral, id);
       }
     }
 
@@ -561,12 +564,24 @@ export class UsersService implements OnModuleInit {
    * Representative → Promoter, Shop (subtree)
    * Promoter → Shop (direct only)
    */
+  async findSubPromoterByMain(mainPartnerCode: string): Promise<UserDocument | null> {
+    const code = mainPartnerCode?.trim();
+    if (!code) return null;
+    return this.userModel
+      .findOne({
+        role: UserRole.SUB_PROMOTER,
+        referredByPartnerCode: code,
+      })
+      .exec();
+  }
+
   async findNetworkUsersForViewer(
     viewer: UserDocument,
   ): Promise<NetworkUsersResult> {
     const empty: NetworkUsersResult = {
       shops: [],
       promoters: [],
+      subPromoters: [],
       representatives: [],
       represented: [],
       distributors: [],
@@ -591,18 +606,22 @@ export class UsersService implements OnModuleInit {
       const promoters = partners.filter(
         (p) => p.role === UserRole.REGIONAL_PARTNER,
       );
+      const subPromoters = partners.filter(
+        (p) => p.role === UserRole.SUB_PROMOTER,
+      );
       return {
         shops,
         distributors,
         representatives,
         represented: representatives,
         promoters,
+        subPromoters,
         partners,
         viewerRole: viewer.role,
       };
     }
 
-    if (viewer.role === UserRole.REGIONAL_PARTNER) {
+    if (viewer.role === UserRole.SUB_PROMOTER) {
       const shops = await this.userModel
         .find({
           role: UserRole.CERTIFIED_SHOP,
@@ -610,6 +629,26 @@ export class UsersService implements OnModuleInit {
         })
         .exec();
       return { ...empty, shops };
+    }
+
+    if (viewer.role === UserRole.REGIONAL_PARTNER) {
+      const subPromoters = await this.userModel
+        .find({
+          role: UserRole.SUB_PROMOTER,
+          referredByPartnerCode: partnerCode,
+        })
+        .exec();
+      const subCodes = subPromoters
+        .map((u) => u.partnerCode)
+        .filter(Boolean) as string[];
+      const shopCodes = [partnerCode, ...subCodes];
+      const shops = await this.userModel
+        .find({
+          role: UserRole.CERTIFIED_SHOP,
+          referredByPartnerCode: { $in: shopCodes },
+        })
+        .exec();
+      return { ...empty, shops, subPromoters };
     }
 
     const collected: UserDocument[] = [];
@@ -639,19 +678,19 @@ export class UsersService implements OnModuleInit {
     const representatives = collected.filter(
       (u) => u.role === UserRole.MASTER_PARTNER,
     );
-    const promoters = collected.filter(
-      (u) => u.role === UserRole.REGIONAL_PARTNER,
-    );
+    const promoters = collected.filter((u) => u.role === UserRole.REGIONAL_PARTNER);
+    const subPromoters = collected.filter((u) => u.role === UserRole.SUB_PROMOTER);
     const shops = collected.filter((u) => u.role === UserRole.CERTIFIED_SHOP);
 
     if (viewer.role === UserRole.PARTNER) {
       return {
         shops,
         promoters,
+        subPromoters,
         distributors,
         representatives,
         represented: representatives,
-        partners: [...distributors, ...representatives, ...promoters],
+        partners: [...distributors, ...representatives, ...promoters, ...subPromoters],
         viewerRole: viewer.role,
       };
     }
@@ -660,10 +699,11 @@ export class UsersService implements OnModuleInit {
       return {
         shops,
         promoters,
+        subPromoters,
         distributors: [],
         representatives,
         represented: representatives,
-        partners: [...representatives, ...promoters],
+        partners: [...representatives, ...promoters, ...subPromoters],
         viewerRole: viewer.role,
       };
     }
@@ -672,10 +712,11 @@ export class UsersService implements OnModuleInit {
       return {
         shops,
         promoters,
+        subPromoters,
         distributors: [],
         representatives: [],
         represented: [],
-        partners: promoters,
+        partners: [...promoters, ...subPromoters],
         viewerRole: viewer.role,
       };
     }
@@ -694,6 +735,7 @@ export class UsersService implements OnModuleInit {
     const all = [
       ...network.shops,
       ...network.promoters,
+      ...network.subPromoters,
       ...network.representatives,
       ...network.represented,
       ...network.distributors,
@@ -797,6 +839,7 @@ export class UsersService implements OnModuleInit {
   private async validateHierarchyLink(
     role: UserRole,
     referredByPartnerCode?: string | null,
+    excludeUserId?: string,
   ): Promise<void> {
     if (!requiresParentLink(role)) {
       return;
@@ -817,6 +860,34 @@ export class UsersService implements OnModuleInit {
     const roleError = validateParentRole(role, parent.role);
     if (roleError) {
       throw new BadRequestException(roleError);
+    }
+
+    if (role === UserRole.SUB_PROMOTER) {
+      await this.assertMainPromoterCanAcceptSub(code, excludeUserId);
+    }
+  }
+
+  private async assertMainPromoterCanAcceptSub(
+    mainPartnerCode: string,
+    excludeUserId?: string,
+  ): Promise<void> {
+    const main = await this.findByPartnerCode(mainPartnerCode);
+    if (!main || main.role !== UserRole.REGIONAL_PARTNER) {
+      throw new BadRequestException(
+        'Sub-Promoter must be linked to a Main Promoter (Promoter role)',
+      );
+    }
+
+    const existingSub = await this.userModel.findOne({
+      role: UserRole.SUB_PROMOTER,
+      referredByPartnerCode: mainPartnerCode,
+      ...(excludeUserId ? { _id: { $ne: excludeUserId } } : {}),
+    });
+
+    if (existingSub) {
+      throw new BadRequestException(
+        'This Main Promoter already has a Sub-Promoter assigned',
+      );
     }
   }
 

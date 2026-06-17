@@ -271,7 +271,7 @@ export class AuthService {
     const partner = await (this.usersService as any).userModel.findOne({
       partnerCode: partnerId,
       role: {
-        $in: [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.DISTRIBUTOR, UserRole.PARTNER],
+        $in: [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.SUB_PROMOTER, UserRole.DISTRIBUTOR, UserRole.PARTNER],
       },
       status: 'active',
     });
