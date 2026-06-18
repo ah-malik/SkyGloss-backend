@@ -1002,6 +1002,14 @@ export class MailService {
     };
     const currency = (order.currency || 'USD').toUpperCase();
     const symbol = currencySymbols[currency] || (currency + ' ');
+    const subtotal = (order.items || []).reduce(
+      (sum: number, item: any) => sum + item.price * item.quantity,
+      0,
+    );
+    const shippingFee =
+      order.shippingFee != null && order.shippingFee > 0
+        ? order.shippingFee
+        : Math.max(0, order.totalAmount - subtotal + (order.discount || 0));
 
     const mailOptions = {
       from: `"SkyGloss Portal" <sales@skygloss.com>`,
@@ -1035,6 +1043,27 @@ export class MailService {
 
                       <h3 style="color: #272727; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-top: 30px;">Shipped Items</h3>
                       ${this.renderOrderItems(order.items || [], symbol)}
+
+                      <table width="100%" cellpadding="5" cellspacing="0" style="margin-top: 20px; border-top: 2px solid #0ea0dc; padding-top: 10px;">
+                        <tr>
+                          <td align="right" style="color: #666;">Subtotal:</td>
+                          <td align="right" width="100" style="font-weight: bold;">${symbol}${subtotal.toFixed(2)}</td>
+                        </tr>
+                        ${shippingFee > 0.01 ? `
+                        <tr>
+                          <td align="right" style="color: #666;">Shipping:</td>
+                          <td align="right" width="100" style="font-weight: bold;">${symbol}${shippingFee.toFixed(2)}</td>
+                        </tr>` : ''}
+                        ${(order.discount || 0) > 0 ? `
+                        <tr>
+                          <td align="right" style="color: #666;">Discount${order.couponCode ? ` (${order.couponCode})` : ''}:</td>
+                          <td align="right" width="100" style="font-weight: bold; color: #16a34a;">-${symbol}${Number(order.discount).toFixed(2)}</td>
+                        </tr>` : ''}
+                        <tr>
+                          <td align="right" style="font-size: 18px; color: #272727; font-weight: bold;">Total:</td>
+                          <td align="right" style="font-size: 18px; color: #0ea0dc; font-weight: bold;">${symbol}${order.totalAmount.toFixed(2)} <span style="font-size:12px; color:#666;">${currency}</span></td>
+                        </tr>
+                      </table>
 
                       ${
                         order.shippingAddress
