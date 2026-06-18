@@ -1513,6 +1513,18 @@ export class OrdersService implements OnModuleInit {
     const updatedOrder = await order.save();
 
     if (
+      status === OrderStatus.SHIPPED &&
+      oldStatus !== OrderStatus.SHIPPED &&
+      order.user
+    ) {
+      await this.mailService
+        .sendOrderShippedCustomerNotification(updatedOrder, order.user)
+        .catch((err) => {
+          console.error('Failed to send order shipped email to customer', err);
+        });
+    }
+
+    if (
       status === OrderStatus.PAID ||
       status === OrderStatus.SHIPPED
     ) {
