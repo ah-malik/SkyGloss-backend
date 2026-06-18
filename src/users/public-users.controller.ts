@@ -17,7 +17,7 @@ export class PublicUsersController {
     if (!partnerCode || !/^[A-Z0-9]{4,10}$/.test(partnerCode)) {
       return {
         valid: false,
-        message: 'Hub, Distributor, Representative, or Promoter ID must be 4-10 alphanumeric characters',
+        message: 'Hub, Distributor, Representative, Promoter, or Sub-Promoter ID must be 4-10 alphanumeric characters',
       };
     }
 
@@ -28,6 +28,7 @@ export class PublicUsersController {
           $in: [
             UserRole.MASTER_PARTNER,
             UserRole.REGIONAL_PARTNER,
+            UserRole.SUB_PROMOTER,
             UserRole.DISTRIBUTOR,
             UserRole.PARTNER,
           ],
@@ -40,7 +41,7 @@ export class PublicUsersController {
     if (!partner) {
       return {
         valid: false,
-        message: 'This ID was not found. Enter a valid Hub, Distributor, Representative, or Promoter ID.',
+        message: 'This ID was not found. Enter a valid Hub, Distributor, Representative, Promoter, or Sub-Promoter ID.',
       };
     }
 
