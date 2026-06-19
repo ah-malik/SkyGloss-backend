@@ -86,14 +86,6 @@ type NetworkUserLookup = (partnerCode: string) => Promise<{
   referredByPartnerCode?: string;
 } | null>;
 
-type SubPromoterLookup = (
-  mainPromoterPartnerCode: string,
-) => Promise<{
-  _id: { toString(): string };
-  partnerCode?: string;
-  role: string;
-} | null>;
-
 function toNetworkUser(user: {
   _id: { toString(): string };
   partnerCode?: string;
@@ -135,7 +127,6 @@ async function resolveRepresentativeForPromoter(
 export async function resolveShopCommissionChain(
   shop: { referredByPartnerCode?: string },
   lookup: NetworkUserLookup,
-  findSubPromoterForMain?: SubPromoterLookup,
 ): Promise<CommissionChain> {
   const empty: CommissionChain = {
     promoter: null,
@@ -181,18 +172,10 @@ export async function resolveShopCommissionChain(
     if (!promoter) return empty;
 
     const represented = await resolveRepresentativeForPromoter(directParent, lookup);
-    let resolvedSub: CommissionChain['subPromoter'] = null;
-
-    if (findSubPromoterForMain && promoter.partnerCode) {
-      const subUser = await findSubPromoterForMain(promoter.partnerCode);
-      if (subUser) {
-        resolvedSub = toNetworkUser(subUser);
-      }
-    }
 
     return {
       promoter,
-      subPromoter: resolvedSub,
+      subPromoter: null,
       represented,
       isDirectHub: false,
     };

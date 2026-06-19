@@ -29,6 +29,7 @@ export class OrdersController {
     UserRole.CERTIFIED_SHOP,
     UserRole.PARTNER,
     UserRole.REGIONAL_PARTNER,
+    UserRole.SUB_PROMOTER,
     UserRole.MASTER_PARTNER,
     UserRole.DISTRIBUTOR,
   )
@@ -67,6 +68,7 @@ export class OrdersController {
     UserRole.REGIONAL_PARTNER,
     UserRole.MASTER_PARTNER,
     UserRole.DISTRIBUTOR,
+    UserRole.SUB_PROMOTER,
   )
   getMyOrders(@GetUser('_id') userId: string) {
     return this.ordersService.getMyOrders(userId);
@@ -79,6 +81,7 @@ export class OrdersController {
     UserRole.REGIONAL_PARTNER,
     UserRole.MASTER_PARTNER,
     UserRole.DISTRIBUTOR,
+    UserRole.SUB_PROMOTER,
   )
   async getNetworkOrders(@GetUser() user: any) {
     try {
@@ -96,6 +99,7 @@ export class OrdersController {
     UserRole.REGIONAL_PARTNER,
     UserRole.MASTER_PARTNER,
     UserRole.DISTRIBUTOR,
+    UserRole.SUB_PROMOTER,
   )
   getNetworkSalesStats(@GetUser() user: UserDocument) {
     return this.ordersService.getNetworkSalesStats(user);
@@ -110,6 +114,7 @@ export class OrdersController {
     UserRole.MASTER_PARTNER,
     UserRole.DISTRIBUTOR,
     UserRole.ADMIN,
+    UserRole.SUB_PROMOTER,
   )
   getOrderById(@Param('id') id: string, @GetUser() user: UserDocument) {
     return this.ordersService.getOrderById(id, user);
@@ -123,6 +128,7 @@ export class OrdersController {
     UserRole.REGIONAL_PARTNER,
     UserRole.MASTER_PARTNER,
     UserRole.DISTRIBUTOR,
+    UserRole.SUB_PROMOTER,
   )
   payForOrder(
     @Param('id') id: string,
@@ -140,6 +146,7 @@ export class OrdersController {
     UserRole.REGIONAL_PARTNER,
     UserRole.MASTER_PARTNER,
     UserRole.DISTRIBUTOR,
+    UserRole.SUB_PROMOTER,
   )
   verifyPayment(@Param('orderId') orderId: string) {
     return this.ordersService.verifyPayment(orderId);
@@ -249,6 +256,7 @@ export class OrdersController {
     UserRole.MASTER_PARTNER,
     UserRole.DISTRIBUTOR,
     UserRole.REGIONAL_PARTNER,
+    UserRole.SUB_PROMOTER,
     UserRole.PARTNER,
     UserRole.CERTIFIED_SHOP,
   )

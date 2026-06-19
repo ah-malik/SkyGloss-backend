@@ -1,6 +1,7 @@
 import {
   calculateCommissionEntries,
   resolveCommissionOrderAmounts,
+  resolveShopCommissionChain,
 } from './commission-distribution';
 
 describe('resolveCommissionOrderAmounts', () => {
@@ -82,6 +83,79 @@ describe('calculateCommissionEntries', () => {
     });
     expect(entries[2]).toMatchObject({
       recipientRole: 'sub_promoter',
+      percentage: 5,
+      amount: 5,
+    });
+  });
+});
+
+describe('resolveShopCommissionChain', () => {
+  const users = {
+    PROM: {
+      _id: { toString: () => 'prom1' },
+      partnerCode: 'PROM01',
+      role: 'regional_partner',
+      referredByPartnerCode: 'REP01',
+    },
+    SUB: {
+      _id: { toString: () => 'sub1' },
+      partnerCode: 'SUB001',
+      role: 'sub_promoter',
+      referredByPartnerCode: 'PROM01',
+    },
+    REP: {
+      _id: { toString: () => 'rep1' },
+      partnerCode: 'REP01',
+      role: 'master_partner',
+    },
+  };
+
+  const lookup = async (code: string) => {
+    const map: Record<string, (typeof users)[keyof typeof users]> = {
+      PROM01: users.PROM,
+      SUB001: users.SUB,
+      REP01: users.REP,
+    };
+    return map[code] ?? null;
+  };
+
+  it('gives full promoter commission when shop links directly to promoter', async () => {
+    const chain = await resolveShopCommissionChain(
+      { referredByPartnerCode: 'PROM01' },
+      lookup,
+    );
+
+    expect(chain.promoter?.partnerCode).toBe('PROM01');
+    expect(chain.subPromoter).toBeNull();
+    expect(chain.represented?.partnerCode).toBe('REP01');
+
+    const entries = calculateCommissionEntries(100, chain, 1);
+    expect(entries).toHaveLength(2);
+    expect(entries[1]).toMatchObject({
+      recipientPartnerCode: 'PROM01',
+      percentage: 10,
+      amount: 10,
+    });
+  });
+
+  it('splits 5% + 5% when shop links directly to sub-promoter', async () => {
+    const chain = await resolveShopCommissionChain(
+      { referredByPartnerCode: 'SUB001' },
+      lookup,
+    );
+
+    expect(chain.subPromoter?.partnerCode).toBe('SUB001');
+    expect(chain.promoter?.partnerCode).toBe('PROM01');
+
+    const entries = calculateCommissionEntries(100, chain, 1);
+    expect(entries).toHaveLength(3);
+    expect(entries[1]).toMatchObject({
+      recipientPartnerCode: 'PROM01',
+      percentage: 5,
+      amount: 5,
+    });
+    expect(entries[2]).toMatchObject({
+      recipientPartnerCode: 'SUB001',
       percentage: 5,
       amount: 5,
     });

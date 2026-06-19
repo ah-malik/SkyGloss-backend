@@ -1399,7 +1399,6 @@ export class OrdersService implements OnModuleInit {
     const chain = await resolveShopCommissionChain(
       shopUser,
       (code) => this.usersService.findByPartnerCode(code),
-      (mainCode) => this.usersService.findSubPromoterByMain(mainCode),
     );
     const { orderAmount, orderCurrency, exchangeRateToUsd } =
       resolveCommissionOrderAmounts(order);
