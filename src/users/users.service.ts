@@ -498,6 +498,16 @@ export class UsersService implements OnModuleInit {
     const certified_shop = await this.userModel.countDocuments({
       role: UserRole.CERTIFIED_SHOP,
     });
+    const sub_promoter = await this.userModel.countDocuments({
+      role: UserRole.SUB_PROMOTER,
+    });
+
+    const recentUsers = await this.userModel
+      .find({ role: { $ne: UserRole.ADMIN } })
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .select('firstName lastName email role partnerCode shopName createdAt')
+      .lean();
 
     return {
       total,
@@ -507,6 +517,8 @@ export class UsersService implements OnModuleInit {
       regional_partner,
       partner,
       certified_shop,
+      sub_promoter,
+      recentUsers,
     };
   }
 

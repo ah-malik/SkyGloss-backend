@@ -1308,7 +1308,10 @@ export class OrdersService implements OnModuleInit {
   async getAllOrders(): Promise<Order[]> {
     return this.orderModel
       .find()
-      .populate('user', 'firstName lastName email role')
+      .populate(
+        'user',
+        'firstName lastName email shopName role couponCode partnerCode',
+      )
       .sort({ createdAt: -1 });
   }
 
