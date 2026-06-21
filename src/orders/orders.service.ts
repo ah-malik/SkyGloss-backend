@@ -1358,9 +1358,10 @@ export class OrdersService implements OnModuleInit {
         return canViewerSeeOrderPlacerRole(viewer.role, orderUser.role);
       })
       .map((order) => {
-        const plain = order.toObject() as Order & { commissions?: unknown[] };
-        plain.commissions = filterCommissionsForViewer(
-          plain.commissions as any,
+        const plain = order.toObject();
+        type CommissionEntry = NonNullable<Order['commissions']>[number];
+        plain.commissions = filterCommissionsForViewer<CommissionEntry>(
+          plain.commissions,
           viewer.role,
           viewer.partnerCode,
         );
