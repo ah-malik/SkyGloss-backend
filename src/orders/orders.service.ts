@@ -49,6 +49,11 @@ import {
   EFFECTIVE_ORIGINAL_AMOUNT_EXPR,
   EFFECTIVE_ORIGINAL_CURRENCY_EXPR,
 } from '../common/order-monetary';
+import {
+  canViewerSeeOrderPlacerRole,
+  filterCommissionsForViewer,
+  shouldIncludeViewerInNetworkOrders,
+} from '../common/user-hierarchy';
 
 const USA_COUNTRIES = ['united states', 'usa', 'us', 'united states of america'];
 const PENDING_PAYMENT_CANCEL_DAYS = 3;
@@ -1321,7 +1326,7 @@ export class OrdersService implements OnModuleInit {
       return [];
     }
 
-    return await this.orderModel
+    const orders = await this.orderModel
       .find({ user: { $in: userIds } } as any)
       .populate(
         'user',
@@ -1329,6 +1334,38 @@ export class OrdersService implements OnModuleInit {
       )
       .sort({ createdAt: -1 })
       .exec();
+
+    return orders
+      .filter((order) => {
+        const orderUser = order.user as {
+          _id?: unknown;
+          role?: string;
+        } | null;
+        if (!orderUser) return false;
+
+        const orderUserId =
+          typeof orderUser === 'object' && orderUser !== null && '_id' in orderUser
+            ? String((orderUser as any)._id)
+            : String(order.user);
+
+        if (
+          shouldIncludeViewerInNetworkOrders(viewer.role) &&
+          orderUserId === String(viewer._id)
+        ) {
+          return true;
+        }
+
+        return canViewerSeeOrderPlacerRole(viewer.role, orderUser.role);
+      })
+      .map((order) => {
+        const plain = order.toObject() as Order & { commissions?: unknown[] };
+        plain.commissions = filterCommissionsForViewer(
+          plain.commissions as any,
+          viewer.role,
+          viewer.partnerCode,
+        );
+        return plain;
+      });
   }
 
   async getNetworkSalesStats(viewer: UserDocument) {
@@ -1362,7 +1399,10 @@ export class OrdersService implements OnModuleInit {
     network.represented?.forEach(addUser);
     network.distributors.forEach(addUser);
     network.partners?.forEach(addUser);
-    addUser(viewer);
+
+    if (shouldIncludeViewerInNetworkOrders(viewer.role)) {
+      addUser(viewer);
+    }
 
     return Array.from(idSet);
   }
