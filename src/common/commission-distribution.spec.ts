@@ -61,7 +61,7 @@ describe('calculateCommissionEntries', () => {
     expect(entries[1].amount).toBe(10);
   });
 
-  it('splits promoter commission 5% + 5% when sub-promoter exists', () => {
+  it('allocates 20% + 10% + 5% when sub-promoter exists (35% total)', () => {
     const entries = calculateCommissionEntries(
       100,
       {
@@ -76,10 +76,15 @@ describe('calculateCommissionEntries', () => {
     );
 
     expect(entries).toHaveLength(3);
+    expect(entries[0]).toMatchObject({
+      recipientRole: 'master_partner',
+      percentage: 20,
+      amount: 20,
+    });
     expect(entries[1]).toMatchObject({
       recipientRole: 'regional_partner',
-      percentage: 5,
-      amount: 5,
+      percentage: 10,
+      amount: 10,
     });
     expect(entries[2]).toMatchObject({
       recipientRole: 'sub_promoter',
@@ -138,7 +143,7 @@ describe('resolveShopCommissionChain', () => {
     });
   });
 
-  it('splits 5% + 5% when shop links directly to sub-promoter', async () => {
+  it('allocates 20% + 10% + 5% when shop links directly to sub-promoter', async () => {
     const chain = await resolveShopCommissionChain(
       { referredByPartnerCode: 'SUB001' },
       lookup,
@@ -151,8 +156,8 @@ describe('resolveShopCommissionChain', () => {
     expect(entries).toHaveLength(3);
     expect(entries[1]).toMatchObject({
       recipientPartnerCode: 'PROM01',
-      percentage: 5,
-      amount: 5,
+      percentage: 10,
+      amount: 10,
     });
     expect(entries[2]).toMatchObject({
       recipientPartnerCode: 'SUB001',

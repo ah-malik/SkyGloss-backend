@@ -7,8 +7,7 @@ import {
 
 export const REPRESENTATIVE_COMMISSION_RATE = 0.2;
 export const PROMOTER_COMMISSION_RATE = 0.1;
-export const MAIN_PROMOTER_SPLIT_RATE = 0.05;
-export const SUB_PROMOTER_SPLIT_RATE = 0.05;
+export const SUB_PROMOTER_COMMISSION_RATE = 0.05;
 export const REPRESENTATIVE_SOLO_RATE = 0.2;
 
 export interface CommissionChain {
@@ -237,15 +236,15 @@ export function calculateCommissionEntries(
           recipientUserId: chain.promoter._id,
           recipientPartnerCode: chain.promoter.partnerCode,
           recipientRole: chain.promoter.role,
-          percentage: MAIN_PROMOTER_SPLIT_RATE * 100,
-          amount: toCommissionUsd(MAIN_PROMOTER_SPLIT_RATE),
+          percentage: PROMOTER_COMMISSION_RATE * 100,
+          amount: toCommissionUsd(PROMOTER_COMMISSION_RATE),
         },
         {
           recipientUserId: chain.subPromoter._id,
           recipientPartnerCode: chain.subPromoter.partnerCode,
           recipientRole: chain.subPromoter.role,
-          percentage: SUB_PROMOTER_SPLIT_RATE * 100,
-          amount: toCommissionUsd(SUB_PROMOTER_SPLIT_RATE),
+          percentage: SUB_PROMOTER_COMMISSION_RATE * 100,
+          amount: toCommissionUsd(SUB_PROMOTER_COMMISSION_RATE),
         },
       );
     } else {

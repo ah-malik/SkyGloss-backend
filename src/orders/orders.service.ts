@@ -54,6 +54,11 @@ import {
   filterCommissionsForViewer,
   shouldIncludeViewerInNetworkOrders,
 } from '../common/user-hierarchy';
+import {
+  formatShopOrderNumber,
+  getNextShopOrderSequence,
+  resolveOrderCountryCode,
+} from '../common/order-number';
 
 const USA_COUNTRIES = ['united states', 'usa', 'us', 'united states of america'];
 const PENDING_PAYMENT_CANCEL_DAYS = 3;
@@ -436,7 +441,7 @@ export class OrdersService implements OnModuleInit {
     let retries = 3;
     while (retries > 0) {
       try {
-        const orderNumber = await this.generateOrderNumber('SG');
+        const orderNumber = await this.generateShopOrderNumber(shippingCountry);
         const monetary = await this.buildMonetaryFieldsForNewOrder(
           itemsSubtotal + shippingFee,
           orderCurrency,
@@ -817,7 +822,7 @@ export class OrdersService implements OnModuleInit {
       phoneNumber: user.phoneNumber || 'N/A',
     };
 
-    const orderNumber = await this.generateOrderNumber('REG');
+    const orderNumber = await this.generateRegistrationOrderNumber();
     const monetary = await this.buildMonetaryFieldsForNewOrder(totalAmount, currency);
 
     const order = new this.orderModel({
@@ -1602,7 +1607,7 @@ export class OrdersService implements OnModuleInit {
       let retries = 3;
       while (retries > 0) {
         try {
-          const orderNumber = await this.generateOrderNumber('REQ-');
+          const orderNumber = await this.generateShopOrderNumber(shippingCountry);
           const monetary = await this.buildMonetaryFieldsForNewOrder(
             finalAmount,
             orderCurrency || 'usd',
@@ -1858,28 +1863,48 @@ export class OrdersService implements OnModuleInit {
     return session;
   }
 
-  private async generateOrderNumber(prefix: string): Promise<string> {
-    // Find ALL orders with this prefix and determine the true max number
+  private async generateShopOrderNumber(country: string): Promise<string> {
+    const countryCode = resolveOrderCountryCode(country);
+    const nextSequence = await this.getNextShopOrderSequence();
+    return formatShopOrderNumber(countryCode, nextSequence);
+  }
+
+  private async getNextShopOrderSequence(): Promise<number> {
     const matchingOrders = await this.orderModel
-      .find({ orderNumber: new RegExp(`^${prefix}`) })
+      .find({
+        orderNumber: {
+          $regex: /^(REQ-|SG[A-Z]{3}-|SG\d|ORD-)/,
+        },
+      })
+      .select('orderNumber')
+      .lean()
+      .exec();
+
+    return getNextShopOrderSequence(
+      matchingOrders.map((order) => (order as { orderNumber?: string }).orderNumber),
+    );
+  }
+
+  private async generateRegistrationOrderNumber(): Promise<string> {
+    const matchingOrders = await this.orderModel
+      .find({ orderNumber: new RegExp('^REG') })
       .select('orderNumber')
       .lean()
       .exec();
 
     let maxNum = 0;
-    for (const o of matchingOrders) {
-      const numPart = (o as any).orderNumber.replace(prefix, '');
+    for (const order of matchingOrders) {
+      const numPart = String((order as { orderNumber?: string }).orderNumber || '').replace(
+        /^REG/,
+        '',
+      );
       const num = parseInt(numPart, 10);
-      if (!isNaN(num) && num > maxNum) {
+      if (!Number.isNaN(num) && num > maxNum) {
         maxNum = num;
       }
     }
 
-    let nextNumber = maxNum + 1;
-    if (nextNumber === 1 && prefix === 'REQ-') {
-      nextNumber = 254701;
-    }
-
-    return `${prefix}${nextNumber.toString().padStart(6, '0')}`;
+    const nextNumber = maxNum + 1;
+    return `REG${nextNumber.toString().padStart(6, '0')}`;
   }
 }
