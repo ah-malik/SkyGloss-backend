@@ -19,6 +19,7 @@ import {
   requiresParentLink,
   validateParentRole,
 } from '../common/user-hierarchy';
+import { isCommissionEligibleRole } from '../common/commission-distribution';
 
 export interface NetworkUsersResult {
   shops: UserDocument[];
@@ -190,6 +191,8 @@ export class UsersService implements OnModuleInit {
       // Clear partnerCode if NOT a partner role (optional but consistency is good)
       delete userData.partnerCode;
     }
+
+    this.normalizeCustomCommissionRate(userData.role, userData);
 
     // Auto-geocode if coordinates are missing
     if (!userData.latitude || !userData.longitude) {
@@ -385,6 +388,14 @@ export class UsersService implements OnModuleInit {
     }
     if (updatePayload.referredByPartnerCode === '') {
       updatePayload.referredByPartnerCode = null;
+    }
+
+    if (updatePayload.customCommissionRate !== undefined) {
+      if (currentUser.role !== UserRole.ADMIN) {
+        delete updatePayload.customCommissionRate;
+      } else {
+        this.normalizeCustomCommissionRate(roleAfterUpdate, updatePayload);
+      }
     }
 
     const hierarchyFieldsTouched =
@@ -846,6 +857,28 @@ export class UsersService implements OnModuleInit {
     if (!shop) throw new BadRequestException('Shop not found');
 
     return shop;
+  }
+
+  private normalizeCustomCommissionRate(
+    role: UserRole,
+    payload: { customCommissionRate?: number | null },
+  ): void {
+    if (payload.customCommissionRate === undefined) return;
+
+    if (!isCommissionEligibleRole(role)) {
+      payload.customCommissionRate = null;
+      return;
+    }
+
+    if (payload.customCommissionRate === null) return;
+
+    const rate = Number(payload.customCommissionRate);
+    if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+      throw new BadRequestException(
+        'Commission rate must be a number between 0 and 100',
+      );
+    }
+    payload.customCommissionRate = rate;
   }
 
   private async validateHierarchyLink(

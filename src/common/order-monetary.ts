@@ -1,6 +1,17 @@
+import { normalizeCurrencyCode } from './currency-codes';
+
 export const SYSTEM_BASE_CURRENCY = 'USD';
 
-export const REPORTING_CURRENCIES = ['USD', 'EUR', 'GBP', 'PKR'] as const;
+export const REPORTING_CURRENCIES = [
+  'USD',
+  'EUR',
+  'GBP',
+  'PKR',
+  'CAD',
+  'AUD',
+  'NZD',
+  'INR',
+] as const;
 
 export type ReportingCurrency = (typeof REPORTING_CURRENCIES)[number];
 
@@ -20,7 +31,7 @@ export function buildLockedMonetaryFields(
   currency: string,
   exchangeRateAtOrderTime: number,
 ) {
-  const originalCurrency = (currency || SYSTEM_BASE_CURRENCY).toUpperCase();
+  const originalCurrency = normalizeCurrencyCode(currency);
   const originalAmount = roundMoney(totalAmount);
   const rate = roundExchangeRate(exchangeRateAtOrderTime);
   if (originalCurrency !== SYSTEM_BASE_CURRENCY && rate <= 0) {

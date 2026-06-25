@@ -1,6 +1,12 @@
-/** Shop order IDs: SG{COUNTRY}-{sequence} e.g. SGUSA-254752 */
+/** Shop order IDs: SG{COUNTRY}-{7-digit sequence} e.g. SGUSA-0000000, SGUSA-0000007 */
 
 export const SHOP_ORDER_LEGACY_REQ_BASE = 254700;
+
+export type ShopOrderFlow = 'request' | 'purchase';
+
+export const SHOP_ORDER_REQUEST_START = 0;
+export const SHOP_ORDER_PURCHASE_START = 7;
+export const SHOP_ORDER_SEQUENCE_DIGITS = 7;
 
 const ORDER_COUNTRY_CODES: Record<string, string> = {
   'united states': 'USA',
@@ -75,7 +81,8 @@ export function formatShopOrderNumber(
   countryCode: string,
   sequence: number,
 ): string {
-  return `SG${countryCode}-${sequence}`;
+  const padded = String(sequence).padStart(SHOP_ORDER_SEQUENCE_DIGITS, '0');
+  return `SG${countryCode}-${padded}`;
 }
 
 /** Extract the numeric sequence from legacy or current shop order numbers. */
@@ -120,6 +127,30 @@ export function getNextShopOrderSequence(
     }
   }
 
+  return maxNum + 1;
+}
+
+/** Next sequence for order request (0, 1, 2…) or buy/checkout (7, 8, 9…). */
+export function getNextShopOrderSequenceForFlow(
+  orders: Array<{ orderNumber?: string; orderFlow?: ShopOrderFlow }>,
+  flow: ShopOrderFlow,
+): number {
+  const start =
+    flow === 'request'
+      ? SHOP_ORDER_REQUEST_START
+      : SHOP_ORDER_PURCHASE_START;
+
+  let maxNum = start - 1;
+
+  for (const order of orders) {
+    if (order.orderFlow !== flow) continue;
+
+    const seq = extractShopOrderSequence(order.orderNumber);
+    if (seq == null) continue;
+    if (seq > maxNum) maxNum = seq;
+  }
+
+  if (maxNum < start) return start;
   return maxNum + 1;
 }
 

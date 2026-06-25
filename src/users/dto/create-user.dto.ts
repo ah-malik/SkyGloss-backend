@@ -8,6 +8,8 @@ import {
   MinLength,
   MaxLength,
   IsBoolean,
+  Min,
+  Max,
 } from 'class-validator';
 import { UserRole, UserStatus } from '../entities/user.entity';
 
@@ -156,4 +158,11 @@ export class CreateUserDto {
   @IsString()
   @IsOptional()
   profileImage?: string;
+
+  /** Commission % override for Representative, Promoter, or Sub-Promoter. */
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  @IsOptional()
+  customCommissionRate?: number | null;
 }

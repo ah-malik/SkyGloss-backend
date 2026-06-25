@@ -1,6 +1,7 @@
 /**
  * Recalculate commission amounts/percentages on existing shop orders
- * using the current rates (Rep 20%, Promoter 10%, Sub-Promoter 5%).
+ * using each user's custom rate when set, otherwise role defaults
+ * (Rep 20%, Promoter 10%, Sub-Promoter 5%).
  *
  * Run: npm run recalculate-order-commissions
  */
@@ -42,6 +43,7 @@ async function bootstrap() {
       partnerCode: user.partnerCode as string | undefined,
       role: user.role as string,
       referredByPartnerCode: user.referredByPartnerCode as string | undefined,
+      customCommissionRate: user.customCommissionRate as number | undefined,
     };
   };
 

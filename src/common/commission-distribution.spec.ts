@@ -2,6 +2,7 @@ import {
   calculateCommissionEntries,
   resolveCommissionOrderAmounts,
   resolveShopCommissionChain,
+  resolveCommissionRateDecimal,
 } from './commission-distribution';
 
 describe('resolveCommissionOrderAmounts', () => {
@@ -91,6 +92,47 @@ describe('calculateCommissionEntries', () => {
       percentage: 5,
       amount: 5,
     });
+  });
+
+  it('uses per-user custom commission rates when set', () => {
+    const entries = calculateCommissionEntries(
+      100,
+      {
+        ...chainBase,
+        represented: {
+          ...chainBase.represented,
+          customCommissionRate: 25,
+        },
+        promoter: {
+          ...chainBase.promoter,
+          customCommissionRate: 12,
+        },
+        subPromoter: {
+          _id: 'sub1',
+          partnerCode: '0003',
+          role: 'sub_promoter',
+          customCommissionRate: 8,
+        },
+      },
+      1,
+    );
+
+    expect(entries).toHaveLength(3);
+    expect(entries[0]).toMatchObject({ percentage: 25, amount: 25 });
+    expect(entries[1]).toMatchObject({ percentage: 12, amount: 12 });
+    expect(entries[2]).toMatchObject({ percentage: 8, amount: 8 });
+  });
+});
+
+describe('resolveCommissionRateDecimal', () => {
+  it('falls back to role defaults', () => {
+    expect(resolveCommissionRateDecimal('master_partner')).toBe(0.2);
+    expect(resolveCommissionRateDecimal('regional_partner')).toBe(0.1);
+    expect(resolveCommissionRateDecimal('sub_promoter')).toBe(0.05);
+  });
+
+  it('uses custom rate when provided', () => {
+    expect(resolveCommissionRateDecimal('master_partner', 15)).toBe(0.15);
   });
 });
 

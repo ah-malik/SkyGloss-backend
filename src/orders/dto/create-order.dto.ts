@@ -97,4 +97,8 @@ export class CreateOrderDto {
   @ValidateNested()
   @Type(() => ShippingAddressDto)
   shippingAddress: ShippingAddressDto;
+
+  @IsString()
+  @IsOptional()
+  couponCode?: string;
 }

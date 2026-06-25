@@ -19,6 +19,7 @@ import { ProductGroupsModule } from './product-groups/product-groups.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PdfModule } from './pdf/pdf.module';
 import { RegistrationFeesModule } from './registration-fees/registration-fees.module';
+import { CouponsModule } from './coupons/coupons.module';
 
 @Module({
   imports: [
@@ -47,6 +48,7 @@ import { RegistrationFeesModule } from './registration-fees/registration-fees.mo
     NotificationsModule,
     PdfModule,
     RegistrationFeesModule,
+    CouponsModule,
   ],
   controllers: [AppController],
   providers: [AppService, SeedService],

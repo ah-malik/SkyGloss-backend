@@ -56,9 +56,12 @@ import {
 } from '../common/user-hierarchy';
 import {
   formatShopOrderNumber,
-  getNextShopOrderSequence,
+  getNextShopOrderSequenceForFlow,
   resolveOrderCountryCode,
+  type ShopOrderFlow,
 } from '../common/order-number';
+import { normalizeCurrencyCode } from '../common/currency-codes';
+import { CouponsService } from '../coupons/coupons.service';
 
 const USA_COUNTRIES = ['united states', 'usa', 'us', 'united states of america'];
 const PENDING_PAYMENT_CANCEL_DAYS = 3;
@@ -85,6 +88,7 @@ export class OrdersService implements OnModuleInit {
     @Inject(forwardRef(() => PdfService))
     private pdfService: PdfService,
     private exchangeRatesService: ExchangeRatesService,
+    private couponsService: CouponsService,
   ) {
     const stripeSecretKey = this.configService.get<string>('STRIPE_SECRET_KEY');
     const usaStripeSecretKey = this.configService.get<string>('USA_STRIPE_SECRET_KEY');
@@ -114,12 +118,21 @@ export class OrdersService implements OnModuleInit {
     await this.repairBrokenFxOrders();
   }
 
-  /** Fix orders where FX rate was rounded to 0 (e.g. PKR 0.0036 → 0). */
+  /** Fix orders where FX rate was rounded to 0 or non-USD was treated as 1:1 USD. */
   private async repairBrokenFxOrders(): Promise<void> {
     const candidates = await this.orderModel
       .find({
         $or: [
           { exchangeRateAtOrderTime: 0 },
+          {
+            exchangeRateAtOrderTime: 1,
+            $expr: {
+              $ne: [
+                { $toUpper: { $ifNull: ['$originalCurrency', '$currency'] } },
+                'USD',
+              ],
+            },
+          },
           {
             baseCurrencyAmount: 0,
             totalAmount: { $gt: 0 },
@@ -130,9 +143,18 @@ export class OrdersService implements OnModuleInit {
               ],
             },
           },
+          {
+            totalAmount: { $gt: 0 },
+            currency: { $nin: ['USD', 'usd'] },
+            $or: [
+              { originalCurrency: { $exists: false } },
+              { exchangeRateAtOrderTime: { $exists: false } },
+              { baseCurrencyAmount: { $exists: false } },
+            ],
+          },
         ],
       })
-      .limit(500)
+      .limit(1000)
       .exec();
 
     let repaired = 0;
@@ -199,7 +221,7 @@ export class OrdersService implements OnModuleInit {
         }
       }
     }
-    return orderCurrency;
+    return normalizeCurrencyCode(orderCurrency);
   }
 
   private async buildMonetaryFieldsForNewOrder(
@@ -427,7 +449,7 @@ export class OrdersService implements OnModuleInit {
     // DETERMINE CURRENCY
     const orderCurrency = await this.getCurrencyForUser(currentUser);
 
-    const { items, shippingAddress } = createOrderDto;
+    const { items, shippingAddress, couponCode } = createOrderDto;
 
     // Calculate total amount from items
     // Note: In a real app, we should fetch product prices from DB to secure against client-side manipulation.
@@ -437,13 +459,29 @@ export class OrdersService implements OnModuleInit {
       shippingAddress?.country || currentUser?.country || '';
     const shippingFee = calculateShippingFee(shippingCountry, itemsSubtotal);
 
+    let discount = 0;
+    let appliedCouponCode: string | undefined;
+    if (couponCode?.trim()) {
+      const validation = await this.couponsService.validateForCheckout(
+        couponCode,
+        itemsSubtotal,
+      );
+      discount = validation.discountAmount;
+      appliedCouponCode = validation.code;
+    }
+
+    const orderTotal = Math.max(0, itemsSubtotal + shippingFee - discount);
+
     let order: any;
     let retries = 3;
     while (retries > 0) {
       try {
-        const orderNumber = await this.generateShopOrderNumber(shippingCountry);
+        const orderNumber = await this.generateShopOrderNumber(
+          shippingCountry,
+          'purchase',
+        );
         const monetary = await this.buildMonetaryFieldsForNewOrder(
-          itemsSubtotal + shippingFee,
+          orderTotal,
           orderCurrency,
         );
         order = new this.orderModel({
@@ -453,7 +491,10 @@ export class OrdersService implements OnModuleInit {
           shippingAddress,
           status: isUsaUser ? OrderStatus.PENDING_PAYMENT : OrderStatus.PENDING,
           orderNumber,
+          orderFlow: 'purchase',
           paymentReminderCount: 0,
+          discount,
+          couponCode: appliedCouponCode,
           ...monetary,
         });
         await order.save();
@@ -965,10 +1006,12 @@ export class OrdersService implements OnModuleInit {
       }
 
       const actualTotal = (session.amount_total || 0) / 100;
-      const actualDiscount = (session.total_details?.amount_discount || 0) / 100;
+      const stripeDiscount = (session.total_details?.amount_discount || 0) / 100;
+      let discount = existingOrder?.discount ?? 0;
       let couponCode = existingOrder?.couponCode;
-      if (actualDiscount > 0.01 && !couponCode) {
+      if (stripeDiscount > 0.01 && !couponCode) {
         couponCode = 'STRIPECOUPON';
+        discount = stripeDiscount;
       }
 
       const amountUpdate = this.buildAmountUpdateWithLockedRate(
@@ -981,7 +1024,7 @@ export class OrdersService implements OnModuleInit {
           orderId,
           { 
             status: OrderStatus.PAID,
-            discount: actualDiscount,
+            discount,
             couponCode,
             ...amountUpdate,
           },
@@ -991,6 +1034,8 @@ export class OrdersService implements OnModuleInit {
 
       if (updatedOrder) {
         console.log(`[USA Stripe Webhook] Order ${updatedOrder.orderNumber} marked as PAID.`);
+
+        await this.recordCouponUsageIfApplicable(updatedOrder.couponCode);
 
         // Send notification
         const notification = await this.notificationsService.create({
@@ -1227,10 +1272,12 @@ export class OrdersService implements OnModuleInit {
         }
 
         const actualTotal = (session.amount_total || 0) / 100;
-        const actualDiscount = (session.total_details?.amount_discount || 0) / 100;
+        const stripeDiscount = (session.total_details?.amount_discount || 0) / 100;
+        let discount = existingOrder?.discount ?? 0;
         let couponCode = existingOrder?.couponCode;
-        if (actualDiscount > 0.01 && !couponCode) {
+        if (stripeDiscount > 0.01 && !couponCode) {
           couponCode = 'STRIPECOUPON';
+          discount = stripeDiscount;
         }
 
         const amountUpdate = this.buildAmountUpdateWithLockedRate(
@@ -1243,7 +1290,7 @@ export class OrdersService implements OnModuleInit {
             orderId,
             { 
               status: OrderStatus.PAID,
-              discount: actualDiscount,
+              discount,
               couponCode,
               ...amountUpdate,
             },
@@ -1253,6 +1300,8 @@ export class OrdersService implements OnModuleInit {
 
         if (updatedOrder) {
           console.log(`[Stripe Webhook] Order ${updatedOrder.orderNumber} status updated to PAID.`);
+
+          await this.recordCouponUsageIfApplicable(updatedOrder.couponCode);
           const notification = await this.notificationsService.create({
             type: NotificationType.ORDER_PAID,
             title: 'Order Paid',
@@ -1579,6 +1628,10 @@ export class OrdersService implements OnModuleInit {
       await this.applyOrderCommissions(updatedOrder._id.toString(), status);
     }
 
+    if (status === OrderStatus.PAID && oldStatus !== OrderStatus.PAID) {
+      await this.recordCouponUsageIfApplicable(updatedOrder.couponCode);
+    }
+
     return updatedOrder;
   }
 
@@ -1591,7 +1644,7 @@ export class OrdersService implements OnModuleInit {
       
       const orderCurrency = await this.getCurrencyForUser(currentUser);
 
-      const { items, shippingAddress } = createOrderDto;
+      const { items, shippingAddress, couponCode } = createOrderDto;
       
       if (!items || !Array.isArray(items) || items.length === 0) {
         throw new BadRequestException('Order items are required');
@@ -1601,13 +1654,28 @@ export class OrdersService implements OnModuleInit {
       const shippingCountry =
         shippingAddress?.country || currentUser?.country || '';
       const shippingFee = calculateShippingFee(shippingCountry, itemsSubtotal);
-      const finalAmount = itemsSubtotal + shippingFee;
+
+      let discount = 0;
+      let appliedCouponCode: string | undefined;
+      if (couponCode?.trim()) {
+        const validation = await this.couponsService.validateForCheckout(
+          couponCode,
+          itemsSubtotal,
+        );
+        discount = validation.discountAmount;
+        appliedCouponCode = validation.code;
+      }
+
+      const finalAmount = Math.max(0, itemsSubtotal + shippingFee - discount);
 
       let savedOrder;
       let retries = 3;
       while (retries > 0) {
         try {
-          const orderNumber = await this.generateShopOrderNumber(shippingCountry);
+          const orderNumber = await this.generateShopOrderNumber(
+            shippingCountry,
+            'request',
+          );
           const monetary = await this.buildMonetaryFieldsForNewOrder(
             finalAmount,
             orderCurrency || 'usd',
@@ -1619,6 +1687,9 @@ export class OrdersService implements OnModuleInit {
             shippingAddress,
             status: OrderStatus.PENDING,
             orderNumber,
+            orderFlow: 'request',
+            discount,
+            couponCode: appliedCouponCode,
             ...monetary,
           });
           savedOrder = await order.save();
@@ -1787,10 +1858,14 @@ export class OrdersService implements OnModuleInit {
   ): Promise<Stripe.Checkout.Session> {
     const items = order.items;
     const itemsSubtotal = getItemsSubtotal(items);
+    const discount = order.discount ?? 0;
+    const discountedSubtotal = Math.max(0, itemsSubtotal - discount);
+    const priceRatio =
+      itemsSubtotal > 0 ? discountedSubtotal / itemsSubtotal : 1;
     const shippingFee =
       order.shippingFee != null && order.shippingFee >= 0
         ? order.shippingFee
-        : Math.max(0, order.totalAmount - itemsSubtotal);
+        : Math.max(0, order.totalAmount - itemsSubtotal + discount);
     const shippingCountry =
       order.shippingAddress?.country || currentUser?.country || '';
 
@@ -1812,7 +1887,9 @@ export class OrdersService implements OnModuleInit {
                 productId: String(item.product || ''),
               },
             },
-            unit_amount: Math.round(Number(item.price || 0) * 100),
+            unit_amount: Math.round(
+              Number(item.price || 0) * priceRatio * 100,
+            ),
           },
           quantity: Math.max(1, Number(item.quantity || 1)),
         };
@@ -1863,25 +1940,48 @@ export class OrdersService implements OnModuleInit {
     return session;
   }
 
-  private async generateShopOrderNumber(country: string): Promise<string> {
+  private async recordCouponUsageIfApplicable(
+    couponCode?: string,
+  ): Promise<void> {
+    if (
+      !couponCode ||
+      couponCode === 'STRIPECOUPON' ||
+      couponCode === 'CERTIFICATIONONUS'
+    ) {
+      return;
+    }
+    await this.couponsService.recordUsage(couponCode).catch((err) => {
+      this.logger.warn(`Failed to record coupon usage for ${couponCode}:`, err);
+    });
+  }
+
+  private async generateShopOrderNumber(
+    country: string,
+    flow: ShopOrderFlow,
+  ): Promise<string> {
     const countryCode = resolveOrderCountryCode(country);
-    const nextSequence = await this.getNextShopOrderSequence();
+    const nextSequence = await this.getNextShopOrderSequence(flow);
     return formatShopOrderNumber(countryCode, nextSequence);
   }
 
-  private async getNextShopOrderSequence(): Promise<number> {
+  private async getNextShopOrderSequence(
+    flow: ShopOrderFlow,
+  ): Promise<number> {
     const matchingOrders = await this.orderModel
       .find({
-        orderNumber: {
-          $regex: /^(REQ-|SG[A-Z]{3}-|SG\d|ORD-)/,
-        },
+        orderFlow: flow,
+        orderNumber: { $regex: /^SG[A-Z]{3}-\d+$/ },
       })
-      .select('orderNumber')
+      .select('orderNumber orderFlow')
       .lean()
       .exec();
 
-    return getNextShopOrderSequence(
-      matchingOrders.map((order) => (order as { orderNumber?: string }).orderNumber),
+    return getNextShopOrderSequenceForFlow(
+      matchingOrders.map((order) => ({
+        orderNumber: (order as { orderNumber?: string }).orderNumber,
+        orderFlow: (order as { orderFlow?: ShopOrderFlow }).orderFlow,
+      })),
+      flow,
     );
   }
 

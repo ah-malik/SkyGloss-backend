@@ -159,6 +159,10 @@ export class User {
 
   @Prop({ unique: true, sparse: true })
   certificateNumber?: number;
+
+  /** Custom commission % for Representative / Promoter / Sub-Promoter. Omit for role default. */
+  @Prop({ min: 0, max: 100 })
+  customCommissionRate?: number;
 }
 
 

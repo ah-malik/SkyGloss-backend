@@ -98,6 +98,10 @@ export class Order {
   @Prop({ required: true, unique: true })
   orderNumber: string;
 
+  /** request = manual order request; purchase = Stripe checkout / buy flow */
+  @Prop({ type: String, enum: ['request', 'purchase'] })
+  orderFlow?: 'request' | 'purchase';
+
   @Prop({ default: 'USD' })
   currency: string;
 

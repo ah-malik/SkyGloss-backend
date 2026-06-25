@@ -10,10 +10,63 @@ export const PROMOTER_COMMISSION_RATE = 0.1;
 export const SUB_PROMOTER_COMMISSION_RATE = 0.05;
 export const REPRESENTATIVE_SOLO_RATE = 0.2;
 
+export const DEFAULT_COMMISSION_RATES_PERCENT = {
+  master_partner: 20,
+  regional_partner: 10,
+  sub_promoter: 5,
+} as const;
+
+export function isCommissionEligibleRole(role?: string): boolean {
+  if (!role) return false;
+  return (
+    role === UserRole.MASTER_PARTNER ||
+    role === 'master_partner' ||
+    role === UserRole.REGIONAL_PARTNER ||
+    role === 'regional_partner' ||
+    role === UserRole.SUB_PROMOTER ||
+    role === 'sub_promoter'
+  );
+}
+
+export function getDefaultCommissionRatePercent(role?: string): number {
+  if (role === UserRole.MASTER_PARTNER || role === 'master_partner') {
+    return DEFAULT_COMMISSION_RATES_PERCENT.master_partner;
+  }
+  if (role === UserRole.REGIONAL_PARTNER || role === 'regional_partner') {
+    return DEFAULT_COMMISSION_RATES_PERCENT.regional_partner;
+  }
+  if (role === UserRole.SUB_PROMOTER || role === 'sub_promoter') {
+    return DEFAULT_COMMISSION_RATES_PERCENT.sub_promoter;
+  }
+  return 0;
+}
+
+/** Resolve effective commission as a decimal (e.g. 0.2 for 20%). */
+export function resolveCommissionRateDecimal(
+  role: string,
+  customCommissionRate?: number | null,
+): number {
+  if (
+    customCommissionRate != null &&
+    !Number.isNaN(customCommissionRate) &&
+    customCommissionRate >= 0
+  ) {
+    return customCommissionRate / 100;
+  }
+  return getDefaultCommissionRatePercent(role) / 100;
+}
+
+export interface CommissionRecipient {
+  _id: string;
+  partnerCode: string;
+  role: string;
+  customCommissionRate?: number | null;
+}
+
 export interface CommissionChain {
-  promoter: { _id: string; partnerCode: string; role: string } | null;
-  subPromoter: { _id: string; partnerCode: string; role: string } | null;
-  represented: { _id: string; partnerCode: string; role: string } | null;
+  promoter: CommissionRecipient | null;
+  subPromoter: CommissionRecipient | null;
+  represented: CommissionRecipient | null;
   isDirectHub: boolean;
 }
 
@@ -83,18 +136,21 @@ type NetworkUserLookup = (partnerCode: string) => Promise<{
   partnerCode?: string;
   role: string;
   referredByPartnerCode?: string;
+  customCommissionRate?: number | null;
 } | null>;
 
 function toNetworkUser(user: {
   _id: { toString(): string };
   partnerCode?: string;
   role: string;
+  customCommissionRate?: number | null;
 }) {
   if (!user.partnerCode) return null;
   return {
     _id: user._id.toString(),
     partnerCode: user.partnerCode,
     role: user.role,
+    customCommissionRate: user.customCommissionRate,
   };
 }
 
@@ -208,43 +264,60 @@ export function calculateCommissionEntries(
   };
 
   if (chain.represented && !chain.promoter) {
+    const repRate = resolveCommissionRateDecimal(
+      chain.represented.role,
+      chain.represented.customCommissionRate,
+    );
     return [
       {
         recipientUserId: chain.represented._id,
         recipientPartnerCode: chain.represented.partnerCode,
         recipientRole: chain.represented.role,
-        percentage: REPRESENTATIVE_SOLO_RATE * 100,
-        amount: toCommissionUsd(REPRESENTATIVE_SOLO_RATE),
+        percentage: repRate * 100,
+        amount: toCommissionUsd(repRate),
       },
     ];
   }
 
   if (chain.promoter && chain.represented) {
+    const repRate = resolveCommissionRateDecimal(
+      chain.represented.role,
+      chain.represented.customCommissionRate,
+    );
+    const promoterRate = resolveCommissionRateDecimal(
+      chain.promoter.role,
+      chain.promoter.customCommissionRate,
+    );
+
     const entries: CommissionEntry[] = [
       {
         recipientUserId: chain.represented._id,
         recipientPartnerCode: chain.represented.partnerCode,
         recipientRole: chain.represented.role,
-        percentage: REPRESENTATIVE_COMMISSION_RATE * 100,
-        amount: toCommissionUsd(REPRESENTATIVE_COMMISSION_RATE),
+        percentage: repRate * 100,
+        amount: toCommissionUsd(repRate),
       },
     ];
 
     if (chain.subPromoter) {
+      const subRate = resolveCommissionRateDecimal(
+        chain.subPromoter.role,
+        chain.subPromoter.customCommissionRate,
+      );
       entries.push(
         {
           recipientUserId: chain.promoter._id,
           recipientPartnerCode: chain.promoter.partnerCode,
           recipientRole: chain.promoter.role,
-          percentage: PROMOTER_COMMISSION_RATE * 100,
-          amount: toCommissionUsd(PROMOTER_COMMISSION_RATE),
+          percentage: promoterRate * 100,
+          amount: toCommissionUsd(promoterRate),
         },
         {
           recipientUserId: chain.subPromoter._id,
           recipientPartnerCode: chain.subPromoter.partnerCode,
           recipientRole: chain.subPromoter.role,
-          percentage: SUB_PROMOTER_COMMISSION_RATE * 100,
-          amount: toCommissionUsd(SUB_PROMOTER_COMMISSION_RATE),
+          percentage: subRate * 100,
+          amount: toCommissionUsd(subRate),
         },
       );
     } else {
@@ -252,8 +325,8 @@ export function calculateCommissionEntries(
         recipientUserId: chain.promoter._id,
         recipientPartnerCode: chain.promoter.partnerCode,
         recipientRole: chain.promoter.role,
-        percentage: PROMOTER_COMMISSION_RATE * 100,
-        amount: toCommissionUsd(PROMOTER_COMMISSION_RATE),
+        percentage: promoterRate * 100,
+        amount: toCommissionUsd(promoterRate),
       });
     }
 

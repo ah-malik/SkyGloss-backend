@@ -11,6 +11,7 @@ import { ProductGroup, ProductGroupSchema } from '../product-groups/entities/pro
 import { RegistrationFeesModule } from '../registration-fees/registration-fees.module';
 import { PdfModule } from '../pdf/pdf.module';
 import { ExchangeRatesModule } from '../exchange-rates/exchange-rates.module';
+import { CouponsModule } from '../coupons/coupons.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { ExchangeRatesModule } from '../exchange-rates/exchange-rates.module';
     RegistrationFeesModule,
     forwardRef(() => PdfModule),
     ExchangeRatesModule,
+    CouponsModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService, OrdersSchedulerService],

@@ -9,15 +9,13 @@ import {
   SYSTEM_BASE_CURRENCY,
   roundExchangeRate,
 } from '../common/order-monetary';
+import {
+  DEFAULT_EXCHANGE_RATES,
+  normalizeCurrencyCode,
+} from '../common/currency-codes';
 
-/** Default rates: 1 unit of currency → USD. Update via admin without touching past orders. */
-export const DEFAULT_EXCHANGE_RATES: Record<string, number> = {
-  USD: 1,
-  EUR: 1.08,
-  GBP: 1.27,
-  /** ~280 PKR = 1 USD */
-  PKR: 0.003571,
-};
+/** @deprecated import DEFAULT_EXCHANGE_RATES from currency-codes */
+export { DEFAULT_EXCHANGE_RATES };
 
 @Injectable()
 export class ExchangeRatesService implements OnModuleInit {
@@ -40,17 +38,19 @@ export class ExchangeRatesService implements OnModuleInit {
   }
 
   async getRateToBase(currency: string): Promise<number> {
-    const code = (currency || SYSTEM_BASE_CURRENCY).toUpperCase();
+    const code = normalizeCurrencyCode(currency);
     if (code === SYSTEM_BASE_CURRENCY) return 1;
 
     const row = await this.exchangeRateModel.findOne({ currency: code }).exec();
     let rate = row?.rateToBase ?? DEFAULT_EXCHANGE_RATES[code];
 
     if (!rate || rate <= 0) {
-      this.logger.warn(
-        `Missing or invalid rate for ${code}; falling back to default`,
+      this.logger.error(
+        `Exchange rate not configured for ${code}; refusing USD 1:1 fallback`,
       );
-      rate = DEFAULT_EXCHANGE_RATES[code] ?? 1;
+      throw new Error(
+        `Exchange rate is not configured for ${code}. Please add it in admin exchange rates.`,
+      );
     }
 
     // Detect inverted storage (e.g. 280 PKR/USD stored instead of 0.00357)
