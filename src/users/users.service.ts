@@ -20,6 +20,10 @@ import {
   validateParentRole,
 } from '../common/user-hierarchy';
 import { isCommissionEligibleRole } from '../common/commission-distribution';
+import {
+  GLOBAL_HUB_PARTNER_CODE,
+  isGlobalHubPartnerCode,
+} from '../common/global-hub';
 
 export interface NetworkUsersResult {
   shops: UserDocument[];
@@ -58,26 +62,44 @@ export class UsersService implements OnModuleInit {
         );
       }
 
-      // Ensure Global Partner exists
-      const globalPartnerCode = 'GLOBAL77';
-      const existingGlobal = await this.userModel.findOne({ partnerCode: globalPartnerCode });
-      if (!existingGlobal) {
-        console.log(`[UsersService] Creating Global Partner (${globalPartnerCode})...`);
-        const hashedPass = await bcrypt.hash('SkyGlossGlobal77!', 10);
+      // Ensure Global Hub partner exists for unassigned shop registrations
+      const existingGlobalHub = await this.userModel.findOne({
+        partnerCode: GLOBAL_HUB_PARTNER_CODE,
+      });
+      if (!existingGlobalHub) {
+        console.log(`[UsersService] Creating Global Hub (${GLOBAL_HUB_PARTNER_CODE})...`);
+        const hashedPass = await bcrypt.hash('123456', 10);
         await this.userModel.create({
-          firstName: 'Global',
-          lastName: 'Partner',
-          email: 'certified@skygloss.com',
+          firstName: 'GLOBALHUB',
+          lastName: 'Hub',
+          email: 'globalhub@skygloss.com',
           password: hashedPass,
-          role: UserRole.MASTER_PARTNER,
+          role: UserRole.PARTNER,
           status: 'active',
           country: 'United States',
           address: 'Main Office',
           city: 'Global',
-          partnerCode: globalPartnerCode,
+          partnerCode: GLOBAL_HUB_PARTNER_CODE,
           isSelfRegistered: false,
         });
-        console.log('[UsersService] Global Partner created successfully.');
+        console.log('[UsersService] Global Hub partner created successfully.');
+      }
+
+      const backfillResult = await this.userModel.updateMany(
+        {
+          role: UserRole.CERTIFIED_SHOP,
+          $or: [
+            { referredByPartnerCode: { $exists: false } },
+            { referredByPartnerCode: null },
+            { referredByPartnerCode: '' },
+          ],
+        },
+        { $set: { referredByPartnerCode: GLOBAL_HUB_PARTNER_CODE } },
+      );
+      if (backfillResult.modifiedCount > 0) {
+        console.log(
+          `[UsersService] Assigned ${backfillResult.modifiedCount} shops without a parent link to ${GLOBAL_HUB_PARTNER_CODE}.`,
+        );
       }
     } catch (err) {
       console.error('[UsersService] Database initialization failed:', err);
@@ -153,6 +175,9 @@ export class UsersService implements OnModuleInit {
     if (userData.role === UserRole.PARTNER) {
       delete userData.referredByPartnerCode;
     } else {
+      if (requiresParentLink(userData.role) && !userData.referredByPartnerCode?.trim()) {
+        userData.referredByPartnerCode = GLOBAL_HUB_PARTNER_CODE;
+      }
       await this.validateHierarchyLink(
         userData.role,
         userData.referredByPartnerCode,
@@ -273,7 +298,7 @@ export class UsersService implements OnModuleInit {
       // Allow self-update (e.g., training-complete)
       const isSelfUpdate = currentUser._id.toString() === targetUser._id.toString();
 
-      const isGlobalPartner = currentUser.partnerCode === 'GLOBAL77';
+      const isGlobalPartner = isGlobalHubPartnerCode(currentUser.partnerCode);
       const inNetwork = await this.isUserInViewerNetwork(
         currentUser,
         targetUser._id.toString(),
@@ -615,7 +640,7 @@ export class UsersService implements OnModuleInit {
     const partnerCode = viewer.partnerCode;
     if (!partnerCode) return empty;
 
-    const isGlobal = partnerCode === 'GLOBAL77';
+    const isGlobal = isGlobalHubPartnerCode(partnerCode);
 
     if (isGlobal) {
       const shops = await this.userModel
@@ -752,7 +777,7 @@ export class UsersService implements OnModuleInit {
     targetUserId: string,
   ): Promise<boolean> {
     if (viewer._id.toString() === targetUserId) return true;
-    if (viewer.partnerCode === 'GLOBAL77') return true;
+    if (isGlobalHubPartnerCode(viewer.partnerCode)) return true;
 
     const network = await this.findNetworkUsersForViewer(viewer);
     const all = [

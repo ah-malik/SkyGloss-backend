@@ -1,5 +1,6 @@
 import { UserRole } from '../users/entities/user.entity';
 import { formatRoleLabel } from './role-labels';
+import { isGlobalHubPartnerCode } from './global-hub';
 
 /** Top-to-bottom partner network hierarchy (includes shop as leaf). */
 export const NETWORK_HIERARCHY_ORDER = [
@@ -135,7 +136,7 @@ export function canTraverseNetwork(role?: string): boolean {
 
 export function canCertifyShops(role?: string, partnerCode?: string): boolean {
   if (role === UserRole.PARTNER || role === 'partner') return true;
-  if (partnerCode === 'GLOBAL77') return true;
+  if (isGlobalHubPartnerCode(partnerCode)) return true;
   return false;
 }
 

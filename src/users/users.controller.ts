@@ -34,6 +34,7 @@ import { GetUser } from '../common/decorators/get-user.decorator';
 import { Request } from 'express';
 import { ForbiddenException } from '@nestjs/common';
 import { MailService } from 'src/mail/mail.service';
+import { isGlobalHubPartnerCode } from '../common/global-hub';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -169,11 +170,12 @@ export class UsersController {
     @Body('partnerCode') partnerCode: string,
     @Req() req: any
   ) {
-    // Extra security: If it's a partner calling, it must be the Global Partner (GLOBAL77)
+    // Extra security: If it's a partner calling, it must be the Global Hub
     if (req.user.role === UserRole.MASTER_PARTNER &&
-      req.user.partnerCode !== 'GLOBAL77' &&
-      req.user.email !== 'certified@skygloss.com') {
-      throw new ForbiddenException('Only the Global Partner (GLOBAL77) can re-assign shops.');
+      !isGlobalHubPartnerCode(req.user.partnerCode) &&
+      req.user.email !== 'certified@skygloss.com' &&
+      req.user.email !== 'globalhub@skygloss.com') {
+      throw new ForbiddenException('Only the Global Hub can re-assign shops.');
     }
     return this.usersService.assignPartner(id, partnerCode);
   }

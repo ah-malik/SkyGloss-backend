@@ -66,6 +66,10 @@ export class CreateUserDto {
 
   @IsString()
   @IsOptional()
+  hearAboutUsOther?: string;
+
+  @IsString()
+  @IsOptional()
   accessCode?: string;
 
   @IsString()

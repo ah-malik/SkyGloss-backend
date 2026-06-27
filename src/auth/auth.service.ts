@@ -26,6 +26,9 @@ import {
   NETWORK_REFERENCE_ID_LABEL,
   isPartnerNetworkRole,
 } from '../common/role-labels';
+import {
+  GLOBAL_HUB_PARTNER_CODE,
+} from '../common/global-hub';
 
 @Injectable()
 export class AuthService {
@@ -256,13 +259,28 @@ export class AuthService {
   }
 
   async registerShop(createUserDto: CreateUserDto) {
-    const partnerId = createUserDto.referredByPartnerCode?.trim().toUpperCase();
+    let partnerId = createUserDto.referredByPartnerCode?.trim().toUpperCase() || '';
+    let hearAboutSource = createUserDto.hearAboutUs?.trim() || '';
 
-    if (!partnerId) {
-      throw new BadRequestException(`${NETWORK_REFERENCE_ID_LABEL} is required`);
+    if (hearAboutSource === 'Other') {
+      const otherText = createUserDto.hearAboutUsOther?.trim();
+      if (!otherText) {
+        throw new BadRequestException('Please specify how you heard about us.');
+      }
+      hearAboutSource = otherText;
+      createUserDto.hearAboutUs = otherText;
+    } else if (hearAboutSource) {
+      createUserDto.hearAboutUs = hearAboutSource;
     }
 
-    if (!/^[A-Z0-9]{4,10}$/.test(partnerId)) {
+    if (!partnerId) {
+      if (!hearAboutSource) {
+        throw new BadRequestException(
+          `Please enter a valid ${NETWORK_REFERENCE_ID_LABEL} or select where you heard about us.`,
+        );
+      }
+      partnerId = GLOBAL_HUB_PARTNER_CODE;
+    } else if (!/^[A-Z0-9]{4,10}$/.test(partnerId)) {
       throw new BadRequestException(
         `${NETWORK_REFERENCE_ID_LABEL} must be 4-10 alphanumeric characters`,
       );
