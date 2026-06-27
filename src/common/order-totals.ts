@@ -1,4 +1,5 @@
 import { calculateShippingFee } from './shipping-config';
+import { UserRole } from '../users/entities/user.entity';
 
 export function isRegistrationOrder(order: {
   items?: { product?: string }[];
@@ -10,6 +11,59 @@ export function isRegistrationOrder(order: {
   );
 }
 
+const PARTNER_NETWORK_ROLES = new Set<UserRole>([
+  UserRole.PARTNER,
+  UserRole.DISTRIBUTOR,
+  UserRole.MASTER_PARTNER,
+  UserRole.REGIONAL_PARTNER,
+  UserRole.SUB_PROMOTER,
+]);
+
+/** Mongo filter to exclude shop registration orders from partner revenue stats. */
+export function registrationOrderExclusionFilter() {
+  return {
+    $nor: [
+      { items: { $elemMatch: { product: 'registration_fee' } } },
+      { orderNumber: { $regex: '^REG' } },
+    ],
+  };
+}
+
+export function shouldHideShopRegistrationFromViewer(
+  order: {
+    items?: { product?: string }[];
+    orderNumber?: string;
+    user?: { _id?: unknown; role?: string } | string;
+  },
+  viewer: { _id?: unknown; role?: string },
+): boolean {
+  if (!isRegistrationOrder(order)) return false;
+  if (viewer.role === UserRole.ADMIN) return false;
+
+  const orderUserId =
+    typeof order.user === 'object' && order.user !== null && '_id' in order.user
+      ? String((order.user as { _id?: unknown })._id)
+      : String(order.user || '');
+
+  if (orderUserId && orderUserId === String(viewer._id)) {
+    return false;
+  }
+
+  if (!viewer.role || !PARTNER_NETWORK_ROLES.has(viewer.role as UserRole)) {
+    return false;
+  }
+
+  const orderUserRole =
+    typeof order.user === 'object' && order.user !== null
+      ? (order.user as { role?: string }).role
+      : undefined;
+
+  if (orderUserRole && orderUserRole !== UserRole.CERTIFIED_SHOP) {
+    return false;
+  }
+
+  return true;
+}
 export function getDiscountDisplayLabel(order: {
   couponCode?: string;
   items?: { product?: string }[];

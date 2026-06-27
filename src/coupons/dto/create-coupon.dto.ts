@@ -9,12 +9,18 @@ import {
   Max,
   Min,
 } from 'class-validator';
-import { CouponDiscountType } from '../entities/coupon.entity';
+import {
+  CouponDiscountType,
+  CouponUsageType,
+} from '../entities/coupon.entity';
 
 export class CreateCouponDto {
   @IsString()
   @IsNotEmpty()
   code: string;
+
+  @IsEnum(CouponUsageType)
+  usageType: CouponUsageType;
 
   @IsEnum(CouponDiscountType)
   discountType: CouponDiscountType;

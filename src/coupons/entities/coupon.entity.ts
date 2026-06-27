@@ -8,10 +8,23 @@ export enum CouponDiscountType {
   PERCENTAGE = 'percentage',
 }
 
+/** Where the coupon may be redeemed. */
+export enum CouponUsageType {
+  ORDER = 'order',
+  SHOP_REGISTRATION = 'shop_registration',
+}
+
 @Schema({ timestamps: true })
 export class Coupon {
   @Prop({ required: true, unique: true, uppercase: true, trim: true })
   code: string;
+
+  @Prop({
+    required: true,
+    enum: CouponUsageType,
+    default: CouponUsageType.ORDER,
+  })
+  usageType: CouponUsageType;
 
   @Prop({ required: true, enum: CouponDiscountType })
   discountType: CouponDiscountType;

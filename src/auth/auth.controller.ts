@@ -16,6 +16,7 @@ import { LoginAccessCodeDto } from './dto/login-access-code.dto';
 import { CreateUserDto } from '../users/dto/create-user.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ValidateShopRegistrationCouponDto } from '../coupons/dto/validate-shop-registration-coupon.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -57,6 +58,14 @@ export class AuthController {
   @Post('register-shop')
   async registerShop(@Body() createUserDto: CreateUserDto) {
     return this.authService.registerShop(createUserDto);
+  }
+
+  @Post('validate-shop-registration-coupon')
+  @HttpCode(HttpStatus.OK)
+  async validateShopRegistrationCoupon(
+    @Body() dto: ValidateShopRegistrationCouponDto,
+  ) {
+    return this.authService.validateShopRegistrationCoupon(dto.code, dto.country);
   }
 
   @UseGuards(JwtAuthGuard)

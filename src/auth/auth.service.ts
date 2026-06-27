@@ -21,6 +21,9 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
 import { NotificationType } from '../notifications/entities/notification.entity';
 import { ProductGroupsService } from '../product-groups/product-groups.service';
+import { CouponsService } from '../coupons/coupons.service';
+import { RegistrationFeesService } from '../registration-fees/registration-fees.service';
+import { ShopRegistrationCouponResult } from '../coupons/coupons.service';
 import {
   formatRoleLabel,
   NETWORK_REFERENCE_ID_LABEL,
@@ -41,6 +44,8 @@ export class AuthService {
     private notificationsService: NotificationsService,
     private notificationsGateway: NotificationsGateway,
     private productGroupsService: ProductGroupsService,
+    private couponsService: CouponsService,
+    private registrationFeesService: RegistrationFeesService,
   ) { }
 
   async validateUser(identifier: string, pass: string): Promise<any> {
@@ -258,6 +263,23 @@ export class AuthService {
     };
   }
 
+  async validateShopRegistrationCoupon(
+    code: string,
+    country?: string,
+  ): Promise<ShopRegistrationCouponResult> {
+    let subtotal = 250;
+    try {
+      const feeGroup = await this.registrationFeesService.findByCountry(country || '');
+      if (feeGroup) {
+        subtotal = feeGroup.feeAmount + (feeGroup.taxAmount || 0);
+      }
+    } catch (err) {
+      console.error('[AuthService] Failed to resolve registration fee for coupon:', err);
+    }
+
+    return this.couponsService.validateForShopRegistration(code, subtotal);
+  }
+
   async registerShop(createUserDto: CreateUserDto) {
     let partnerId = createUserDto.referredByPartnerCode?.trim().toUpperCase() || '';
     let hearAboutSource = createUserDto.hearAboutUs?.trim() || '';
@@ -302,9 +324,16 @@ export class AuthService {
 
     createUserDto.referredByPartnerCode = partnerId;
 
+    let registrationCoupon: ShopRegistrationCouponResult | null = null;
+    if (createUserDto.couponCode?.trim()) {
+      registrationCoupon = await this.validateShopRegistrationCoupon(
+        createUserDto.couponCode,
+        createUserDto.country,
+      );
+    }
 
-    // Handle Coupon Code Bypass (free registration)
-    const isCouponBypass = createUserDto.couponCode === 'CERTIFICATIONONUS';
+    const isFullyCovered = registrationCoupon?.isFullyCovered === true;
+    const appliedCouponCode = registrationCoupon?.code;
 
     // Determine product group: country match > partner's group > default group
     let resolvedProductGroup: any = partner.productGroup || undefined;
@@ -327,10 +356,10 @@ export class AuthService {
     const shopDto = {
       ...createUserDto,
       referredByPartnerCode: partnerId,
-      couponCode: isCouponBypass ? 'CERTIFICATIONONUS' : undefined,
+      couponCode: appliedCouponCode,
       role: UserRole.CERTIFIED_SHOP,
-      status: isCouponBypass ? UserStatus.ACTIVE : UserStatus.PENDING,
-      isPartnerPaid: isCouponBypass ? true : false,
+      status: isFullyCovered ? UserStatus.ACTIVE : UserStatus.PENDING,
+      isPartnerPaid: isFullyCovered ? true : false,
       isSelfRegistered: true,
       productGroup: resolvedProductGroup,
     };
@@ -344,11 +373,19 @@ export class AuthService {
       if (user.email) {
         let invoiceBuffer: Buffer | undefined;
         let orderNumber: string | undefined;
-        if (isCouponBypass) {
+        if (isFullyCovered && appliedCouponCode) {
           try {
-            const regOrder = await this.ordersService.createRegistrationOrder(user, undefined, true);
+            const regOrder = await this.ordersService.createRegistrationOrder(
+              user,
+              undefined,
+              {
+                couponCode: appliedCouponCode,
+                discount: registrationCoupon!.discountAmount,
+              },
+            );
             invoiceBuffer = await this.ordersService.generateInvoicePdf(regOrder);
             orderNumber = regOrder.orderNumber;
+            await this.couponsService.recordUsage(appliedCouponCode);
           } catch (orderErr) {
             console.error('[AuthService] Failed to create registration order for coupon bypass:', orderErr);
           }
@@ -379,15 +416,23 @@ export class AuthService {
       }
 
       // Create Stripe Checkout Session (unless bypassed by coupon)
-      if (!isCouponBypass) {
+      if (!isFullyCovered) {
+        const checkoutMetadata: Record<string, unknown> = {
+          type: 'shop_registration',
+          referredByPartnerCode: user.referredByPartnerCode,
+          country: user.country,
+        };
+
+        if (registrationCoupon) {
+          checkoutMetadata.couponCode = registrationCoupon.code;
+          checkoutMetadata.registrationDiscount = registrationCoupon.discountAmount;
+          checkoutMetadata.finalAmount = registrationCoupon.totalAfterDiscount;
+        }
+
         const stripeSession = await this.ordersService.createDistributorFeeCheckoutSession(
           user._id.toString(),
           user.email || '',
-          {
-            type: 'shop_registration',
-            referredByPartnerCode: user.referredByPartnerCode,
-            country: user.country
-          }
+          checkoutMetadata,
         );
 
         // Store session ID for manual verification fallback
@@ -407,7 +452,9 @@ export class AuthService {
       }
 
       return {
-        message: 'Registration successful via Certification Bonus! You can now log in.',
+        message: registrationCoupon
+          ? 'Registration successful with coupon applied! You can now log in.'
+          : 'Registration successful via coupon! You can now log in.',
         user: {
           id: user._id,
           email: user.email,

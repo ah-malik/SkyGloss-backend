@@ -27,7 +27,11 @@ import { UserDocument, UserRole, UserStatus } from '../users/entities/user.entit
 import { ProductGroup, ProductGroupDocument } from '../product-groups/entities/product-group.entity';
 import { RegistrationFeesService } from '../registration-fees/registration-fees.service';
 import { calculateShippingFee, getShippingRegion, SHIPPING_FEE_AMOUNT } from '../common/shipping-config';
-import { getItemsSubtotal } from '../common/order-totals';
+import {
+  getItemsSubtotal,
+  registrationOrderExclusionFilter,
+  shouldHideShopRegistrationFromViewer,
+} from '../common/order-totals';
 import {
   formatRoleLabel,
   getRegistrationFeeDescription,
@@ -42,6 +46,7 @@ import {
 import { ExchangeRatesService } from '../exchange-rates/exchange-rates.service';
 import {
   buildLockedMonetaryFields,
+  isMateriallyStaleFxRate,
   recalculateBaseWithLockedRate,
   SALES_REPORT_STATUSES,
   SYSTEM_BASE_CURRENCY,
@@ -115,7 +120,67 @@ export class OrdersService implements OnModuleInit {
   }
 
   async onModuleInit() {
+    await this.refreshExchangeRatesAndSyncOrders();
+  }
+
+  /** Pull latest market FX, repair broken rows, then refresh stale locked order amounts. */
+  async refreshExchangeRatesAndSyncOrders(): Promise<{ ratesUpdated: number; ordersSynced: number }> {
+    const ratesUpdated = await this.exchangeRatesService.refreshRatesFromMarket();
     await this.repairBrokenFxOrders();
+    const ordersSynced = await this.syncOrderFxWithCurrentRates();
+    return { ratesUpdated, ordersSynced };
+  }
+
+  /** Re-apply current DB exchange rates when locked order FX is materially stale. */
+  private async syncOrderFxWithCurrentRates(): Promise<number> {
+    const orders = await this.orderModel
+      .find({
+        totalAmount: { $gt: 0 },
+        orderNumber: { $not: /^REG/i },
+      })
+      .limit(5000)
+      .exec();
+
+    let updated = 0;
+
+    for (const order of orders) {
+      const currency = normalizeCurrencyCode(
+        order.originalCurrency || order.currency,
+      );
+      if (currency === SYSTEM_BASE_CURRENCY) continue;
+
+      const amount = order.originalAmount ?? order.totalAmount;
+      if (!amount || amount <= 0) continue;
+
+      try {
+        const currentRate = await this.exchangeRatesService.getRateToBase(currency);
+        const lockedRate = order.exchangeRateAtOrderTime;
+        if (!isMateriallyStaleFxRate(lockedRate, currentRate)) {
+          continue;
+        }
+
+        const fields = buildLockedMonetaryFields(amount, currency, currentRate);
+        if (
+          order.exchangeRateAtOrderTime === fields.exchangeRateAtOrderTime &&
+          order.baseCurrencyAmount === fields.baseCurrencyAmount
+        ) {
+          continue;
+        }
+
+        await this.orderModel.updateOne({ _id: order._id }, { $set: fields });
+        updated += 1;
+      } catch (err) {
+        this.logger.warn(
+          `Could not sync FX for order ${order.orderNumber}:`,
+          err,
+        );
+      }
+    }
+
+    if (updated > 0) {
+      this.logger.log(`Synced FX fields on ${updated} order(s) to current rates`);
+    }
+    return updated;
   }
 
   /** Fix orders where FX rate was rounded to 0 or non-USD was treated as 1:1 USD. */
@@ -360,6 +425,20 @@ export class OrdersService implements OnModuleInit {
       tax_amount = Math.round((feeGroup.taxAmount || 0) * 100);
     }
 
+    const totalBeforeDiscount = unit_amount + tax_amount;
+    const registrationDiscountCents = additionalMetadata.registrationDiscount
+      ? Math.round(Number(additionalMetadata.registrationDiscount) * 100)
+      : 0;
+    const finalAmountCents =
+      additionalMetadata.finalAmount != null
+        ? Math.round(Number(additionalMetadata.finalAmount) * 100)
+        : Math.max(0, totalBeforeDiscount - registrationDiscountCents);
+
+    if (finalAmountCents < totalBeforeDiscount && finalAmountCents >= 0) {
+      unit_amount = finalAmountCents;
+      tax_amount = 0;
+    }
+
     const user = await this.usersService.findOne(userId);
     const feeName = user
       ? getRegistrationFeeName(user.role)
@@ -576,8 +655,15 @@ export class OrdersService implements OnModuleInit {
       UserRole.DISTRIBUTOR,
       UserRole.MASTER_PARTNER,
       UserRole.REGIONAL_PARTNER,
+      UserRole.SUB_PROMOTER,
     ];
     if (networkRoles.includes(viewer.role as UserRole)) {
+      if (shouldHideShopRegistrationFromViewer(order as any, viewer)) {
+        throw new ForbiddenException(
+          'Shop registration invoices are not available to partners',
+        );
+      }
+
       const inNetwork = await this.usersService.isUserInViewerNetwork(
         viewer,
         orderUserId,
@@ -786,7 +872,11 @@ export class OrdersService implements OnModuleInit {
     return order;
   }
 
-  async createRegistrationOrder(user: any, stripeSessionOrId?: any, isCouponBypass: boolean = false): Promise<Order> {
+  async createRegistrationOrder(
+    user: any,
+    stripeSessionOrId?: any,
+    couponOptions?: { couponCode?: string; discount?: number },
+  ): Promise<Order> {
     // Check if registration order already exists for this user to avoid duplicates
     const existingOrder = await this.orderModel.findOne({
       user: user._id,
@@ -814,9 +904,11 @@ export class OrdersService implements OnModuleInit {
     }
 
     const subtotal = feeAmount + taxAmount;
-    let discount = isCouponBypass ? subtotal : 0;
-    let totalAmount = isCouponBypass ? 0 : subtotal;
-    let couponCode = isCouponBypass ? 'CERTIFICATIONONUS' : undefined;
+    const couponDiscount = couponOptions?.discount ?? 0;
+    const isCouponBypass = couponDiscount >= subtotal && subtotal > 0;
+    let discount = isCouponBypass ? subtotal : Math.min(couponDiscount, subtotal);
+    let totalAmount = Math.max(0, subtotal - discount);
+    let couponCode = couponOptions?.couponCode;
     let stripeSessionId: string | undefined = undefined;
 
     if (stripeSessionOrId) {
@@ -919,7 +1011,13 @@ export class OrdersService implements OnModuleInit {
         let invoiceBuffer: Buffer | undefined;
         let orderNumber: string | undefined;
         try {
-          const regOrder = await this.createRegistrationOrder(updatedUser, session, false);
+          const regOrder = await this.createRegistrationOrder(
+            updatedUser,
+            session,
+            updatedUser.couponCode
+              ? { couponCode: updatedUser.couponCode }
+              : undefined,
+          );
           invoiceBuffer = await this.generateInvoicePdf(regOrder);
           orderNumber = regOrder.orderNumber;
         } catch (orderErr) {
@@ -1141,7 +1239,13 @@ export class OrdersService implements OnModuleInit {
           let invoiceBuffer: Buffer | undefined;
           let orderNumber: string | undefined;
           try {
-            const regOrder = await this.createRegistrationOrder(updatedUser, session, false);
+            const regOrder = await this.createRegistrationOrder(
+            updatedUser,
+            session,
+            updatedUser.couponCode
+              ? { couponCode: updatedUser.couponCode }
+              : undefined,
+          );
             invoiceBuffer = await this.generateInvoicePdf(regOrder);
             orderNumber = regOrder.orderNumber;
           } catch (orderErr) {
@@ -1197,7 +1301,13 @@ export class OrdersService implements OnModuleInit {
           let invoiceBuffer: Buffer | undefined;
           let orderNumber: string | undefined;
           try {
-            const regOrder = await this.createRegistrationOrder(updatedUser, session, false);
+            const regOrder = await this.createRegistrationOrder(
+            updatedUser,
+            session,
+            updatedUser.couponCode
+              ? { couponCode: updatedUser.couponCode }
+              : undefined,
+          );
             invoiceBuffer = await this.generateInvoicePdf(regOrder);
             orderNumber = regOrder.orderNumber;
           } catch (orderErr) {
@@ -1409,6 +1519,10 @@ export class OrdersService implements OnModuleInit {
           return true;
         }
 
+        if (shouldHideShopRegistrationFromViewer(order, viewer)) {
+          return false;
+        }
+
         return canViewerSeeOrderPlacerRole(viewer.role, orderUser.role);
       })
       .map((order) => {
@@ -1432,7 +1546,10 @@ export class OrdersService implements OnModuleInit {
         currencyBreakdown: [],
       };
     }
-    return this.computeSalesReport({ user: { $in: userIds } });
+    return this.computeSalesReport({
+      user: { $in: userIds },
+      ...registrationOrderExclusionFilter(),
+    });
   }
 
   private async getNetworkOrderUserIds(
@@ -1766,6 +1883,19 @@ export class OrdersService implements OnModuleInit {
     return this.exchangeRatesService.getAllRates();
   }
 
+  async getExchangeRatesMap() {
+    return this.exchangeRatesService.getRatesMap();
+  }
+
+  async refreshExchangeRatesFromMarket() {
+    const { ratesUpdated, ordersSynced } = await this.refreshExchangeRatesAndSyncOrders();
+    return {
+      updated: ratesUpdated,
+      ordersSynced,
+      rates: await this.exchangeRatesService.getRatesMap(),
+    };
+  }
+
   async updateExchangeRate(currency: string, rateToBase: number) {
     if (!currency || typeof rateToBase !== 'number' || rateToBase <= 0) {
       throw new BadRequestException('Valid currency and rateToBase are required');
@@ -1943,11 +2073,7 @@ export class OrdersService implements OnModuleInit {
   private async recordCouponUsageIfApplicable(
     couponCode?: string,
   ): Promise<void> {
-    if (
-      !couponCode ||
-      couponCode === 'STRIPECOUPON' ||
-      couponCode === 'CERTIFICATIONONUS'
-    ) {
+    if (!couponCode || couponCode === 'STRIPECOUPON') {
       return;
     }
     await this.couponsService.recordUsage(couponCode).catch((err) => {

@@ -23,7 +23,7 @@ export const DOLLAR_ISO_CURRENCIES = new Set([
  */
 export const DEFAULT_EXCHANGE_RATES: Record<string, number> = {
   USD: 1,
-  EUR: 1.08,
+  EUR: 1.13,
   GBP: 1.27,
   PKR: 0.003571,
   CAD: 0.72,

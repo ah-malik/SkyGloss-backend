@@ -1,5 +1,5 @@
 /**
- * Seed missing FX rates and repair non-USD orders that were converted at 1:1.
+ * Refresh market FX rates and repair orders with broken or materially stale FX.
  *
  * Run: npm run repair-order-fx
  */
@@ -9,9 +9,51 @@ import {
   DEFAULT_EXCHANGE_RATES,
   normalizeCurrencyCode,
 } from './common/currency-codes';
-import { buildLockedMonetaryFields } from './common/order-monetary';
+import {
+  buildLockedMonetaryFields,
+  isMateriallyStaleFxRate,
+  roundExchangeRate,
+} from './common/order-monetary';
 
 dotenv.config();
+
+const MARKET_RATES_URL = 'https://api.frankfurter.app/latest?from=USD';
+
+async function refreshRatesFromMarket(
+  ratesCollection: mongoose.mongo.Collection,
+): Promise<number> {
+  const response = await fetch(MARKET_RATES_URL);
+  if (!response.ok) {
+    throw new Error(`Market FX fetch failed: HTTP ${response.status}`);
+  }
+
+  const data = (await response.json()) as { rates?: Record<string, number> };
+  const quotes = data.rates || {};
+  let updated = 0;
+
+  for (const [currency, unitsPerUsd] of Object.entries(quotes)) {
+    if (!unitsPerUsd || unitsPerUsd <= 0) continue;
+
+    const code = normalizeCurrencyCode(currency);
+    if (code === 'USD') continue;
+
+    const rateToBase = roundExchangeRate(1 / unitsPerUsd);
+    await ratesCollection.updateOne(
+      { currency: code },
+      { $set: { currency: code, rateToBase } },
+      { upsert: true },
+    );
+    updated += 1;
+  }
+
+  await ratesCollection.updateOne(
+    { currency: 'USD' },
+    { $set: { currency: 'USD', rateToBase: 1 } },
+    { upsert: true },
+  );
+
+  return updated;
+}
 
 async function bootstrap() {
   const uri = process.env.MONGO_URI;
@@ -30,6 +72,14 @@ async function bootstrap() {
       { upsert: true },
     );
     if (res.upsertedCount) seeded += 1;
+  }
+
+  let marketUpdated = 0;
+  try {
+    marketUpdated = await refreshRatesFromMarket(rates);
+    console.log(`Market FX refresh: ${marketUpdated} currency rate(s) updated.`);
+  } catch (err) {
+    console.warn('Market FX refresh failed; using database/default rates.', err);
   }
 
   const allRates = await rates.find({}).toArray();
@@ -59,13 +109,26 @@ async function bootstrap() {
     }
     if (!rate || rate <= 0) continue;
 
-    const fields = buildLockedMonetaryFields(amount, currency, rate);
-    const needsRepair =
-      order.exchangeRateAtOrderTime !== fields.exchangeRateAtOrderTime ||
-      order.baseCurrencyAmount !== fields.baseCurrencyAmount ||
-      order.originalCurrency !== fields.originalCurrency;
+    const lockedRate = order.exchangeRateAtOrderTime as number | undefined;
+    const broken =
+      !lockedRate ||
+      lockedRate <= 0 ||
+      lockedRate === 1 ||
+      !order.baseCurrencyAmount ||
+      order.baseCurrencyAmount <= 0;
 
-    if (!needsRepair) continue;
+    if (!broken && !isMateriallyStaleFxRate(lockedRate, rate)) {
+      continue;
+    }
+
+    const fields = buildLockedMonetaryFields(amount, currency, rate);
+    if (
+      order.exchangeRateAtOrderTime === fields.exchangeRateAtOrderTime &&
+      order.baseCurrencyAmount === fields.baseCurrencyAmount &&
+      order.originalCurrency === fields.originalCurrency
+    ) {
+      continue;
+    }
 
     await orders.updateOne({ _id: order._id }, { $set: fields });
     repaired += 1;

@@ -17,6 +17,8 @@ import {
 /** @deprecated import DEFAULT_EXCHANGE_RATES from currency-codes */
 export { DEFAULT_EXCHANGE_RATES };
 
+const MARKET_RATES_URL = 'https://api.frankfurter.app/latest?from=USD';
+
 @Injectable()
 export class ExchangeRatesService implements OnModuleInit {
   private readonly logger = new Logger(ExchangeRatesService.name);
@@ -35,6 +37,77 @@ export class ExchangeRatesService implements OnModuleInit {
       }
     }
     await this.ensureRatePrecision();
+    await this.refreshRatesFromMarket();
+  }
+
+  /**
+   * Fetch latest USD-based FX quotes and store as rateToBase (1 unit → USD).
+   * Frankfurter returns foreign units per 1 USD, so rateToBase = 1 / quote.
+   */
+  async refreshRatesFromMarket(): Promise<number> {
+    try {
+      const response = await fetch(MARKET_RATES_URL);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = (await response.json()) as {
+        rates?: Record<string, number>;
+      };
+      const quotes = data.rates || {};
+      let updated = 0;
+
+      for (const [currency, unitsPerUsd] of Object.entries(quotes)) {
+        if (!unitsPerUsd || unitsPerUsd <= 0) continue;
+
+        const code = normalizeCurrencyCode(currency);
+        if (code === SYSTEM_BASE_CURRENCY) continue;
+
+        const rateToBase = roundExchangeRate(1 / unitsPerUsd);
+        await this.exchangeRateModel.findOneAndUpdate(
+          { currency: code },
+          { currency: code, rateToBase },
+          { upsert: true },
+        );
+        updated += 1;
+      }
+
+      await this.exchangeRateModel.findOneAndUpdate(
+        { currency: SYSTEM_BASE_CURRENCY },
+        { currency: SYSTEM_BASE_CURRENCY, rateToBase: 1 },
+        { upsert: true },
+      );
+
+      this.logger.log(
+        `Exchange rates refreshed from market (${updated} currencies updated)`,
+      );
+      return updated;
+    } catch (err) {
+      this.logger.warn(
+        'Failed to refresh exchange rates from market; using database/default rates',
+        err,
+      );
+      return 0;
+    }
+  }
+
+  async getRatesMap(): Promise<Record<string, number>> {
+    const rows = await this.exchangeRateModel.find().lean().exec();
+    const map: Record<string, number> = { [SYSTEM_BASE_CURRENCY]: 1 };
+
+    for (const row of rows) {
+      if (row.currency && row.rateToBase > 0) {
+        map[row.currency] = roundExchangeRate(row.rateToBase);
+      }
+    }
+
+    for (const [currency, rateToBase] of Object.entries(DEFAULT_EXCHANGE_RATES)) {
+      if (!map[currency] || map[currency] <= 0) {
+        map[currency] = rateToBase;
+      }
+    }
+
+    return map;
   }
 
   async getRateToBase(currency: string): Promise<number> {

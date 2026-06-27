@@ -211,6 +211,13 @@ export class OrdersController {
     return this.ordersService.updateExchangeRate(currency, rateToBase);
   }
 
+  @Post('admin/exchange-rates/refresh')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  refreshExchangeRatesFromMarket() {
+    return this.ordersService.refreshExchangeRatesFromMarket();
+  }
+
   @Post('webhook')
   async handleWebhook(@Req() req: RawBodyRequest<any>) {
     console.log('[Stripe Webhook] Received request at /orders/webhook');

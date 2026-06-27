@@ -2,10 +2,16 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { Coupon, CouponDocument, CouponDiscountType } from './entities/coupon.entity';
+import {
+  Coupon,
+  CouponDocument,
+  CouponDiscountType,
+  CouponUsageType,
+} from './entities/coupon.entity';
 import { Order, OrderDocument } from '../orders/entities/order.entity';
 import { CreateCouponDto } from './dto/create-coupon.dto';
 import { UpdateCouponDto } from './dto/update-coupon.dto';
@@ -33,14 +39,40 @@ export interface CouponValidationResult {
   description?: string;
 }
 
+export interface ShopRegistrationCouponResult extends CouponValidationResult {
+  subtotal: number;
+  totalAfterDiscount: number;
+  isFullyCovered: boolean;
+}
+
 @Injectable()
-export class CouponsService {
+export class CouponsService implements OnModuleInit {
   constructor(
     @InjectModel(Coupon.name)
     private couponModel: Model<CouponDocument>,
     @InjectModel(Order.name)
     private orderModel: Model<OrderDocument>,
   ) {}
+
+  async onModuleInit() {
+    await this.couponModel.updateMany(
+      { usageType: { $exists: false } },
+      { $set: { usageType: CouponUsageType.ORDER } },
+    );
+
+    const legacyCode = 'CERTIFICATIONONUS';
+    const existingLegacy = await this.couponModel.findOne({ code: legacyCode });
+    if (!existingLegacy) {
+      await this.couponModel.create({
+        code: legacyCode,
+        usageType: CouponUsageType.SHOP_REGISTRATION,
+        discountType: CouponDiscountType.PERCENTAGE,
+        discountValue: 100,
+        isActive: true,
+        description: 'Legacy shop registration waiver (100% off)',
+      });
+    }
+  }
 
   async create(createCouponDto: CreateCouponDto): Promise<Coupon> {
     const code = normalizeCouponCode(createCouponDto.code);
@@ -118,6 +150,9 @@ export class CouponsService {
     if (updateCouponDto.discountType !== undefined) {
       coupon.discountType = updateCouponDto.discountType;
     }
+    if (updateCouponDto.usageType !== undefined) {
+      coupon.usageType = updateCouponDto.usageType;
+    }
     if (updateCouponDto.discountValue !== undefined) {
       coupon.discountValue = updateCouponDto.discountValue;
     }
@@ -153,7 +188,10 @@ export class CouponsService {
     code: string,
     subtotal: number,
   ): Promise<CouponValidationResult> {
-    const coupon = await this.findValidCoupon(code);
+    const coupon = await this.findValidCoupon(
+      code,
+      CouponUsageType.ORDER,
+    );
     const discountAmount = calculateCouponDiscountAmount(coupon, subtotal);
 
     return {
@@ -166,12 +204,49 @@ export class CouponsService {
     };
   }
 
-  async findValidCoupon(code: string): Promise<CouponDocument> {
+  async validateForShopRegistration(
+    code: string,
+    subtotal: number,
+  ): Promise<ShopRegistrationCouponResult> {
+    const coupon = await this.findValidCoupon(
+      code,
+      CouponUsageType.SHOP_REGISTRATION,
+    );
+    const discountAmount = calculateCouponDiscountAmount(coupon, subtotal);
+    const totalAfterDiscount = Math.max(0, roundMoney(subtotal - discountAmount));
+
+    return {
+      valid: true,
+      code: coupon.code,
+      discountType: coupon.discountType,
+      discountValue: coupon.discountValue,
+      discountAmount,
+      description: coupon.description,
+      subtotal: roundMoney(subtotal),
+      totalAfterDiscount,
+      isFullyCovered: totalAfterDiscount <= 0,
+    };
+  }
+
+  async findValidCoupon(
+    code: string,
+    expectedUsage?: CouponUsageType,
+  ): Promise<CouponDocument> {
     const normalized = normalizeCouponCode(code);
     const coupon = await this.couponModel.findOne({ code: normalized });
     if (!coupon) {
       throw new BadRequestException('Invalid coupon code');
     }
+
+    const usageType = coupon.usageType || CouponUsageType.ORDER;
+    if (expectedUsage && usageType !== expectedUsage) {
+      throw new BadRequestException(
+        expectedUsage === CouponUsageType.ORDER
+          ? 'This coupon is only valid for shop registration'
+          : 'This coupon is only valid for order checkout',
+      );
+    }
+
     if (!isCouponCurrentlyValid(coupon)) {
       if (coupon.isActive === false) {
         throw new BadRequestException('This coupon is not active');

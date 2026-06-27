@@ -26,6 +26,17 @@ export function roundExchangeRate(value: number): number {
   return Math.round(value * 1_000_000) / 1_000_000;
 }
 
+/** True when locked order FX differs from current rate by at least `threshold` (default 3%). */
+export function isMateriallyStaleFxRate(
+  lockedRate: number | undefined | null,
+  currentRate: number,
+  threshold = 0.03,
+): boolean {
+  if (!lockedRate || lockedRate <= 0) return true;
+  if (!currentRate || currentRate <= 0) return false;
+  return Math.abs(lockedRate - currentRate) / currentRate >= threshold;
+}
+
 export function buildLockedMonetaryFields(
   totalAmount: number,
   currency: string,
