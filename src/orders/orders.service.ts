@@ -46,7 +46,6 @@ import {
 import { ExchangeRatesService } from '../exchange-rates/exchange-rates.service';
 import {
   buildLockedMonetaryFields,
-  isMateriallyStaleFxRate,
   recalculateBaseWithLockedRate,
   SALES_REPORT_STATUSES,
   SYSTEM_BASE_CURRENCY,
@@ -120,67 +119,8 @@ export class OrdersService implements OnModuleInit {
   }
 
   async onModuleInit() {
-    await this.refreshExchangeRatesAndSyncOrders();
-  }
-
-  /** Pull latest market FX, repair broken rows, then refresh stale locked order amounts. */
-  async refreshExchangeRatesAndSyncOrders(): Promise<{ ratesUpdated: number; ordersSynced: number }> {
-    const ratesUpdated = await this.exchangeRatesService.refreshRatesFromMarket();
+    await this.exchangeRatesService.refreshRatesFromMarket();
     await this.repairBrokenFxOrders();
-    const ordersSynced = await this.syncOrderFxWithCurrentRates();
-    return { ratesUpdated, ordersSynced };
-  }
-
-  /** Re-apply current DB exchange rates when locked order FX is materially stale. */
-  private async syncOrderFxWithCurrentRates(): Promise<number> {
-    const orders = await this.orderModel
-      .find({
-        totalAmount: { $gt: 0 },
-        orderNumber: { $not: /^REG/i },
-      })
-      .limit(5000)
-      .exec();
-
-    let updated = 0;
-
-    for (const order of orders) {
-      const currency = normalizeCurrencyCode(
-        order.originalCurrency || order.currency,
-      );
-      if (currency === SYSTEM_BASE_CURRENCY) continue;
-
-      const amount = order.originalAmount ?? order.totalAmount;
-      if (!amount || amount <= 0) continue;
-
-      try {
-        const currentRate = await this.exchangeRatesService.getRateToBase(currency);
-        const lockedRate = order.exchangeRateAtOrderTime;
-        if (!isMateriallyStaleFxRate(lockedRate, currentRate)) {
-          continue;
-        }
-
-        const fields = buildLockedMonetaryFields(amount, currency, currentRate);
-        if (
-          order.exchangeRateAtOrderTime === fields.exchangeRateAtOrderTime &&
-          order.baseCurrencyAmount === fields.baseCurrencyAmount
-        ) {
-          continue;
-        }
-
-        await this.orderModel.updateOne({ _id: order._id }, { $set: fields });
-        updated += 1;
-      } catch (err) {
-        this.logger.warn(
-          `Could not sync FX for order ${order.orderNumber}:`,
-          err,
-        );
-      }
-    }
-
-    if (updated > 0) {
-      this.logger.log(`Synced FX fields on ${updated} order(s) to current rates`);
-    }
-    return updated;
   }
 
   /** Fix orders where FX rate was rounded to 0 or non-USD was treated as 1:1 USD. */
@@ -235,7 +175,12 @@ export class OrdersService implements OnModuleInit {
       if (!amount || amount <= 0) continue;
 
       try {
-        const rate = await this.exchangeRatesService.getRateToBase(currency);
+        const createdAt = (order as OrderDocument & { createdAt?: Date }).createdAt;
+        const orderDate = createdAt ? new Date(createdAt) : new Date();
+        const rate = await this.exchangeRatesService.getRateToBaseForDate(
+          currency,
+          orderDate,
+        );
         if (rate <= 0) continue;
 
         const fields = buildLockedMonetaryFields(amount, currency, rate);
@@ -293,6 +238,7 @@ export class OrdersService implements OnModuleInit {
     totalAmount: number,
     currency: string,
   ) {
+    // Lock today's DB rate at checkout — becomes the permanent order-date FX.
     const rate = await this.exchangeRatesService.getRateToBase(currency);
     return buildLockedMonetaryFields(totalAmount, currency, rate);
   }
@@ -1888,10 +1834,10 @@ export class OrdersService implements OnModuleInit {
   }
 
   async refreshExchangeRatesFromMarket() {
-    const { ratesUpdated, ordersSynced } = await this.refreshExchangeRatesAndSyncOrders();
+    const updated = await this.exchangeRatesService.refreshRatesFromMarket();
+    await this.repairBrokenFxOrders();
     return {
-      updated: ratesUpdated,
-      ordersSynced,
+      updated,
       rates: await this.exchangeRatesService.getRatesMap(),
     };
   }

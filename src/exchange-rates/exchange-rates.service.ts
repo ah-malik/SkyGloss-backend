@@ -13,6 +13,7 @@ import {
   DEFAULT_EXCHANGE_RATES,
   normalizeCurrencyCode,
 } from '../common/currency-codes';
+import { fetchHistoricalRateToBase } from '../common/historical-fx';
 
 /** @deprecated import DEFAULT_EXCHANGE_RATES from currency-codes */
 export { DEFAULT_EXCHANGE_RATES };
@@ -22,6 +23,7 @@ const MARKET_RATES_URL = 'https://api.frankfurter.app/latest?from=USD';
 @Injectable()
 export class ExchangeRatesService implements OnModuleInit {
   private readonly logger = new Logger(ExchangeRatesService.name);
+  private readonly historicalRateCache = new Map<string, number>();
 
   constructor(
     @InjectModel(ExchangeRate.name)
@@ -110,6 +112,28 @@ export class ExchangeRatesService implements OnModuleInit {
     return map;
   }
 
+  /**
+   * Historical rate for the order receipt date (1 unit → USD).
+   * Used only when repairing legacy orders missing locked FX fields.
+   */
+  async getRateToBaseForDate(currency: string, orderDate: Date): Promise<number> {
+    const code = normalizeCurrencyCode(currency);
+    if (code === SYSTEM_BASE_CURRENCY) return 1;
+
+    const cacheKey = `${code}:${orderDate.toISOString().slice(0, 10)}`;
+    const cached = this.historicalRateCache.get(cacheKey);
+    if (cached && cached > 0) return cached;
+
+    let rate = await fetchHistoricalRateToBase(code, orderDate);
+    if (!rate || rate <= 0) {
+      rate = await this.getRateToBase(code);
+    }
+
+    this.historicalRateCache.set(cacheKey, rate);
+    return rate;
+  }
+
+  /** Current DB rate — locked on new orders at checkout/request time. */
   async getRateToBase(currency: string): Promise<number> {
     const code = normalizeCurrencyCode(currency);
     if (code === SYSTEM_BASE_CURRENCY) return 1;

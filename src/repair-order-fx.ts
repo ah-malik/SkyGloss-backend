@@ -1,5 +1,6 @@
 /**
- * Refresh market FX rates and repair orders with broken or materially stale FX.
+ * Repair orders with missing/corrupt FX fields using the order receipt date rate.
+ * Does NOT overwrite valid locked rates on existing orders.
  *
  * Run: npm run repair-order-fx
  */
@@ -9,11 +10,8 @@ import {
   DEFAULT_EXCHANGE_RATES,
   normalizeCurrencyCode,
 } from './common/currency-codes';
-import {
-  buildLockedMonetaryFields,
-  isMateriallyStaleFxRate,
-  roundExchangeRate,
-} from './common/order-monetary';
+import { buildLockedMonetaryFields, roundExchangeRate } from './common/order-monetary';
+import { fetchHistoricalRateToBase } from './common/historical-fx';
 
 dotenv.config();
 
@@ -55,6 +53,25 @@ async function refreshRatesFromMarket(
   return updated;
 }
 
+function isBrokenFxOrder(order: {
+  exchangeRateAtOrderTime?: number;
+  baseCurrencyAmount?: number;
+  originalCurrency?: string;
+  currency?: string;
+}): boolean {
+  const currency = normalizeCurrencyCode(order.originalCurrency || order.currency);
+  if (currency === 'USD') return false;
+
+  const lockedRate = order.exchangeRateAtOrderTime;
+  return (
+    !lockedRate ||
+    lockedRate <= 0 ||
+    lockedRate === 1 ||
+    !order.baseCurrencyAmount ||
+    order.baseCurrencyAmount <= 0
+  );
+}
+
 async function bootstrap() {
   const uri = process.env.MONGO_URI;
   if (!uri) throw new Error('MONGO_URI is not set');
@@ -74,16 +91,12 @@ async function bootstrap() {
     if (res.upsertedCount) seeded += 1;
   }
 
-  let marketUpdated = 0;
   try {
-    marketUpdated = await refreshRatesFromMarket(rates);
+    const marketUpdated = await refreshRatesFromMarket(rates);
     console.log(`Market FX refresh: ${marketUpdated} currency rate(s) updated.`);
   } catch (err) {
     console.warn('Market FX refresh failed; using database/default rates.', err);
   }
-
-  const allRates = await rates.find({}).toArray();
-  const rateMap = new Map(allRates.map((r) => [r.currency, r.rateToBase]));
 
   const cursor = orders.find({
     totalAmount: { $gt: 0 },
@@ -95,6 +108,8 @@ async function bootstrap() {
 
   for await (const order of cursor) {
     scanned += 1;
+    if (!isBrokenFxOrder(order as Record<string, unknown>)) continue;
+
     const currency = normalizeCurrencyCode(
       order.originalCurrency || order.currency,
     );
@@ -103,23 +118,12 @@ async function bootstrap() {
     const amount = order.originalAmount ?? order.totalAmount;
     if (!amount || amount <= 0) continue;
 
-    let rate = rateMap.get(currency);
+    const orderDate = order.createdAt ? new Date(order.createdAt) : new Date();
+    let rate = await fetchHistoricalRateToBase(currency, orderDate);
     if (!rate || rate <= 0) {
       rate = DEFAULT_EXCHANGE_RATES[currency];
     }
     if (!rate || rate <= 0) continue;
-
-    const lockedRate = order.exchangeRateAtOrderTime as number | undefined;
-    const broken =
-      !lockedRate ||
-      lockedRate <= 0 ||
-      lockedRate === 1 ||
-      !order.baseCurrencyAmount ||
-      order.baseCurrencyAmount <= 0;
-
-    if (!broken && !isMateriallyStaleFxRate(lockedRate, rate)) {
-      continue;
-    }
 
     const fields = buildLockedMonetaryFields(amount, currency, rate);
     if (
@@ -135,7 +139,7 @@ async function bootstrap() {
   }
 
   console.log(
-    `FX repair complete: ${seeded} rate(s) seeded, ${scanned} orders scanned, ${repaired} repaired.`,
+    `FX repair complete: ${seeded} rate(s) seeded, ${scanned} orders scanned, ${repaired} repaired (order-date rates only).`,
   );
 
   await mongoose.disconnect();
