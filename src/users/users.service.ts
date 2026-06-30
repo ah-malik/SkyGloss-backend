@@ -355,7 +355,7 @@ export class UsersService implements OnModuleInit {
         !canCertifyShops(currentUser.role, currentUser.partnerCode)
       ) {
         throw new ForbiddenException(
-          'Only Hub users can certify shops. Distributor, Representative, and Promoter users have view-only access.',
+          'You do not have permission to certify this shop.',
         );
       }
 

@@ -25,7 +25,8 @@ export class PdfService {
       doc.on('end', () => resolve(Buffer.concat(chunks)));
 
       // ✅ Background
-      const bgUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1777377593/ikbhkmhdwj6t0rsghffz.jpg';
+      const bgUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1782826882/i76ou1myhdphtsxs2rc3.jpg';
+      // const bgUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1777377593/ikbhkmhdwj6t0rsghffz.jpg';
       const bg = await axios.get(bgUrl, { responseType: 'arraybuffer' });
 
       doc.image(Buffer.from(bg.data), 0, 40, {

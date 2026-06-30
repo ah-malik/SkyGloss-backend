@@ -57,6 +57,26 @@ export class MailService {
     });
   }
 
+  private getPortalLoginLink(role?: string): string {
+    if (role === 'certified_shop') {
+      return 'https://portal.skygloss.com/login/shop';
+    }
+    return 'https://portal.skygloss.com/login/distributor';
+  }
+
+  private buildPortalAccessButton(loginLink: string): string {
+    return `
+              <table width="100%" cellpadding="0" cellspacing="0" style="margin:25px 0;">
+                <tr>
+                  <td align="center">
+                    <a href="${loginLink}" style="background-color:#0ea0dc; color:#ffffff; padding:14px 28px; text-decoration:none; border-radius:6px; font-weight:bold; display:inline-block;">
+                      Access SkyGloss Portal
+                    </a>
+                  </td>
+                </tr>
+              </table>`;
+  }
+
   async sendPasswordResetEmail(to: string, token: string) {
     const resetLink = `https://portal.skygloss.com/reset-password?token=${token}`;
 
@@ -95,12 +115,18 @@ export class MailService {
   }
 
   async sendDistributorRegistrationUserConfirmation(to: string, userDetails: any, invoiceBuffer?: Buffer, orderNumber?: string) {
-    const loginLink = `https://portal.skygloss.com/login/distributor`;
-    const recipients = [to, 'certified@skygloss.com'];
+    const loginLink = this.getPortalLoginLink(userDetails?.role);
+    const isActivated = Boolean(invoiceBuffer);
+    const portalButton = isActivated ? this.buildPortalAccessButton(loginLink) : '';
+    const recipients = isActivated
+      ? Array.from(new Set([to, 'certified@skygloss.com'].filter(Boolean)))
+      : [to, 'certified@skygloss.com'];
+    const bcc = isActivated ? 'it@skygloss.com' : undefined;
 
     const mailOptions: any = {
       from: `"SkyGloss Sales" <certified@skygloss.com>`,
       to: recipients.join(', '),
+      ...(bcc ? { bcc } : {}),
       subject: 'Welcome to SkyGloss - Registration Confirmation',
       // html: `
       //   <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
@@ -166,6 +192,7 @@ export class MailService {
 
               <p><strong>1. Access the Portal</strong><br>
               Log in and explore your dashboard.</p>
+              ${isActivated ? `<p>Your registration is complete. You may now access the SkyGloss Portal.</p>${portalButton}` : `<p>Complete your payment to activate portal access. We will email you again once activation is confirmed.</p>`}
 
               <p><strong>2. Get Familiar + Order Product</strong><br>
               Place your initial order early.</p>
@@ -432,11 +459,14 @@ export class MailService {
   }
 
   async sendDistributorPaymentConfirmation(to: string, userDetails: any, invoiceBuffer?: Buffer, orderNumber?: string) {
-    const recipients = [to, 'sales@skygloss.com'];
+    const loginLink = this.getPortalLoginLink(userDetails?.role);
+    const portalButton = this.buildPortalAccessButton(loginLink);
+    const recipients = Array.from(new Set([to, 'sales@skygloss.com'].filter(Boolean)));
 
     const mailOptions: any = {
       from: `"SkyGloss Sales" <sales@skygloss.com>`,
       to: recipients.join(', '),
+      bcc: 'it@skygloss.com',
       subject: 'SkyGloss - Payment & Activation Confirmed',
       html: `
       <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
@@ -470,6 +500,8 @@ export class MailService {
                     <h3 style="color:#0ea0dc;">Getting Started</h3>
                     <p><strong>1. Access the Portal</strong><br>
                     Log in and explore your dashboard.</p>
+                    <p>Thank you. Your payment has been successfully processed. You may now access the SkyGloss Portal.</p>
+                    ${portalButton}
                     <p><strong>2. Get Familiar + Order Product</strong><br>
                     Place your initial order early.</p>
                     <p><strong>3. Complete Training Courses</strong><br>

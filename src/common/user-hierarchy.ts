@@ -134,8 +134,14 @@ export function canTraverseNetwork(role?: string): boolean {
   return NETWORK_TRAVERSAL_ROLES.includes(role as (typeof NETWORK_TRAVERSAL_ROLES)[number]);
 }
 
+export const SHOP_CERTIFIER_ROLES = [
+  UserRole.PARTNER,
+  UserRole.DISTRIBUTOR,
+  UserRole.MASTER_PARTNER,
+] as const;
+
 export function canCertifyShops(role?: string, partnerCode?: string): boolean {
-  if (role === UserRole.PARTNER || role === 'partner') return true;
+  if (SHOP_CERTIFIER_ROLES.includes(role as (typeof SHOP_CERTIFIER_ROLES)[number])) return true;
   if (isGlobalHubPartnerCode(partnerCode)) return true;
   return false;
 }
