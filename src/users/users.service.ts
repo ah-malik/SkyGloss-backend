@@ -19,7 +19,7 @@ import {
   requiresParentLink,
   validateParentRole,
 } from '../common/user-hierarchy';
-import { isCommissionEligibleRole } from '../common/commission-distribution';
+import { isCommissionEligibleRole, resolveShopCommissionChain } from '../common/commission-distribution';
 import {
   GLOBAL_HUB_PARTNER_CODE,
   isGlobalHubPartnerCode,
@@ -278,6 +278,48 @@ export class UsersService implements OnModuleInit {
 
   async findByPartnerCode(partnerCode: string): Promise<UserDocument | null> {
     return this.userModel.findOne({ partnerCode }).exec();
+  }
+
+  /** Resolve the shop's assigned Representative (local point of contact). */
+  async getLocalRepresentativeForShop(user: UserDocument) {
+    if (user.role !== UserRole.CERTIFIED_SHOP) {
+      return null;
+    }
+
+    const lookup = async (partnerCode: string) => {
+      const match = await this.findByPartnerCode(partnerCode?.trim());
+      if (!match) return null;
+      return {
+        _id: match._id,
+        partnerCode: match.partnerCode,
+        role: match.role,
+        referredByPartnerCode: match.referredByPartnerCode,
+        customCommissionRate: match.customCommissionRate,
+      };
+    };
+
+    const chain = await resolveShopCommissionChain(
+      { referredByPartnerCode: user.referredByPartnerCode },
+      lookup,
+    );
+
+    const repCode = chain.represented?.partnerCode;
+    if (!repCode) return null;
+
+    const rep = await this.findByPartnerCode(repCode);
+    if (!rep) return null;
+
+    const fullName = [rep.firstName, rep.lastName].filter(Boolean).join(' ').trim();
+
+    return {
+      firstName: rep.firstName,
+      lastName: rep.lastName,
+      fullName: fullName || rep.partnerCode,
+      email: rep.email || null,
+      phoneNumber: rep.phoneNumber || null,
+      partnerCode: rep.partnerCode,
+      profileImage: rep.profileImage || null,
+    };
   }
 
   async update(

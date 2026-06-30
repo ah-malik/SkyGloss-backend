@@ -41,7 +41,7 @@ export class PublicUsersController {
     if (!partner) {
       return {
         valid: false,
-        message: 'This ID was not found. Enter a valid Hub, Distributor, Representative, Promoter, or Sub-Promoter ID.',
+        message: 'This ID was not found. Enter a valid Partner ID.',
       };
     }
 

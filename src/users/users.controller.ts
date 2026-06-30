@@ -91,6 +91,11 @@ export class UsersController {
     return this.usersService.findAllPartners();
   }
 
+  @Get('me/local-representative')
+  getLocalRepresentative(@GetUser() user: UserDocument) {
+    return this.usersService.getLocalRepresentativeForShop(user);
+  }
+
   @Get(':id')
   @Roles(UserRole.ADMIN)
   findOne(@Param('id') id: string) {
