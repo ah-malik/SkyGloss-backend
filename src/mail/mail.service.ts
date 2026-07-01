@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import { formatRoleLabel } from '../common/role-labels';
+import { isGlobalHubPartnerCode } from '../common/global-hub';
+import { UserRole } from '../users/entities/user.entity';
 @Injectable()
 export class MailService {
   private transporter: nodemailer.Transporter;
@@ -77,6 +79,40 @@ export class MailService {
               </table>`;
   }
 
+  private buildShopContactFooter(
+    userDetails: any,
+    partnerContact?: {
+      partnerCode?: string;
+      email?: string;
+      firstName?: string;
+      lastName?: string;
+    } | null,
+  ): string {
+    const isShopUser = userDetails?.role === UserRole.CERTIFIED_SHOP;
+    const partnerCode = partnerContact?.partnerCode?.trim();
+    const hasAssignedPartner =
+      isShopUser &&
+      partnerCode &&
+      !isGlobalHubPartnerCode(partnerCode);
+
+    if (hasAssignedPartner) {
+      const partnerName = [partnerContact?.firstName, partnerContact?.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      return `
+                    <strong>${partnerName || 'Your Partner'}</strong><br>
+                    Partner ID: ${partnerCode}<br><br>
+                    ✉️ ${partnerContact?.email || 'N/A'}`;
+    }
+
+    return `
+                    <strong>Certification Department</strong><br>
+                    SkyGloss Global<br><br>
+                    📞 +1 (602) 784-4113<br>
+                    ✉️ certified@skygloss.com`;
+  }
+
   async sendPasswordResetEmail(to: string, token: string) {
     const resetLink = `https://portal.skygloss.com/reset-password?token=${token}`;
 
@@ -114,10 +150,22 @@ export class MailService {
     }
   }
 
-  async sendDistributorRegistrationUserConfirmation(to: string, userDetails: any, invoiceBuffer?: Buffer, orderNumber?: string) {
+  async sendDistributorRegistrationUserConfirmation(
+    to: string,
+    userDetails: any,
+    invoiceBuffer?: Buffer,
+    orderNumber?: string,
+    partnerContact?: {
+      partnerCode?: string;
+      email?: string;
+      firstName?: string;
+      lastName?: string;
+    } | null,
+  ) {
     const loginLink = this.getPortalLoginLink(userDetails?.role);
     const isActivated = Boolean(invoiceBuffer);
     const portalButton = isActivated ? this.buildPortalAccessButton(loginLink) : '';
+    const contactFooter = this.buildShopContactFooter(userDetails, partnerContact);
     const recipients = isActivated
       ? Array.from(new Set([to, 'certified@skygloss.com'].filter(Boolean)))
       : [to, 'certified@skygloss.com'];
@@ -237,10 +285,7 @@ export class MailService {
 
                   <!-- Right -->
                   <td width="50%" valign="top" style="font-size:14px; color:#555;">
-                    <strong>Certification Department</strong><br>
-                    SkyGloss Global<br><br>
-                    📞 +1 (602) 784-4113<br>
-                    ✉️ certified@skygloss.com
+                    ${contactFooter}
                   </td>
 
                   </tr>
@@ -458,9 +503,25 @@ export class MailService {
     }
   }
 
-  async sendDistributorPaymentConfirmation(to: string, userDetails: any, invoiceBuffer?: Buffer, orderNumber?: string) {
+  async sendDistributorPaymentConfirmation(
+    to: string,
+    userDetails: any,
+    invoiceBuffer?: Buffer,
+    orderNumber?: string,
+    partnerContact?: {
+      partnerCode?: string;
+      email?: string;
+      firstName?: string;
+      lastName?: string;
+    } | null,
+  ) {
     const loginLink = this.getPortalLoginLink(userDetails?.role);
     const portalButton = this.buildPortalAccessButton(loginLink);
+    const contactFooter = this.buildShopContactFooter(userDetails, partnerContact);
+    const showCertificationLocation =
+      userDetails?.role !== UserRole.CERTIFIED_SHOP ||
+      !partnerContact?.partnerCode ||
+      isGlobalHubPartnerCode(partnerContact.partnerCode);
     const recipients = Array.from(new Set([to, 'sales@skygloss.com'].filter(Boolean)));
 
     const mailOptions: any = {
@@ -531,11 +592,7 @@ export class MailService {
                           <a href="https://skygloss.com" style="color:#0ea0dc; text-decoration:none;">skygloss.com</a>
                         </td>
                         <td width="50%" valign="top" style="font-size:14px; color:#555;">
-                          <strong>Certification Department</strong><br>
-                          SkyGloss Global<br><br>
-                          📞 +1 (602) 784-4113<br>
-                          ✉️ certified@skygloss.com<br>
-                          📍 Phoenix, AZ, USA
+                          ${contactFooter}${showCertificationLocation ? '<br>📍 Phoenix, AZ, USA' : ''}
                         </td>
                       </tr>
                     </table>

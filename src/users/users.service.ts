@@ -804,9 +804,9 @@ export class UsersService implements OnModuleInit {
         promoters,
         subPromoters,
         distributors: [],
-        representatives: [],
-        represented: [],
-        partners: [...promoters, ...subPromoters],
+        representatives,
+        represented: representatives,
+        partners: [...representatives, ...promoters, ...subPromoters],
         viewerRole: viewer.role,
       };
     }
@@ -896,6 +896,126 @@ export class UsersService implements OnModuleInit {
     }).select('firstName lastName partnerCode email status role').sort({ firstName: 1 });
     this.logger.log(`Found ${partners.length} partners.`);
     return partners;
+  }
+
+  async getPartnerContactForShop(user: UserDocument | null | undefined) {
+    if (!user?.referredByPartnerCode || user.role !== UserRole.CERTIFIED_SHOP) {
+      return null;
+    }
+    if (isGlobalHubPartnerCode(user.referredByPartnerCode)) {
+      return null;
+    }
+    const partner = await this.findByPartnerCode(user.referredByPartnerCode);
+    if (!partner) return null;
+    return {
+      partnerCode: partner.partnerCode,
+      email: partner.email,
+      firstName: partner.firstName,
+      lastName: partner.lastName,
+    };
+  }
+
+  async searchRepresentativeForLinking(
+    query: string,
+    viewer: UserDocument,
+  ) {
+    const trimmed = query?.trim();
+    if (!trimmed) {
+      throw new BadRequestException('Please enter a Partner ID or email address.');
+    }
+    if (viewer.role !== UserRole.MASTER_PARTNER || !viewer.partnerCode) {
+      throw new ForbiddenException('Only Representatives can search for other Representatives.');
+    }
+
+    const normalizedQuery = trimmed.toUpperCase();
+    const isEmailQuery = trimmed.includes('@');
+
+    const target = await this.userModel.findOne(
+      isEmailQuery
+        ? { email: { $regex: new RegExp(`^${trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }, role: UserRole.MASTER_PARTNER }
+        : { partnerCode: normalizedQuery, role: UserRole.MASTER_PARTNER },
+    );
+
+    if (!target) {
+      throw new BadRequestException('No active Representative found with that Partner ID or email.');
+    }
+    if (target._id.toString() === viewer._id.toString()) {
+      throw new BadRequestException('You cannot add yourself to your network.');
+    }
+    if (target.status === UserStatus.BLOCKED) {
+      throw new BadRequestException('This Representative account is blocked.');
+    }
+    if (target.referredByPartnerCode === viewer.partnerCode) {
+      throw new BadRequestException('This Representative is already linked to your network.');
+    }
+
+    return {
+      _id: target._id,
+      firstName: target.firstName,
+      lastName: target.lastName,
+      email: target.email,
+      partnerCode: target.partnerCode,
+      referredByPartnerCode: target.referredByPartnerCode,
+      city: target.city,
+      country: target.country,
+      status: target.status,
+    };
+  }
+
+  async linkRepresentativeToViewer(query: string, viewer: UserDocument) {
+    const targetPreview = await this.searchRepresentativeForLinking(query, viewer);
+    const target = await this.userModel.findById(targetPreview._id);
+    if (!target) {
+      throw new BadRequestException('Representative not found.');
+    }
+
+    const viewerSubtree = await this.findNetworkUsersForViewer(viewer);
+    const subtreeIds = new Set(
+      [...viewerSubtree.representatives, ...viewerSubtree.promoters, ...viewerSubtree.subPromoters, ...viewerSubtree.shops]
+        .map((member) => member._id.toString()),
+    );
+    if (subtreeIds.has(target._id.toString())) {
+      throw new BadRequestException('This Representative is already in your network.');
+    }
+
+    if (viewer.partnerCode) {
+      const targetNetwork = await this.findNetworkUsersForViewer(target);
+      const targetSubtreeIds = new Set(
+        [
+          target._id.toString(),
+          ...targetNetwork.representatives,
+          ...targetNetwork.promoters,
+          ...targetNetwork.subPromoters,
+          ...targetNetwork.shops,
+        ].map((member) => (typeof member === 'string' ? member : member._id.toString())),
+      );
+      if (targetSubtreeIds.has(viewer._id.toString())) {
+        throw new BadRequestException('Cannot link a Representative who is above you in the network.');
+      }
+    }
+
+    target.referredByPartnerCode = viewer.partnerCode;
+    await this.validateHierarchyLink(
+      UserRole.MASTER_PARTNER,
+      viewer.partnerCode,
+      target._id.toString(),
+    );
+    await target.save();
+
+    return {
+      message: `${target.firstName} ${target.lastName} has been added to your network.`,
+      representative: {
+        _id: target._id,
+        firstName: target.firstName,
+        lastName: target.lastName,
+        email: target.email,
+        partnerCode: target.partnerCode,
+        referredByPartnerCode: target.referredByPartnerCode,
+        city: target.city,
+        country: target.country,
+        status: target.status,
+      },
+    };
   }
 
   async assignPartner(shopId: string, partnerCode: string) {

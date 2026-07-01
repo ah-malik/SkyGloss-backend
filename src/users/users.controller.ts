@@ -11,6 +11,7 @@ import {
   UploadedFile,
   BadRequestException,
   Req,
+  Query,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UsersService } from './users.service';
@@ -83,6 +84,24 @@ export class UsersController {
   )
   async getReferredShops(@GetUser() user: UserDocument) {
     return this.usersService.findNetworkUsersForViewer(user);
+  }
+
+  @Get('network/search-representative')
+  @Roles(UserRole.MASTER_PARTNER)
+  searchRepresentative(
+    @Query('query') query: string,
+    @GetUser() user: UserDocument,
+  ) {
+    return this.usersService.searchRepresentativeForLinking(query, user);
+  }
+
+  @Post('network/add-representative')
+  @Roles(UserRole.MASTER_PARTNER)
+  addRepresentative(
+    @Body('query') query: string,
+    @GetUser() user: UserDocument,
+  ) {
+    return this.usersService.linkRepresentativeToViewer(query, user);
   }
 
   @Get('partners-list')

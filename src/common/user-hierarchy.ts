@@ -84,7 +84,7 @@ export function filterCommissionsForViewer<T extends CommissionLike>(
 /** Roles that must be linked to a parent network user via referredByPartnerCode. */
 export const HIERARCHY_PARENT_ROLES: Partial<Record<UserRole, UserRole[]>> = {
   [UserRole.DISTRIBUTOR]: [UserRole.PARTNER],
-  [UserRole.MASTER_PARTNER]: [UserRole.DISTRIBUTOR, UserRole.PARTNER],
+  [UserRole.MASTER_PARTNER]: [UserRole.DISTRIBUTOR, UserRole.PARTNER, UserRole.MASTER_PARTNER],
   [UserRole.REGIONAL_PARTNER]: [UserRole.MASTER_PARTNER],
   [UserRole.SUB_PROMOTER]: [UserRole.REGIONAL_PARTNER],
   [UserRole.CERTIFIED_SHOP]: [
@@ -110,7 +110,7 @@ export function getParentLinkLabel(childRole?: string): string {
     case UserRole.DISTRIBUTOR:
       return 'Assigned Hub';
     case UserRole.MASTER_PARTNER:
-      return 'Assigned Distributor';
+      return 'Assigned Distributor / Representative';
     case UserRole.REGIONAL_PARTNER:
       return 'Assigned Representative';
     case UserRole.SUB_PROMOTER:

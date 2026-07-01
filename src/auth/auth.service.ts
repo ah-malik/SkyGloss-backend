@@ -31,6 +31,7 @@ import {
 } from '../common/role-labels';
 import {
   GLOBAL_HUB_PARTNER_CODE,
+  isGlobalHubPartnerCode,
 } from '../common/global-hub';
 
 @Injectable()
@@ -390,11 +391,20 @@ export class AuthService {
             console.error('[AuthService] Failed to create registration order for coupon bypass:', orderErr);
           }
         }
+        const shopPartnerContact = isGlobalHubPartnerCode(partner.partnerCode)
+          ? null
+          : {
+              partnerCode: partner.partnerCode,
+              email: partner.email,
+              firstName: partner.firstName,
+              lastName: partner.lastName,
+            };
         this.mailService.sendDistributorRegistrationUserConfirmation(
           user.email,
           user,
           invoiceBuffer,
           orderNumber,
+          shopPartnerContact,
         ).catch(err => console.error(err));
       }
 

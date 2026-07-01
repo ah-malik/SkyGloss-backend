@@ -979,11 +979,13 @@ export class OrdersService implements OnModuleInit {
 
         // 2. Notify User
         if (updatedUser.email) {
+          const partnerContact = await this.usersService.getPartnerContactForShop(updatedUser);
           await this.mailService.sendDistributorPaymentConfirmation(
             updatedUser.email,
             updatedUser,
             invoiceBuffer,
             orderNumber,
+            partnerContact,
           );
         }
 
@@ -1206,11 +1208,13 @@ export class OrdersService implements OnModuleInit {
 
           // Send User Confirmation Email
           if (updatedUser.email) {
+            const partnerContact = await this.usersService.getPartnerContactForShop(updatedUser);
             await this.mailService.sendDistributorPaymentConfirmation(
               updatedUser.email,
               updatedUser,
               invoiceBuffer,
               orderNumber,
+              partnerContact,
             );
           }
 
@@ -1268,11 +1272,13 @@ export class OrdersService implements OnModuleInit {
 
           // Send User Confirmation Email
           if (updatedUser.email) {
+            const partnerContact = await this.usersService.getPartnerContactForShop(updatedUser);
             await this.mailService.sendDistributorPaymentConfirmation(
               updatedUser.email,
               updatedUser,
               invoiceBuffer,
               orderNumber,
+              partnerContact,
             );
           }
 
