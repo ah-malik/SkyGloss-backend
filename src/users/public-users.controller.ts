@@ -86,7 +86,12 @@ export class PublicUsersController {
       city: user.city || '',
       lat: user.latitude,
       lng: user.longitude,
-      type: [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.DISTRIBUTOR, UserRole.PARTNER].includes(user.role) ? 'Partner' : 'shop',
+      type:
+        user.role === UserRole.CERTIFIED_SHOP
+          ? 'shop'
+          : user.role === UserRole.MASTER_PARTNER
+            ? 'representative'
+            : 'hub',
       role: user.role,
       address: user.address || '',
       phoneNumber: user.phoneNumber || '',
