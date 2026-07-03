@@ -3,6 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { User, UserDocument, UserRole } from './entities/user.entity';
 import { formatRoleLabel } from '../common/role-labels';
+import { GLOBAL_HUB_PARTNER_CODE, LEGACY_GLOBAL_HUB_PARTNER_CODE } from '../common/global-hub';
 
 @Controller('public')
 export class PublicUsersController {
@@ -56,27 +57,39 @@ export class PublicUsersController {
 
   @Get('map-locations')
   async getMapLocations() {
+    const globalHubCodes = [GLOBAL_HUB_PARTNER_CODE, LEGACY_GLOBAL_HUB_PARTNER_CODE];
+
     const users = await this.userModel.find({
       latitude: { $ne: null },
       longitude: { $ne: null },
       $or: [
-        // Approved Shops: Must be ACTIVE and CERTIFIED
         {
           role: UserRole.CERTIFIED_SHOP,
           status: 'active',
           isCertified: true,
           isVisibleOnMap: true,
         },
-        // Approved Partners: Must be ACTIVE
         {
-          role: { $in: [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.DISTRIBUTOR, UserRole.PARTNER] },
+          role: {
+            $in: [
+              UserRole.MASTER_PARTNER,
+              UserRole.REGIONAL_PARTNER,
+              UserRole.SUB_PROMOTER,
+              UserRole.DISTRIBUTOR,
+            ],
+          },
           status: 'active',
+          isVisibleOnMap: true,
+        },
+        {
+          role: UserRole.PARTNER,
+          partnerCode: { $in: globalHubCodes },
+          status: 'active',
+          isVisibleOnMap: true,
         },
       ],
-
-
     }).select(
-      'firstName lastName shopName companyName country city address latitude longitude role phoneNumber email profileImage ' +
+      'firstName lastName shopName companyName country city address latitude longitude role partnerCode phoneNumber email profileImage ' +
       'facebook instagram linkedin youtube tiktok website'
     ).lean();
 
@@ -86,13 +99,9 @@ export class PublicUsersController {
       city: user.city || '',
       lat: user.latitude,
       lng: user.longitude,
-      type:
-        user.role === UserRole.CERTIFIED_SHOP
-          ? 'shop'
-          : user.role === UserRole.MASTER_PARTNER
-            ? 'representative'
-            : 'hub',
+      type: user.role === UserRole.CERTIFIED_SHOP ? 'shop' : 'networkPartner',
       role: user.role,
+      partnerCode: user.partnerCode,
       address: user.address || '',
       phoneNumber: user.phoneNumber || '',
       email: user.email || '',

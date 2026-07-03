@@ -35,7 +35,7 @@ import { GetUser } from '../common/decorators/get-user.decorator';
 import { Request } from 'express';
 import { ForbiddenException } from '@nestjs/common';
 import { MailService } from 'src/mail/mail.service';
-import { isGlobalHubPartnerCode } from '../common/global-hub';
+import { GLOBAL_HUB_PARTNER_CODE, isGlobalHubAccount, isGlobalHubPartnerCode } from '../common/global-hub';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -83,7 +83,11 @@ export class UsersController {
     UserRole.PARTNER,
   )
   async getReferredShops(@GetUser() user: UserDocument) {
-    return this.usersService.findNetworkUsersForViewer(user);
+    const network = await this.usersService.findNetworkUsersForViewer(user);
+    const globalHub = isGlobalHubAccount(user)
+      ? await this.usersService.findByPartnerCode(GLOBAL_HUB_PARTNER_CODE)
+      : null;
+    return { ...network, globalHub };
   }
 
   @Get('network/search-representative')
@@ -170,7 +174,13 @@ export class UsersController {
   }
 
   @Patch('referred-shops/:id/visibility')
-  @Roles(UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.DISTRIBUTOR, UserRole.PARTNER)
+  @Roles(
+    UserRole.MASTER_PARTNER,
+    UserRole.REGIONAL_PARTNER,
+    UserRole.SUB_PROMOTER,
+    UserRole.DISTRIBUTOR,
+    UserRole.PARTNER,
+  )
   async updateReferredShopVisibility(
     @Param('id') id: string,
     @Body('isVisibleOnMap') isVisibleOnMap: boolean,
@@ -182,7 +192,7 @@ export class UsersController {
       user,
     );
     if (!updatedUser) {
-      throw new BadRequestException('Shop not found or logic error');
+      throw new BadRequestException('User not found or you do not have permission to update map visibility.');
     }
     return updatedUser;
   }

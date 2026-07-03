@@ -12,6 +12,19 @@ export function isGlobalHubPartnerCode(code?: string | null): boolean {
   );
 }
 
+export const GLOBAL_HUB_EMAIL = 'globalhub@skygloss.com';
+
+export function isGlobalHubAccount(user?: {
+  partnerCode?: string | null;
+  email?: string | null;
+} | null): boolean {
+  if (!user) return false;
+  return (
+    isGlobalHubPartnerCode(user.partnerCode) ||
+    user.email?.toLowerCase().trim() === GLOBAL_HUB_EMAIL
+  );
+}
+
 /** True when linked to a real partner (not the global hub fallback). */
 export function isUserPartnerAssigned(referredByPartnerCode?: string | null): boolean {
   if (!referredByPartnerCode?.trim()) return false;

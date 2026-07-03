@@ -22,6 +22,7 @@ import {
 import { isCommissionEligibleRole, resolveShopCommissionChain } from '../common/commission-distribution';
 import {
   GLOBAL_HUB_PARTNER_CODE,
+  isGlobalHubAccount,
   isGlobalHubPartnerCode,
 } from '../common/global-hub';
 
@@ -845,38 +846,43 @@ export class UsersService implements OnModuleInit {
   }
 
   async updateShopVisibility(
-    shopId: string,
+    memberId: string,
     isVisibleOnMap: boolean,
     viewer: UserDocument,
   ): Promise<UserDocument | null> {
-    const inNetwork = await this.isUserInViewerNetwork(viewer, shopId);
-    if (!inNetwork) return null;
+    const member = await this.userModel.findById(memberId);
+    if (!member) return null;
 
-    const shop = await this.userModel.findOne({
-      _id: shopId,
-      role: UserRole.CERTIFIED_SHOP,
-    });
+    const isSelf = viewer._id.toString() === memberId;
+    const isGlobalHubTarget = isGlobalHubPartnerCode(member.partnerCode);
 
-    if (!shop) return null;
+    if (member.role === UserRole.PARTNER && !isGlobalHubTarget) {
+      throw new BadRequestException('Hub accounts cannot be shown on the map.');
+    }
+
+    if (isGlobalHubTarget) {
+      if (!isGlobalHubAccount(viewer)) {
+        throw new ForbiddenException('Only the Global Hub account can update its map visibility.');
+      }
+    } else {
+      const inNetwork = await this.isUserInViewerNetwork(viewer, memberId);
+      if (!inNetwork && !isSelf) return null;
+    }
 
     const updatePayload: any = { isVisibleOnMap };
 
-    // If making visible and coordinates are missing, attempt geocoding
-    if (isVisibleOnMap && (!shop.latitude || !shop.longitude)) {
-      if (shop.address && shop.city && shop.country) {
-        const coords = await this.fetchCoordinates(shop.address, shop.city, shop.country);
+    if (isVisibleOnMap && (!member.latitude || !member.longitude)) {
+      if (member.address && member.city && member.country) {
+        const coords = await this.fetchCoordinates(member.address, member.city, member.country);
         if (coords) {
           updatePayload.latitude = coords.latitude;
           updatePayload.longitude = coords.longitude;
-          console.log(`[Geocoding] Success during visibility toggle for shop ${shop.email}:`, coords);
-        } else {
-          console.warn(`[Geocoding] Failed during visibility toggle for shop ${shop.email}. Shop may not appear on map.`);
         }
       }
     }
 
     return this.userModel.findByIdAndUpdate(
-      shopId,
+      memberId,
       updatePayload,
       { new: true },
     ).exec();
@@ -893,7 +899,7 @@ export class UsersService implements OnModuleInit {
           UserRole.PARTNER,
         ],
       },
-    }).select('firstName lastName partnerCode email status role').sort({ firstName: 1 });
+    }).select('firstName lastName partnerCode email status role isVisibleOnMap city country').sort({ firstName: 1 });
     this.logger.log(`Found ${partners.length} partners.`);
     return partners;
   }
