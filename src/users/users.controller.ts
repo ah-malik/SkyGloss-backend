@@ -87,7 +87,11 @@ export class UsersController {
     const globalHub = isGlobalHubAccount(user)
       ? await this.usersService.findByPartnerCode(GLOBAL_HUB_PARTNER_CODE)
       : null;
-    return { ...network, globalHub };
+    return {
+      ...network,
+      globalHub,
+      operationalRepresentativeCodes: user.operationalRepresentativeCodes ?? [],
+    };
   }
 
   @Get('network/search-representative')

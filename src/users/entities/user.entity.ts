@@ -109,6 +109,10 @@ export class User {
   @Prop({ sparse: true })
   referredByPartnerCode?: string;
 
+  /** Representative partner codes linked for operational support without re-parenting. */
+  @Prop({ type: [String], default: [] })
+  operationalRepresentativeCodes?: string[];
+
   @Prop()
   couponCode?: string;
 

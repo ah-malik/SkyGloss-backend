@@ -744,25 +744,34 @@ export class UsersService implements OnModuleInit {
 
     const collected: UserDocument[] = [];
     const seenIds = new Set<string>();
-    let frontier = [partnerCode];
+    await this.collectNetworkDescendants([partnerCode], collected, seenIds);
 
-    for (let depth = 0; depth < 20 && frontier.length > 0; depth++) {
-      const batch = await this.userModel
-        .find({ referredByPartnerCode: { $in: frontier } })
-        .exec();
+    if (viewer.role === UserRole.MASTER_PARTNER) {
+      const freshViewer = await this.userModel
+        .findById(viewer._id)
+        .select('operationalRepresentativeCodes partnerCode')
+        .lean();
+      const operationalCodes = (freshViewer?.operationalRepresentativeCodes || [])
+        .map((code) => normalizePartnerCode(code))
+        .filter(
+          (code) => code && code !== normalizePartnerCode(partnerCode),
+        );
 
-      const nextFrontier: string[] = [];
-      for (const u of batch) {
-        const id = u._id.toString();
-        if (seenIds.has(id)) continue;
-        seenIds.add(id);
-        collected.push(u);
-
-        if (u.partnerCode && canTraverseNetwork(u.role)) {
-          nextFrontier.push(u.partnerCode);
+      for (const operationalCode of operationalCodes) {
+        const linkedRep = await this.findByPartnerCode(operationalCode);
+        if (
+          linkedRep?.role === UserRole.MASTER_PARTNER &&
+          !seenIds.has(linkedRep._id.toString())
+        ) {
+          seenIds.add(linkedRep._id.toString());
+          collected.push(linkedRep);
         }
+        await this.collectNetworkDescendants(
+          [operationalCode],
+          collected,
+          seenIds,
+        );
       }
-      frontier = nextFrontier;
     }
 
     const distributors = collected.filter((u) => u.role === UserRole.DISTRIBUTOR);
@@ -954,6 +963,22 @@ export class UsersService implements OnModuleInit {
     if (target.referredByPartnerCode === viewer.partnerCode) {
       throw new BadRequestException('This Representative is already linked to your network.');
     }
+    if (
+      normalizePartnerCode(target.referredByPartnerCode) ===
+      normalizePartnerCode(viewer.partnerCode)
+    ) {
+      throw new BadRequestException('This Representative is already linked to your network.');
+    }
+
+    const targetCode = normalizePartnerCode(target.partnerCode);
+    const existingOperational = (viewer.operationalRepresentativeCodes || []).map(
+      (code) => normalizePartnerCode(code),
+    );
+    if (targetCode && existingOperational.includes(targetCode)) {
+      throw new BadRequestException(
+        'This Representative is already linked for operational support.',
+      );
+    }
 
     return {
       _id: target._id,
@@ -984,32 +1009,27 @@ export class UsersService implements OnModuleInit {
       throw new BadRequestException('This Representative is already in your network.');
     }
 
-    if (viewer.partnerCode) {
-      const targetNetwork = await this.findNetworkUsersForViewer(target);
-      const targetSubtreeIds = new Set(
-        [
-          target._id.toString(),
-          ...targetNetwork.representatives,
-          ...targetNetwork.promoters,
-          ...targetNetwork.subPromoters,
-          ...targetNetwork.shops,
-        ].map((member) => (typeof member === 'string' ? member : member._id.toString())),
-      );
-      if (targetSubtreeIds.has(viewer._id.toString())) {
-        throw new BadRequestException('Cannot link a Representative who is above you in the network.');
-      }
+    const targetCode = normalizePartnerCode(target.partnerCode);
+    const viewerCode = normalizePartnerCode(viewer.partnerCode);
+    if (!targetCode || !viewerCode) {
+      throw new BadRequestException('Partner ID is required to link Representatives.');
     }
 
-    target.referredByPartnerCode = viewer.partnerCode;
-    await this.validateHierarchyLink(
-      UserRole.MASTER_PARTNER,
-      viewer.partnerCode,
-      target._id.toString(),
+    const existingOperational = (viewer.operationalRepresentativeCodes || []).map(
+      (code) => normalizePartnerCode(code),
     );
-    await target.save();
+    if (existingOperational.includes(targetCode)) {
+      throw new BadRequestException('This Representative is already linked for operational support.');
+    }
+
+    // Operational soft link only — never re-parent the target Representative.
+    await this.userModel.findByIdAndUpdate(viewer._id, {
+      $addToSet: { operationalRepresentativeCodes: targetCode },
+    });
 
     return {
-      message: `${target.firstName} ${target.lastName} has been added to your network.`,
+      message: `${target.firstName} ${target.lastName} linked for operational support. Their Promoters and Shops are now visible in your network. New members under them will appear automatically.`,
+      linkType: 'operational',
       representative: {
         _id: target._id,
         firstName: target.firstName,
@@ -1072,6 +1092,65 @@ export class UsersService implements OnModuleInit {
       );
     }
     payload.customCommissionRate = rate;
+  }
+
+  /** Walk parent links upward and return true if partnerCode appears in viewer's upline. */
+  private async isPartnerCodeInViewerAncestry(
+    viewer: UserDocument,
+    partnerCode: string,
+  ): Promise<boolean> {
+    const targetCode = normalizePartnerCode(partnerCode);
+    if (!targetCode) return false;
+
+    let current: UserDocument | null = viewer;
+    const visited = new Set<string>();
+
+    for (let depth = 0; depth < 25 && current; depth++) {
+      const parentCode = current.referredByPartnerCode?.trim();
+      if (!parentCode) return false;
+
+      const normalizedParent = normalizePartnerCode(parentCode);
+      if (!normalizedParent || visited.has(normalizedParent)) return false;
+      visited.add(normalizedParent);
+
+      if (normalizedParent === targetCode) return true;
+
+      const parent = await this.findByPartnerCode(normalizedParent);
+      if (!parent) return false;
+      if (parent._id.toString() === current._id.toString()) return false;
+      current = parent;
+    }
+
+    return false;
+  }
+
+  private async collectNetworkDescendants(
+    rootCodes: string[],
+    collected: UserDocument[],
+    seenIds: Set<string>,
+  ): Promise<void> {
+    let frontier = rootCodes
+      .map((code) => normalizePartnerCode(code))
+      .filter(Boolean);
+
+    for (let depth = 0; depth < 20 && frontier.length > 0; depth++) {
+      const batch = await this.userModel
+        .find({ referredByPartnerCode: { $in: frontier } })
+        .exec();
+
+      const nextFrontier: string[] = [];
+      for (const user of batch) {
+        const id = user._id.toString();
+        if (seenIds.has(id)) continue;
+        seenIds.add(id);
+        collected.push(user);
+
+        if (user.partnerCode && canTraverseNetwork(user.role)) {
+          nextFrontier.push(normalizePartnerCode(user.partnerCode));
+        }
+      }
+      frontier = nextFrontier;
+    }
   }
 
   private async validateHierarchyLink(
