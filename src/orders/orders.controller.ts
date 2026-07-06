@@ -85,6 +85,29 @@ export class OrdersController {
     }
   }
 
+<<<<<<< Updated upstream
+=======
+  @Get('commission-orders')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.MASTER_PARTNER)
+  async getCommissionOrders(@GetUser() user: UserDocument) {
+    return this.ordersService.getCommissionOrders(user);
+  }
+
+  @Get('network-sales-stats')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    UserRole.PARTNER,
+    UserRole.REGIONAL_PARTNER,
+    UserRole.MASTER_PARTNER,
+    UserRole.DISTRIBUTOR,
+    UserRole.SUB_PROMOTER,
+  )
+  getNetworkSalesStats(@GetUser() user: UserDocument) {
+    return this.ordersService.getNetworkSalesStats(user);
+  }
+
+>>>>>>> Stashed changes
   @Get(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(

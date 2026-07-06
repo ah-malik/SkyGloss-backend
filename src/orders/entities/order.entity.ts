@@ -121,6 +121,25 @@ export class Order {
 
   @Prop({ default: 0 })
   paymentReminderCount?: number;
+<<<<<<< Updated upstream
+=======
+
+  @Prop({ type: [Object], default: [] })
+  commissions?: {
+    recipientUserId: string;
+    recipientPartnerCode: string;
+    recipientRole: string;
+    earningType: 'Shop Introduction' | 'Partner Development' | 'Operational Support';
+    percentage: number;
+    amount: number;
+    status: 'pending' | 'earned';
+    shopId?: string;
+    orderAmount?: number;
+    originalCurrency?: string;
+    exchangeRate?: number;
+    convertedUsdAmount?: number;
+  }[];
+>>>>>>> Stashed changes
 }
 
 export const OrderSchema = SchemaFactory.createForClass(Order);

@@ -27,6 +27,38 @@ import { RegistrationFeesService } from '../registration-fees/registration-fees.
 import { calculateShippingFee, getShippingRegion, SHIPPING_FEE_AMOUNT } from '../common/shipping-config';
 import { getItemsSubtotal } from '../common/order-totals';
 import { PdfService } from '../pdf/pdf.service';
+<<<<<<< Updated upstream
+=======
+import {
+  calculateRepresentativeCommissionEntries,
+  resolveCommissionOrderAmounts,
+} from '../common/commission-distribution';
+import { isRegistrationOrder } from '../common/order-totals';
+import { ExchangeRatesService } from '../exchange-rates/exchange-rates.service';
+import {
+  buildLockedMonetaryFields,
+  recalculateBaseWithLockedRate,
+  SALES_REPORT_STATUSES,
+  SYSTEM_BASE_CURRENCY,
+  EFFECTIVE_BASE_AMOUNT_EXPR,
+  EFFECTIVE_ORIGINAL_AMOUNT_EXPR,
+  EFFECTIVE_ORIGINAL_CURRENCY_EXPR,
+  roundMoney,
+} from '../common/order-monetary';
+import {
+  canViewerSeeOrderPlacerRole,
+  filterCommissionsForViewer,
+  shouldIncludeViewerInNetworkOrders,
+} from '../common/user-hierarchy';
+import {
+  formatShopOrderNumber,
+  getNextShopOrderSequenceForFlow,
+  resolveOrderCountryCode,
+  type ShopOrderFlow,
+} from '../common/order-number';
+import { normalizeCurrencyCode } from '../common/currency-codes';
+import { CouponsService } from '../coupons/coupons.service';
+>>>>>>> Stashed changes
 
 const USA_COUNTRIES = ['united states', 'usa', 'us', 'united states of america'];
 const PENDING_PAYMENT_CANCEL_DAYS = 3;
@@ -303,7 +335,42 @@ export class OrdersService {
     ) {
       throw new ForbiddenException('You do not have access to this order');
     }
+<<<<<<< Updated upstream
     return order;
+=======
+
+    if (orderUserId === viewer._id.toString()) {
+      return order;
+    }
+
+    const networkRoles = [
+      UserRole.PARTNER,
+      UserRole.DISTRIBUTOR,
+      UserRole.MASTER_PARTNER,
+      UserRole.REGIONAL_PARTNER,
+      UserRole.SUB_PROMOTER,
+    ];
+    if (networkRoles.includes(viewer.role as UserRole)) {
+      if (shouldHideShopRegistrationFromViewer(order as any, viewer)) {
+        throw new ForbiddenException(
+          'Shop registration invoices are not available to partners',
+        );
+      }
+
+      const orderUserDoc = await this.usersService.findOne(orderUserId);
+      const isShopOrder = orderUserDoc?.role === UserRole.CERTIFIED_SHOP;
+
+      const canAccess = isShopOrder
+        ? await this.usersService.canViewerAccessShopOrder(viewer, orderUserId)
+        : await this.usersService.isUserInViewerNetwork(viewer, orderUserId);
+
+      if (canAccess) {
+        return order;
+      }
+    }
+
+    throw new ForbiddenException('You do not have access to this order');
+>>>>>>> Stashed changes
   }
 
   async createPaymentSessionForOrder(
@@ -1059,6 +1126,7 @@ export class OrdersService {
       .sort({ createdAt: -1 });
   }
 
+<<<<<<< Updated upstream
   async getNetworkOrders(partnerCode: string): Promise<Order[]> {
     const { shops } = await this.usersService.findReferredShops(partnerCode);
     const shopIds = shops.map(shop => shop._id);
@@ -1071,6 +1139,480 @@ export class OrdersService {
   }
 
   async updateStatus(id: string, status: OrderStatus, trackingId?: string, shippingCompany?: string): Promise<Order> {
+=======
+  async getNetworkOrders(viewer: UserDocument): Promise<Order[]> {
+    const userIds = await this.getNetworkOrderUserIds(viewer);
+    if (userIds.length === 0) {
+      return [];
+    }
+
+    const orders = await this.orderModel
+      .find({ user: { $in: userIds } } as any)
+      .populate(
+        'user',
+        'firstName lastName email shopName role couponCode partnerCode shopIntroductionRepresentativeCode',
+      )
+      .sort({ createdAt: -1 })
+      .exec();
+
+    const visible: Order[] = [];
+
+    for (const order of orders) {
+      const orderUser = order.user as {
+        _id?: unknown;
+        role?: string;
+      } | null;
+      if (!orderUser) continue;
+
+      const orderUserId =
+        typeof orderUser === 'object' && orderUser !== null && '_id' in orderUser
+          ? String((orderUser as any)._id)
+          : String(order.user);
+
+      if (
+        shouldIncludeViewerInNetworkOrders(viewer.role) &&
+        orderUserId === String(viewer._id)
+      ) {
+        visible.push(order);
+        continue;
+      }
+
+      if (shouldHideShopRegistrationFromViewer(order, viewer)) {
+        continue;
+      }
+
+      if (orderUser.role === UserRole.CERTIFIED_SHOP) {
+        const canAccess = await this.usersService.canViewerAccessShopOrder(
+          viewer,
+          orderUserId,
+        );
+        if (!canAccess) continue;
+      } else if (!canViewerSeeOrderPlacerRole(viewer.role, orderUser.role)) {
+        continue;
+      }
+
+      visible.push(order);
+    }
+
+    return visible.map((order) => {
+      const plain = (order as OrderDocument).toObject();
+      type CommissionEntry = NonNullable<Order['commissions']>[number];
+      plain.commissions = filterCommissionsForViewer<CommissionEntry>(
+        plain.commissions,
+        viewer.role,
+        viewer.partnerCode,
+      );
+      return plain;
+    });
+  }
+
+  async getCommissionOrders(viewer: UserDocument): Promise<Order[]> {
+    const partnerCode = viewer.partnerCode?.trim();
+    if (!partnerCode || viewer.role !== UserRole.MASTER_PARTNER) {
+      return [];
+    }
+
+    await this.repairPartnerDevelopmentCommissionsForRep(partnerCode);
+
+    const orders = await this.orderModel
+      .find({
+        'commissions.recipientPartnerCode': partnerCode,
+        ...registrationOrderExclusionFilter(),
+      } as any)
+      .populate(
+        'user',
+        'firstName lastName email shopName role couponCode partnerCode shopIntroductionRepresentativeCode',
+      )
+      .sort({ createdAt: -1 })
+      .exec();
+
+    return orders.map((order) => {
+      const plain = order.toObject();
+      type CommissionEntry = NonNullable<Order['commissions']>[number];
+      plain.commissions = (plain.commissions || []).filter(
+        (entry: CommissionEntry) =>
+          entry.recipientPartnerCode?.trim() === partnerCode,
+      );
+      return plain;
+    });
+  }
+
+  private async repairPartnerDevelopmentCommissionsForRep(
+    parentCode: string,
+  ): Promise<void> {
+    // One-time-per-child-rep: for each child Representative that still owes the
+    // parent a Partner Development commission, pay it exactly once on the
+    // earliest successful (non-registration) order across ALL of that child
+    // rep's shops — i.e. their first shop's first order.
+    const childReps =
+      await this.usersService.findChildRepresentativesPendingPartnerDevelopment(
+        parentCode,
+      );
+
+    for (const childRep of childReps) {
+      if (!childRep.partnerCode) continue;
+
+      const shopIds = await this.usersService.findShopUserIdsIntroducedByRep(
+        childRep.partnerCode,
+      );
+      if (!shopIds.length) continue;
+
+      const earliestOrder = await this.orderModel
+        .findOne({
+          user: { $in: shopIds },
+          status: {
+            $in: [OrderStatus.PAID, OrderStatus.SHIPPED, OrderStatus.DELIVERED],
+          },
+          ...registrationOrderExclusionFilter(),
+        } as any)
+        .sort({ createdAt: 1 })
+        .select('_id')
+        .lean();
+
+      if (earliestOrder) {
+        await this.repairPartnerDevelopmentCommission(
+          String(earliestOrder._id),
+          childRep.partnerCode,
+        );
+      }
+    }
+  }
+
+  private async repairPartnerDevelopmentCommission(
+    orderId: string,
+    childRepresentativeCode: string,
+  ): Promise<void> {
+    // Guard: never pay the parent twice for the same child Representative.
+    if (
+      await this.usersService.hasRepresentativePartnerDevelopmentBeenPaid(
+        childRepresentativeCode,
+      )
+    ) {
+      return;
+    }
+
+    const order = await this.orderModel.findById(orderId);
+    if (!order?.commissions?.length) return;
+
+    const hasPartnerDevelopment = order.commissions.some(
+      (entry) => entry.earningType === 'Partner Development',
+    );
+    if (hasPartnerDevelopment) return;
+
+    const shopUserId = String(order.user);
+    const shopUser = await this.usersService.findOne(shopUserId);
+    if (!shopUser || shopUser.role !== UserRole.CERTIFIED_SHOP) return;
+
+    const updatedShop =
+      await this.usersService.ensureShopPartnerDevelopmentAssignment(shopUser);
+    if (!updatedShop.partnerDevelopmentRepresentativeCode) {
+      return;
+    }
+
+    const partnerDevUser = await this.usersService.findByPartnerCode(
+      updatedShop.partnerDevelopmentRepresentativeCode,
+    );
+    if (!partnerDevUser) return;
+
+    const monetary = resolveCommissionOrderAmounts(order);
+    const commissionStatus = order.commissions[0]?.status || 'pending';
+    const shopIntroEntry = order.commissions.find(
+      (entry) => entry.earningType === 'Shop Introduction',
+    );
+
+    if (shopIntroEntry && shopIntroEntry.percentage === 10) {
+      shopIntroEntry.percentage = 5;
+      shopIntroEntry.amount = roundMoney(monetary.convertedUsdAmount * 0.05);
+    }
+
+    order.commissions.push({
+      recipientUserId: partnerDevUser._id.toString(),
+      recipientPartnerCode: partnerDevUser.partnerCode!,
+      recipientRole: partnerDevUser.role,
+      earningType: 'Partner Development',
+      percentage: 5,
+      amount: roundMoney(monetary.convertedUsdAmount * 0.05),
+      status: commissionStatus,
+      shopId: shopUserId,
+      orderAmount: monetary.orderAmount,
+      originalCurrency: monetary.orderCurrency,
+      exchangeRate: monetary.exchangeRateToUsd,
+      convertedUsdAmount: monetary.convertedUsdAmount,
+    });
+
+    await order.save();
+    await this.usersService.markRepresentativePartnerDevelopmentPaid(
+      childRepresentativeCode,
+    );
+  }
+
+  async getNetworkSalesStats(viewer: UserDocument) {
+    const orders = await this.getNetworkOrders(viewer);
+    if (!orders.length) {
+      return {
+        totalRevenue: 0,
+        baseCurrency: SYSTEM_BASE_CURRENCY,
+        currencyBreakdown: [],
+      };
+    }
+
+    const orderIds = orders.map((order) => (order as { _id?: unknown })._id);
+    return this.computeSalesReport({
+      _id: { $in: orderIds },
+      ...registrationOrderExclusionFilter(),
+    });
+  }
+
+  private async getNetworkOrderUserIds(
+    viewer: UserDocument,
+  ): Promise<string[]> {
+    const network = await this.usersService.findNetworkUsersForViewer(viewer);
+    const idSet = new Set<string>();
+
+    const addUser = (u?: { _id?: unknown }) => {
+      if (u?._id) {
+        idSet.add(String(u._id));
+      }
+    };
+
+    network.shops.forEach(addUser);
+    network.promoters.forEach(addUser);
+    network.subPromoters?.forEach(addUser);
+    network.representatives.forEach(addUser);
+    network.represented?.forEach(addUser);
+    network.distributors.forEach(addUser);
+    network.partners?.forEach(addUser);
+
+    if (shouldIncludeViewerInNetworkOrders(viewer.role)) {
+      addUser(viewer);
+    }
+
+    return Array.from(idSet);
+  }
+
+  async applyOrderCommissions(
+    orderId: string,
+    newStatus: OrderStatus,
+  ): Promise<void> {
+    if (newStatus !== OrderStatus.PAID && newStatus !== OrderStatus.SHIPPED) {
+      return;
+    }
+
+    const order = await this.orderModel.findById(orderId);
+    if (!order) return;
+
+    if (isRegistrationOrder(order)) return;
+
+    const shopUserId =
+      typeof order.user === 'object' && order.user !== null && '_id' in (order.user as object)
+        ? String((order.user as any)._id)
+        : String(order.user);
+
+    if (!shopUserId) return;
+
+    let shopUser = await this.usersService.findOne(shopUserId);
+    if (!shopUser || shopUser.role !== UserRole.CERTIFIED_SHOP) return;
+
+    shopUser = await this.usersService.ensureShopPartnerDevelopmentAssignment(
+      shopUser,
+    );
+
+    const isFirstSuccessfulOrder = await this.isFirstSuccessfulShopOrder(
+      shopUserId,
+      orderId,
+    );
+
+    // Partner Development is a ONE-TIME earning per child Representative (the
+    // shop introduction rep), not per shop. It is paid only on the child rep's
+    // very first shop's first order.
+    const childRepresentativeCode = shopUser.shopIntroductionRepresentativeCode;
+    const partnerDevelopmentAlreadyPaid =
+      await this.usersService.hasRepresentativePartnerDevelopmentBeenPaid(
+        childRepresentativeCode,
+      );
+
+    if (order.commissions && order.commissions.length > 0) {
+      const hasPartnerDevelopment = order.commissions.some(
+        (entry) => entry.earningType === 'Partner Development',
+      );
+
+      if (
+        isFirstSuccessfulOrder &&
+        !hasPartnerDevelopment &&
+        shopUser.partnerDevelopmentRepresentativeCode &&
+        !partnerDevelopmentAlreadyPaid
+      ) {
+        const monetary = resolveCommissionOrderAmounts(order);
+        const partnerDevUser = await this.usersService.findByPartnerCode(
+          shopUser.partnerDevelopmentRepresentativeCode,
+        );
+        if (partnerDevUser) {
+          const partnerDevAmount = roundMoney(monetary.convertedUsdAmount * 0.05);
+          const commissionStatus =
+            newStatus === OrderStatus.SHIPPED
+              ? ('earned' as const)
+              : (order.commissions[0]?.status || 'pending');
+
+          let shopIntroEntry = order.commissions.find(
+            (entry) => entry.earningType === 'Shop Introduction',
+          );
+
+          if (shopIntroEntry && shopIntroEntry.percentage === 10) {
+            shopIntroEntry.percentage = 5;
+            shopIntroEntry.amount = roundMoney(monetary.convertedUsdAmount * 0.05);
+          }
+
+          order.commissions.push({
+            recipientUserId: partnerDevUser._id.toString(),
+            recipientPartnerCode: partnerDevUser.partnerCode!,
+            recipientRole: partnerDevUser.role,
+            earningType: 'Partner Development',
+            percentage: 5,
+            amount: partnerDevAmount,
+            status: commissionStatus,
+            shopId: shopUserId,
+            orderAmount: monetary.orderAmount,
+            originalCurrency: monetary.orderCurrency,
+            exchangeRate: monetary.exchangeRateToUsd,
+            convertedUsdAmount: monetary.convertedUsdAmount,
+          });
+
+          await order.save();
+          await this.usersService.markRepresentativePartnerDevelopmentPaid(
+            childRepresentativeCode,
+          );
+        }
+      } else if (newStatus === OrderStatus.SHIPPED) {
+        order.commissions = order.commissions.map((entry) => ({
+          ...entry,
+          status: 'earned' as const,
+        }));
+        await order.save();
+      }
+      return;
+    }
+
+    if (!shopUser.shopIntroductionRepresentativeCode) {
+      shopUser = await this.usersService.assignShopEarningRepresentatives(shopUser);
+    }
+
+    shopUser = await this.usersService.ensureShopPartnerDevelopmentAssignment(
+      shopUser,
+    );
+
+    if (!shopUser.shopIntroductionRepresentativeCode) return;
+
+    // Re-resolve after assignment: the one-time Partner Development flag lives on
+    // the child Representative (shop introduction rep), not on the shop.
+    const resolvedChildRepresentativeCode =
+      shopUser.shopIntroductionRepresentativeCode;
+    const childRepPartnerDevelopmentAlreadyPaid =
+      await this.usersService.hasRepresentativePartnerDevelopmentBeenPaid(
+        resolvedChildRepresentativeCode,
+      );
+
+    const monetary = resolveCommissionOrderAmounts(order);
+
+    const shopIntroduction =
+      shopUser.shopIntroductionRepresentativeId &&
+      shopUser.shopIntroductionRepresentativeCode
+        ? {
+            _id: String(shopUser.shopIntroductionRepresentativeId),
+            partnerCode: shopUser.shopIntroductionRepresentativeCode,
+            role: UserRole.MASTER_PARTNER,
+          }
+        : null;
+
+    let partnerDevelopment =
+      shopUser.partnerDevelopmentRepresentativeId &&
+      shopUser.partnerDevelopmentRepresentativeCode
+        ? {
+            _id: String(shopUser.partnerDevelopmentRepresentativeId),
+            partnerCode: shopUser.partnerDevelopmentRepresentativeCode,
+            role: UserRole.MASTER_PARTNER,
+          }
+        : null;
+
+    if (!partnerDevelopment && shopUser.partnerDevelopmentRepresentativeCode) {
+      const partnerDevUser = await this.usersService.findByPartnerCode(
+        shopUser.partnerDevelopmentRepresentativeCode,
+      );
+      if (partnerDevUser) {
+        partnerDevelopment = {
+          _id: partnerDevUser._id.toString(),
+          partnerCode: partnerDevUser.partnerCode!,
+          role: partnerDevUser.role,
+        };
+      }
+    }
+
+    const entries = calculateRepresentativeCommissionEntries({
+      shopId: shopUserId,
+      assignments: {
+        shopIntroductionRepresentativeCode: shopUser.shopIntroductionRepresentativeCode,
+        partnerDevelopmentRepresentativeCode:
+          shopUser.partnerDevelopmentRepresentativeCode,
+        partnerDevelopmentCommissionPaid: childRepPartnerDevelopmentAlreadyPaid,
+      },
+      recipients: {
+        shopIntroduction: shopIntroduction,
+        partnerDevelopment: partnerDevelopment,
+      },
+      monetary,
+      isFirstSuccessfulOrder,
+    });
+
+    const commissionStatus =
+      newStatus === OrderStatus.SHIPPED ? ('earned' as const) : ('pending' as const);
+
+    order.commissions = entries.map((entry) => ({
+      ...entry,
+      status: commissionStatus,
+    }));
+    await order.save();
+
+    const paidPartnerDevelopment = entries.some(
+      (entry) => entry.earningType === 'Partner Development',
+    );
+    if (paidPartnerDevelopment) {
+      await this.usersService.markRepresentativePartnerDevelopmentPaid(
+        resolvedChildRepresentativeCode,
+      );
+    }
+
+    if (entries.length > 0) {
+      console.log(
+        `[Commission] Order ${order.orderNumber}: ${entries.length} recipient(s), first=${isFirstSuccessfulOrder}, status=${commissionStatus}, usd=${monetary.convertedUsdAmount}`,
+      );
+    }
+  }
+
+  private async isFirstSuccessfulShopOrder(
+    shopUserId: string,
+    currentOrderId: string,
+  ): Promise<boolean> {
+    const priorCount = await this.orderModel.countDocuments({
+      user: shopUserId,
+      _id: { $ne: currentOrderId },
+      status: {
+        $in: [OrderStatus.PAID, OrderStatus.SHIPPED, OrderStatus.DELIVERED],
+      },
+      $nor: [
+        { items: { $elemMatch: { product: 'registration_fee' } } },
+        { orderNumber: { $regex: '^REG' } },
+      ],
+    } as any);
+    return priorCount === 0;
+  }
+
+  async updateStatus(
+    id: string,
+    status: OrderStatus,
+    trackingId?: string,
+    shippingCompany?: string,
+    actor?: UserDocument,
+  ): Promise<Order> {
+>>>>>>> Stashed changes
     const order = await this.orderModel.findById(id).populate('user');
     if (!order) throw new NotFoundException('Order not found');
 

@@ -7,6 +7,43 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import axios from 'axios';
 import { ProductGroup, ProductGroupDocument } from '../product-groups/entities/product-group.entity';
+<<<<<<< Updated upstream
+=======
+import { getNetworkIdLabel, HUB_ID_LABEL } from '../common/role-labels';
+import {
+  normalizePartnerCode,
+  validatePartnerCode,
+} from '../common/partner-code';
+import {
+  canTraverseNetwork,
+  canCertifyShops,
+  getParentLinkLabel,
+  requiresParentLink,
+  validateParentRole,
+} from '../common/user-hierarchy';
+import {
+  isCommissionEligibleRole,
+  resolveShopCommissionChain,
+  resolveShopEarningAssignments,
+} from '../common/commission-distribution';
+import {
+  GLOBAL_HUB_PARTNER_CODE,
+  isGlobalHubAccount,
+  isGlobalHubPartnerCode,
+} from '../common/global-hub';
+
+export interface NetworkUsersResult {
+  shops: UserDocument[];
+  promoters: UserDocument[];
+  subPromoters: UserDocument[];
+  representatives: UserDocument[];
+  /** @deprecated use representatives */
+  represented: UserDocument[];
+  distributors: UserDocument[];
+  partners: UserDocument[];
+  viewerRole: string;
+}
+>>>>>>> Stashed changes
 
 @Injectable()
 export class UsersService implements OnModuleInit {
@@ -182,7 +219,313 @@ export class UsersService implements OnModuleInit {
     }
 
     const createdUser = new this.userModel(userData);
-    return createdUser.save();
+    const savedUser = await createdUser.save();
+
+    if (savedUser.role === UserRole.CERTIFIED_SHOP) {
+      await this.assignShopEarningRepresentatives(savedUser);
+    }
+
+    if (savedUser.role === UserRole.MASTER_PARTNER) {
+      return this.assignRepresentativePartnerDevelopment(savedUser);
+    }
+
+    return savedUser;
+  }
+
+  /**
+   * When Rep 1 invites/adds Rep 2, Rep 1 becomes Rep 2's Partner Development Representative.
+   */
+  async assignRepresentativePartnerDevelopment(
+    rep: UserDocument,
+  ): Promise<UserDocument> {
+    if (rep.role !== UserRole.MASTER_PARTNER) return rep;
+    if (rep.partnerDevelopmentRepresentativeCode) return rep;
+
+    const parentCode = normalizePartnerCode(rep.referredByPartnerCode);
+    if (!parentCode) return rep;
+
+    const parent = await this.findByPartnerCode(parentCode);
+    if (!parent || parent.role !== UserRole.MASTER_PARTNER) return rep;
+
+    const updated = await this.userModel
+      .findByIdAndUpdate(
+        rep._id,
+        {
+          partnerDevelopmentRepresentativeCode: normalizePartnerCode(
+            parent.partnerCode,
+          ),
+        },
+        { new: true },
+      )
+      .exec();
+
+    return updated || rep;
+  }
+
+  /** Backfill Partner Development assignment on shops under a linked Representative. */
+  async backfillShopEarningAssignmentsForRepresentative(
+    representative: UserDocument,
+  ): Promise<void> {
+    if (representative.role !== UserRole.MASTER_PARTNER) return;
+
+    const network = await this.findNetworkUsersForViewer(representative);
+    for (const shop of network.shops) {
+      const fullShop = await this.findOne(shop._id.toString());
+      if (fullShop) {
+        await this.assignShopEarningRepresentatives(fullShop);
+      }
+    }
+  }
+
+  /** Assign Shop Introduction / Partner Development / Operational Support reps (one-time). */
+  async assignShopEarningRepresentatives(
+    shop: UserDocument,
+  ): Promise<UserDocument> {
+    if (shop.role !== UserRole.CERTIFIED_SHOP) return shop;
+
+    const assignments = await resolveShopEarningAssignments(
+      shop,
+      (code) => this.findByPartnerCode(code),
+      (shopIntroCode) =>
+        this.userModel
+          .findOne({
+            role: UserRole.MASTER_PARTNER,
+            operationalRepresentativeCodes: normalizePartnerCode(shopIntroCode),
+          })
+          .exec(),
+    );
+
+    const updatePayload: Record<string, unknown> = {};
+
+    if (
+      !shop.shopIntroductionRepresentativeCode &&
+      assignments.shopIntroductionRepresentativeCode
+    ) {
+      updatePayload.shopIntroductionRepresentativeId =
+        assignments.shopIntroductionRepresentativeId;
+      updatePayload.shopIntroductionRepresentativeCode =
+        assignments.shopIntroductionRepresentativeCode;
+    }
+
+    if (
+      !shop.partnerDevelopmentRepresentativeCode &&
+      assignments.partnerDevelopmentRepresentativeCode
+    ) {
+      updatePayload.partnerDevelopmentRepresentativeId =
+        assignments.partnerDevelopmentRepresentativeId;
+      updatePayload.partnerDevelopmentRepresentativeCode =
+        assignments.partnerDevelopmentRepresentativeCode;
+    }
+
+    if (
+      !shop.operationalSupportRepresentativeCode &&
+      assignments.operationalSupportRepresentativeCode
+    ) {
+      updatePayload.operationalSupportRepresentativeId =
+        assignments.operationalSupportRepresentativeId;
+      updatePayload.operationalSupportRepresentativeCode =
+        assignments.operationalSupportRepresentativeCode;
+    }
+
+    if (!Object.keys(updatePayload).length) {
+      return shop;
+    }
+
+    const updated = await this.userModel
+      .findByIdAndUpdate(shop._id, updatePayload, { new: true })
+      .exec();
+
+    return updated || shop;
+  }
+
+  async ensureShopPartnerDevelopmentAssignment(
+    shop: UserDocument,
+  ): Promise<UserDocument> {
+    if (shop.role !== UserRole.CERTIFIED_SHOP) return shop;
+    if (shop.partnerDevelopmentRepresentativeCode) return shop;
+
+    return this.assignShopEarningRepresentatives(shop);
+  }
+
+  async markPartnerDevelopmentCommissionPaid(shopId: string): Promise<void> {
+    await this.userModel.findByIdAndUpdate(shopId, {
+      partnerDevelopmentCommissionPaid: true,
+    });
+  }
+
+  /**
+   * Partner Development commission is a ONE-TIME earning per child Representative
+   * (not per shop). Returns true once the parent has already been paid for this
+   * child Representative's first shop's first order.
+   */
+  async hasRepresentativePartnerDevelopmentBeenPaid(
+    representativeCode?: string,
+  ): Promise<boolean> {
+    const code = normalizePartnerCode(representativeCode);
+    if (!code) return false;
+    const rep = await this.userModel
+      .findOne({ partnerCode: code, role: UserRole.MASTER_PARTNER })
+      .select('partnerDevelopmentCommissionPaid')
+      .lean();
+    return rep?.partnerDevelopmentCommissionPaid === true;
+  }
+
+  /** Mark a child Representative so their parent is never paid Partner Development again. */
+  async markRepresentativePartnerDevelopmentPaid(
+    representativeCode?: string,
+  ): Promise<void> {
+    const code = normalizePartnerCode(representativeCode);
+    if (!code) return;
+    await this.userModel.updateOne(
+      { partnerCode: code, role: UserRole.MASTER_PARTNER },
+      { partnerDevelopmentCommissionPaid: true },
+    );
+  }
+
+  /** Child Representatives whose parent still owes the one-time Partner Development commission. */
+  async findChildRepresentativesPendingPartnerDevelopment(
+    parentCode: string,
+  ): Promise<UserDocument[]> {
+    const code = normalizePartnerCode(parentCode);
+    if (!code) return [];
+    return this.userModel
+      .find({
+        role: UserRole.MASTER_PARTNER,
+        partnerDevelopmentRepresentativeCode: code,
+        partnerDevelopmentCommissionPaid: { $ne: true },
+      })
+      .exec();
+  }
+
+  /** Shops whose orders are visible to this Representative (shop introduction rep only). */
+  async findShopUserIdsIntroducedByRep(partnerCode: string): Promise<string[]> {
+    const code = normalizePartnerCode(partnerCode);
+    if (!code) return [];
+
+    const promoters = await this.userModel
+      .find({
+        role: UserRole.REGIONAL_PARTNER,
+        referredByPartnerCode: code,
+      })
+      .select('partnerCode')
+      .lean();
+    const promoterCodes = promoters
+      .map((p) => normalizePartnerCode(p.partnerCode))
+      .filter(Boolean);
+
+    const subPromoters = promoterCodes.length
+      ? await this.userModel
+          .find({
+            role: UserRole.SUB_PROMOTER,
+            referredByPartnerCode: { $in: promoterCodes },
+          })
+          .select('partnerCode')
+          .lean()
+      : [];
+    const subPromoterCodes = subPromoters
+      .map((p) => normalizePartnerCode(p.partnerCode))
+      .filter(Boolean);
+
+    const parentLinkCodes = [code, ...promoterCodes, ...subPromoterCodes];
+
+    const candidateShops = await this.userModel
+      .find({
+        role: UserRole.CERTIFIED_SHOP,
+        $or: [
+          { shopIntroductionRepresentativeCode: code },
+          { referredByPartnerCode: { $in: parentLinkCodes } },
+          { partnerDevelopmentRepresentativeCode: code },
+        ],
+      })
+      .select(
+        '_id referredByPartnerCode shopIntroductionRepresentativeCode partnerDevelopmentRepresentativeCode',
+      )
+      .lean();
+
+    const visibleIds: string[] = [];
+
+    for (const shop of candidateShops) {
+      const introCode = await this.resolveShopIntroductionRepresentativeCode(shop);
+      if (introCode === code) {
+        visibleIds.push(String(shop._id));
+      }
+    }
+
+    return visibleIds;
+  }
+
+  /** Resolve Shop Introduction Representative — assigned once at shop create, never changed. */
+  async resolveShopIntroductionRepresentativeCode(shop: {
+    _id?: { toString(): string };
+    referredByPartnerCode?: string;
+    shopIntroductionRepresentativeCode?: string;
+  }): Promise<string | null> {
+    const storedIntro = shop.shopIntroductionRepresentativeCode
+      ? normalizePartnerCode(shop.shopIntroductionRepresentativeCode)
+      : null;
+
+    if (storedIntro) {
+      return storedIntro;
+    }
+
+    const chain = await resolveShopCommissionChain(shop, (partnerCode) =>
+      this.findByPartnerCode(partnerCode),
+    );
+    const chainIntro = chain.represented?.partnerCode
+      ? normalizePartnerCode(chain.represented.partnerCode)
+      : null;
+
+    if (!chainIntro || !shop._id) {
+      return null;
+    }
+
+    const introRep = chain.represented
+      ? await this.findByPartnerCode(chain.represented.partnerCode)
+      : null;
+
+    await this.userModel.findByIdAndUpdate(shop._id, {
+      shopIntroductionRepresentativeCode: chainIntro,
+      ...(introRep ? { shopIntroductionRepresentativeId: introRep._id } : {}),
+    });
+
+    const fullShop = await this.findOne(shop._id.toString());
+    if (fullShop) {
+      await this.assignShopEarningRepresentatives(fullShop);
+    }
+
+    return chainIntro;
+  }
+
+  async findShopsPendingPartnerDevelopment(
+    partnerCode: string,
+  ): Promise<UserDocument[]> {
+    const code = normalizePartnerCode(partnerCode);
+    if (!code) return [];
+
+    const linkedReps = await this.userModel
+      .find({
+        role: UserRole.MASTER_PARTNER,
+        partnerDevelopmentRepresentativeCode: code,
+      })
+      .select('partnerCode')
+      .lean();
+
+    const introRepCodes = linkedReps
+      .map((rep) => normalizePartnerCode(rep.partnerCode))
+      .filter(Boolean);
+
+    return this.userModel
+      .find({
+        role: UserRole.CERTIFIED_SHOP,
+        partnerDevelopmentCommissionPaid: { $ne: true },
+        $or: [
+          { partnerDevelopmentRepresentativeCode: code },
+          ...(introRepCodes.length
+            ? [{ shopIntroductionRepresentativeCode: { $in: introRepCodes } }]
+            : []),
+        ],
+      })
+      .exec();
   }
 
   async findAll(): Promise<UserDocument[]> {
@@ -451,7 +794,120 @@ export class UsersService implements OnModuleInit {
       partners = await this.findAllPartners();
     }
 
+<<<<<<< Updated upstream
     return { shops, partners };
+=======
+    if (viewer.role === UserRole.SUB_PROMOTER) {
+      const shops = await this.userModel
+        .find({
+          role: UserRole.CERTIFIED_SHOP,
+          referredByPartnerCode: partnerCode,
+        })
+        .exec();
+      return { ...empty, shops };
+    }
+
+    if (viewer.role === UserRole.REGIONAL_PARTNER) {
+      const subPromoters = await this.userModel
+        .find({
+          role: UserRole.SUB_PROMOTER,
+          referredByPartnerCode: partnerCode,
+        })
+        .exec();
+      const subCodes = subPromoters
+        .map((u) => u.partnerCode)
+        .filter(Boolean) as string[];
+      const shopCodes = [partnerCode, ...subCodes];
+      const shops = await this.userModel
+        .find({
+          role: UserRole.CERTIFIED_SHOP,
+          referredByPartnerCode: { $in: shopCodes },
+        })
+        .exec();
+      return { ...empty, shops, subPromoters };
+    }
+
+    const collected: UserDocument[] = [];
+    const seenIds = new Set<string>();
+    await this.collectNetworkDescendants([partnerCode], collected, seenIds);
+
+    if (viewer.role === UserRole.MASTER_PARTNER) {
+      const freshViewer = await this.userModel
+        .findById(viewer._id)
+        .select('operationalRepresentativeCodes partnerCode')
+        .lean();
+      const operationalCodes = (freshViewer?.operationalRepresentativeCodes || [])
+        .map((code) => normalizePartnerCode(code))
+        .filter(
+          (code) => code && code !== normalizePartnerCode(partnerCode),
+        );
+
+      for (const operationalCode of operationalCodes) {
+        const linkedRep = await this.findByPartnerCode(operationalCode);
+        if (
+          linkedRep?.role === UserRole.MASTER_PARTNER &&
+          !seenIds.has(linkedRep._id.toString())
+        ) {
+          seenIds.add(linkedRep._id.toString());
+          collected.push(linkedRep);
+        }
+        await this.collectOperationalSupportScope(
+          [operationalCode],
+          collected,
+          seenIds,
+        );
+      }
+    }
+
+    const distributors = collected.filter((u) => u.role === UserRole.DISTRIBUTOR);
+    const representatives = collected.filter(
+      (u) => u.role === UserRole.MASTER_PARTNER,
+    );
+    const promoters = collected.filter((u) => u.role === UserRole.REGIONAL_PARTNER);
+    const subPromoters = collected.filter((u) => u.role === UserRole.SUB_PROMOTER);
+    const shops = collected.filter((u) => u.role === UserRole.CERTIFIED_SHOP);
+
+    if (viewer.role === UserRole.PARTNER) {
+      return {
+        shops,
+        promoters,
+        subPromoters,
+        distributors,
+        representatives,
+        represented: representatives,
+        partners: [...distributors, ...representatives, ...promoters, ...subPromoters],
+        viewerRole: viewer.role,
+      };
+    }
+
+    if (viewer.role === UserRole.DISTRIBUTOR) {
+      return {
+        shops,
+        promoters,
+        subPromoters,
+        distributors: [],
+        representatives,
+        represented: representatives,
+        partners: [...representatives, ...promoters, ...subPromoters],
+        viewerRole: viewer.role,
+      };
+    }
+
+    if (viewer.role === UserRole.MASTER_PARTNER) {
+      return {
+        shops,
+        promoters,
+        subPromoters,
+        distributors: [],
+        representatives,
+        represented: representatives,
+        partners: [...representatives, ...promoters, ...subPromoters],
+        viewerRole: viewer.role,
+      };
+    }
+
+    return empty;
+>>>>>>> Stashed changes
   }
 
   async updateShopVisibility(shopId: string, isVisibleOnMap: boolean, partnerCode: string): Promise<UserDocument | null> {
@@ -460,8 +916,76 @@ export class UsersService implements OnModuleInit {
       role: UserRole.CERTIFIED_SHOP
     };
 
+<<<<<<< Updated upstream
     if (partnerCode !== 'GLOBAL77') {
       query.referredByPartnerCode = partnerCode;
+=======
+    const network = await this.findNetworkUsersForViewer(viewer);
+    const all = [
+      ...network.shops,
+      ...network.promoters,
+      ...network.subPromoters,
+      ...network.representatives,
+      ...network.represented,
+      ...network.distributors,
+    ];
+    return all.some((u) => u._id.toString() === targetUserId);
+  }
+
+  /**
+   * Order/receipt access for certified shops: only the Shop Introduction Representative.
+   * Operational parent reps may see the shop in Network Team but not its orders/invoices.
+   */
+  async canViewerAccessShopOrder(
+    viewer: UserDocument,
+    shopUserId: string,
+  ): Promise<boolean> {
+    if (viewer._id.toString() === shopUserId) return true;
+    if (isGlobalHubPartnerCode(viewer.partnerCode)) return true;
+
+    const shop = await this.userModel.findById(shopUserId);
+    if (!shop || shop.role !== UserRole.CERTIFIED_SHOP) {
+      return this.isUserInViewerNetwork(viewer, shopUserId);
+    }
+
+    if (viewer.role === UserRole.MASTER_PARTNER && viewer.partnerCode) {
+      const introCode = await this.resolveShopIntroductionRepresentativeCode(shop);
+      if (!introCode) return false;
+      return (
+        normalizePartnerCode(introCode) ===
+        normalizePartnerCode(viewer.partnerCode)
+      );
+    }
+
+    const network = await this.findNetworkUsersForViewer(viewer);
+    return network.shops.some((s) => s._id.toString() === shopUserId);
+  }
+
+  /** @deprecated Use findNetworkUsersForViewer */
+  async findReferredShops(partnerCode: string): Promise<{
+    shops: UserDocument[];
+    partners: any[];
+  }> {
+    const viewer = await this.findByPartnerCode(partnerCode);
+    if (!viewer) return { shops: [], partners: [] };
+    const network = await this.findNetworkUsersForViewer(viewer);
+    return { shops: network.shops, partners: network.partners };
+  }
+
+  async updateShopVisibility(
+    memberId: string,
+    isVisibleOnMap: boolean,
+    viewer: UserDocument,
+  ): Promise<UserDocument | null> {
+    const member = await this.userModel.findById(memberId);
+    if (!member) return null;
+
+    const isSelf = viewer._id.toString() === memberId;
+    const isGlobalHubTarget = isGlobalHubPartnerCode(member.partnerCode);
+
+    if (member.role === UserRole.PARTNER && !isGlobalHubTarget) {
+      throw new BadRequestException('Hub accounts cannot be shown on the map.');
+>>>>>>> Stashed changes
     }
 
     const shop = await this.userModel.findOne(query);
@@ -500,6 +1024,151 @@ export class UsersService implements OnModuleInit {
     return partners;
   }
 
+<<<<<<< Updated upstream
+=======
+  async getPartnerContactForShop(user: UserDocument | null | undefined) {
+    if (!user?.referredByPartnerCode || user.role !== UserRole.CERTIFIED_SHOP) {
+      return null;
+    }
+    if (isGlobalHubPartnerCode(user.referredByPartnerCode)) {
+      return null;
+    }
+    const partner = await this.findByPartnerCode(user.referredByPartnerCode);
+    if (!partner) return null;
+    return {
+      partnerCode: partner.partnerCode,
+      email: partner.email,
+      firstName: partner.firstName,
+      lastName: partner.lastName,
+    };
+  }
+
+  async searchRepresentativeForLinking(
+    query: string,
+    viewer: UserDocument,
+  ) {
+    const trimmed = query?.trim();
+    if (!trimmed) {
+      throw new BadRequestException('Please enter a Partner ID or email address.');
+    }
+    if (viewer.role !== UserRole.MASTER_PARTNER || !viewer.partnerCode) {
+      throw new ForbiddenException('Only Representatives can search for other Representatives.');
+    }
+
+    const normalizedQuery = trimmed.toUpperCase();
+    const isEmailQuery = trimmed.includes('@');
+
+    const target = await this.userModel.findOne(
+      isEmailQuery
+        ? { email: { $regex: new RegExp(`^${trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }, role: UserRole.MASTER_PARTNER }
+        : { partnerCode: normalizedQuery, role: UserRole.MASTER_PARTNER },
+    );
+
+    if (!target) {
+      throw new BadRequestException('No active Representative found with that Partner ID or email.');
+    }
+    if (target._id.toString() === viewer._id.toString()) {
+      throw new BadRequestException('You cannot add yourself to your network.');
+    }
+    if (target.status === UserStatus.BLOCKED) {
+      throw new BadRequestException('This Representative account is blocked.');
+    }
+    if (target.referredByPartnerCode === viewer.partnerCode) {
+      throw new BadRequestException('This Representative is already linked to your network.');
+    }
+    if (
+      normalizePartnerCode(target.referredByPartnerCode) ===
+      normalizePartnerCode(viewer.partnerCode)
+    ) {
+      throw new BadRequestException('This Representative is already linked to your network.');
+    }
+
+    const targetCode = normalizePartnerCode(target.partnerCode);
+    const existingOperational = (viewer.operationalRepresentativeCodes || []).map(
+      (code) => normalizePartnerCode(code),
+    );
+    if (targetCode && existingOperational.includes(targetCode)) {
+      throw new BadRequestException(
+        'This Representative is already linked for operational support.',
+      );
+    }
+
+    return {
+      _id: target._id,
+      firstName: target.firstName,
+      lastName: target.lastName,
+      email: target.email,
+      partnerCode: target.partnerCode,
+      referredByPartnerCode: target.referredByPartnerCode,
+      city: target.city,
+      country: target.country,
+      status: target.status,
+    };
+  }
+
+  async linkRepresentativeToViewer(query: string, viewer: UserDocument) {
+    const targetPreview = await this.searchRepresentativeForLinking(query, viewer);
+    const target = await this.userModel.findById(targetPreview._id);
+    if (!target) {
+      throw new BadRequestException('Representative not found.');
+    }
+
+    const viewerSubtree = await this.findNetworkUsersForViewer(viewer);
+    const subtreeIds = new Set(
+      [...viewerSubtree.representatives, ...viewerSubtree.promoters, ...viewerSubtree.subPromoters, ...viewerSubtree.shops]
+        .map((member) => member._id.toString()),
+    );
+    if (subtreeIds.has(target._id.toString())) {
+      throw new BadRequestException('This Representative is already in your network.');
+    }
+
+    const targetCode = normalizePartnerCode(target.partnerCode);
+    const viewerCode = normalizePartnerCode(viewer.partnerCode);
+    if (!targetCode || !viewerCode) {
+      throw new BadRequestException('Partner ID is required to link Representatives.');
+    }
+
+    const existingOperational = (viewer.operationalRepresentativeCodes || []).map(
+      (code) => normalizePartnerCode(code),
+    );
+    if (existingOperational.includes(targetCode)) {
+      throw new BadRequestException('This Representative is already linked for operational support.');
+    }
+
+    // Operational soft link only — never re-parent the target Representative.
+    await this.userModel.findByIdAndUpdate(viewer._id, {
+      $addToSet: { operationalRepresentativeCodes: targetCode },
+    });
+
+    if (!target.partnerDevelopmentRepresentativeCode) {
+      await this.userModel.findByIdAndUpdate(target._id, {
+        partnerDevelopmentRepresentativeCode: viewerCode,
+      });
+    }
+
+    const refreshedTarget = await this.userModel.findById(target._id);
+    if (refreshedTarget) {
+      await this.backfillShopEarningAssignmentsForRepresentative(refreshedTarget);
+    }
+
+    return {
+      message: `${target.firstName} ${target.lastName} linked for operational support. Their Promoters and Shops are now visible in your network. New members under them will appear automatically.`,
+      linkType: 'operational',
+      representative: {
+        _id: target._id,
+        firstName: target.firstName,
+        lastName: target.lastName,
+        email: target.email,
+        partnerCode: target.partnerCode,
+        referredByPartnerCode: target.referredByPartnerCode,
+        city: target.city,
+        country: target.country,
+        status: target.status,
+      },
+    };
+  }
+
+>>>>>>> Stashed changes
   async assignPartner(shopId: string, partnerCode: string) {
     // 1. Verify Partner exists
     const partner = await this.userModel.findOne({
@@ -521,6 +1190,187 @@ export class UsersService implements OnModuleInit {
     return shop;
   }
 
+<<<<<<< Updated upstream
+=======
+  private normalizeCustomCommissionRate(
+    role: UserRole,
+    payload: { customCommissionRate?: number | null },
+  ): void {
+    if (payload.customCommissionRate === undefined) return;
+
+    if (!isCommissionEligibleRole(role)) {
+      payload.customCommissionRate = null;
+      return;
+    }
+
+    if (payload.customCommissionRate === null) return;
+
+    const rate = Number(payload.customCommissionRate);
+    if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+      throw new BadRequestException(
+        'Commission rate must be a number between 0 and 100',
+      );
+    }
+    payload.customCommissionRate = rate;
+  }
+
+  /** Walk parent links upward and return true if partnerCode appears in viewer's upline. */
+  private async isPartnerCodeInViewerAncestry(
+    viewer: UserDocument,
+    partnerCode: string,
+  ): Promise<boolean> {
+    const targetCode = normalizePartnerCode(partnerCode);
+    if (!targetCode) return false;
+
+    let current: UserDocument | null = viewer;
+    const visited = new Set<string>();
+
+    for (let depth = 0; depth < 25 && current; depth++) {
+      const parentCode = current.referredByPartnerCode?.trim();
+      if (!parentCode) return false;
+
+      const normalizedParent = normalizePartnerCode(parentCode);
+      if (!normalizedParent || visited.has(normalizedParent)) return false;
+      visited.add(normalizedParent);
+
+      if (normalizedParent === targetCode) return true;
+
+      const parent = await this.findByPartnerCode(normalizedParent);
+      if (!parent) return false;
+      if (parent._id.toString() === current._id.toString()) return false;
+      current = parent;
+    }
+
+    return false;
+  }
+
+  private async collectNetworkDescendants(
+    rootCodes: string[],
+    collected: UserDocument[],
+    seenIds: Set<string>,
+  ): Promise<void> {
+    let frontier = rootCodes
+      .map((code) => normalizePartnerCode(code))
+      .filter(Boolean);
+
+    for (let depth = 0; depth < 20 && frontier.length > 0; depth++) {
+      const batch = await this.userModel
+        .find({ referredByPartnerCode: { $in: frontier } })
+        .exec();
+
+      const nextFrontier: string[] = [];
+      for (const user of batch) {
+        const id = user._id.toString();
+        if (seenIds.has(id)) continue;
+        seenIds.add(id);
+        collected.push(user);
+
+        if (user.partnerCode && canTraverseNetwork(user.role)) {
+          nextFrontier.push(normalizePartnerCode(user.partnerCode));
+        }
+      }
+      frontier = nextFrontier;
+    }
+  }
+
+  /**
+   * Operational support scope: linked rep's direct network only.
+   * Does not traverse into child Representatives (e.g. Rep3 under Rep2).
+   */
+  private async collectOperationalSupportScope(
+    rootCodes: string[],
+    collected: UserDocument[],
+    seenIds: Set<string>,
+  ): Promise<void> {
+    let frontier = rootCodes
+      .map((code) => normalizePartnerCode(code))
+      .filter(Boolean);
+
+    for (let depth = 0; depth < 20 && frontier.length > 0; depth++) {
+      const batch = await this.userModel
+        .find({ referredByPartnerCode: { $in: frontier } })
+        .exec();
+
+      const nextFrontier: string[] = [];
+      for (const user of batch) {
+        const id = user._id.toString();
+        if (seenIds.has(id)) continue;
+
+        // Child Representatives (and their downstream) are NOT part of the
+        // operational support scope — only the linked rep's own promoters,
+        // sub-promoters and shops are visible for support.
+        if (user.role === UserRole.MASTER_PARTNER) {
+          seenIds.add(id);
+          continue;
+        }
+
+        seenIds.add(id);
+        collected.push(user);
+
+        if (user.partnerCode && canTraverseNetwork(user.role)) {
+          nextFrontier.push(normalizePartnerCode(user.partnerCode));
+        }
+      }
+      frontier = nextFrontier;
+    }
+  }
+
+  private async validateHierarchyLink(
+    role: UserRole,
+    referredByPartnerCode?: string | null,
+    excludeUserId?: string,
+  ): Promise<void> {
+    if (!requiresParentLink(role)) {
+      return;
+    }
+
+    const code = referredByPartnerCode?.trim();
+    if (!code) {
+      throw new BadRequestException(`${getParentLinkLabel(role)} is required`);
+    }
+
+    const parent = await this.findByPartnerCode(code);
+    if (!parent) {
+      throw new BadRequestException(
+        `${getParentLinkLabel(role)} is invalid: partner code not found`,
+      );
+    }
+
+    const roleError = validateParentRole(role, parent.role);
+    if (roleError) {
+      throw new BadRequestException(roleError);
+    }
+
+    if (role === UserRole.SUB_PROMOTER) {
+      await this.assertMainPromoterCanAcceptSub(code, excludeUserId);
+    }
+  }
+
+  private async assertMainPromoterCanAcceptSub(
+    mainPartnerCode: string,
+    excludeUserId?: string,
+  ): Promise<void> {
+    const main = await this.findByPartnerCode(mainPartnerCode);
+    if (!main || main.role !== UserRole.REGIONAL_PARTNER) {
+      throw new BadRequestException(
+        'Sub-Promoter must be linked to a Main Promoter (Promoter role)',
+      );
+    }
+
+    const existingSub = await this.userModel.findOne({
+      role: UserRole.SUB_PROMOTER,
+      referredByPartnerCode: mainPartnerCode,
+      ...(excludeUserId ? { _id: { $ne: excludeUserId } } : {}),
+    });
+
+    if (existingSub) {
+      throw new BadRequestException(
+        'This Main Promoter already has a Sub-Promoter assigned',
+      );
+    }
+  }
+
+>>>>>>> Stashed changes
   private async getNextCertificateNumber(): Promise<number> {
     const lastUser = await this.userModel
       .findOne({ certificateNumber: { $exists: true } })

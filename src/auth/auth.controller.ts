@@ -62,7 +62,9 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @Get('profile')
   getProfile(@Request() req) {
-    return req.user;
+    // Never leak the full user document (password hash, tokens, etc.) to the
+    // client. Return only the minimal, non-sensitive session shape.
+    return this.authService.toSessionUser(req.user);
   }
 
   @Get('verify-payment/:userId')

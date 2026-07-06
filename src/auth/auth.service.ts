@@ -35,6 +35,29 @@ export class AuthService {
     private productGroupsService: ProductGroupsService,
   ) { }
 
+  /**
+   * Builds the minimal, non-sensitive user object that is safe to expose to the
+   * client. Credential/security fields (password, reset tokens, etc.) are never
+   * included. This is the single source of truth for the client-side user shape.
+   */
+  toSessionUser(user: any) {
+    if (!user) return null;
+    const source = typeof user.toObject === 'function' ? user.toObject() : user;
+    return {
+      id: (source._id ?? source.id)?.toString(),
+      email: source.email,
+      role: source.role,
+      country: source.country,
+      firstName: source.firstName,
+      lastName: source.lastName,
+      productGroup: source.productGroup,
+      isPartnerPaid: source.isPartnerPaid,
+      partnerCode: source.partnerCode,
+      hasSeenWelcomePopup: source.hasSeenWelcomePopup,
+      profileImage: source.profileImage,
+    };
+  }
+
   async validateUser(identifier: string, pass: string): Promise<any> {
     console.log(`[Auth] Validating user: ${identifier}`);
     const user = await this.usersService.findByUsernameOrEmail(identifier);
@@ -75,18 +98,7 @@ export class AuthService {
     const payload = { email: user.email, sub: userId, role: user.role };
     return {
       access_token: this.jwtService.sign(payload),
-      user: {
-        id: userId,
-        email: user.email,
-        role: user.role,
-        country: user.country,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        productGroup: user.productGroup,
-        isPartnerPaid: user.isPartnerPaid,
-        partnerCode: user.partnerCode,
-        hasSeenWelcomePopup: user.hasSeenWelcomePopup,
-      },
+      user: this.toSessionUser(user),
     };
   }
 

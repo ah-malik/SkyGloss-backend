@@ -107,6 +107,39 @@ export class User {
   @Prop({ sparse: true })
   referredByPartnerCode?: string;
 
+<<<<<<< Updated upstream
+=======
+  /** Representative partner codes linked for operational support without re-parenting. */
+  @Prop({ type: [String], default: [] })
+  operationalRepresentativeCodes?: string[];
+
+  /** Representative who invited/added this Representative, or Partner Development Rep for a shop (role-dependent). */
+  @Prop({ sparse: true })
+  partnerDevelopmentRepresentativeCode?: string;
+
+  /** Shop Introduction Representative — assigned once at shop create. */
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
+  shopIntroductionRepresentativeId?: MongooseSchema.Types.ObjectId;
+
+  @Prop({ sparse: true })
+  shopIntroductionRepresentativeCode?: string;
+
+  /** Partner Development Representative for this shop — assigned once at shop create. */
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
+  partnerDevelopmentRepresentativeId?: MongooseSchema.Types.ObjectId;
+
+  /** Operational Support Representative for this shop — assigned once at shop create. */
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
+  operationalSupportRepresentativeId?: MongooseSchema.Types.ObjectId;
+
+  @Prop({ sparse: true })
+  operationalSupportRepresentativeCode?: string;
+
+  /** True after Partner Development commission was paid on first successful order. */
+  @Prop({ default: false })
+  partnerDevelopmentCommissionPaid?: boolean;
+
+>>>>>>> Stashed changes
   @Prop()
   couponCode?: string;
 
