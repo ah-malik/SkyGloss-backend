@@ -4,6 +4,11 @@ import { Model } from 'mongoose';
 import { User, UserDocument, UserRole } from './entities/user.entity';
 import { formatRoleLabel } from '../common/role-labels';
 import { GLOBAL_HUB_PARTNER_CODE, LEGACY_GLOBAL_HUB_PARTNER_CODE } from '../common/global-hub';
+import {
+  PARTNER_CODE_MAX_LENGTH,
+  PARTNER_CODE_MIN_LENGTH,
+  PARTNER_CODE_REGEX,
+} from '../common/partner-code';
 
 @Controller('public')
 export class PublicUsersController {
@@ -15,10 +20,10 @@ export class PublicUsersController {
   async validateNetworkId(@Param('code') code: string) {
     const partnerCode = code?.trim().toUpperCase();
 
-    if (!partnerCode || !/^[A-Z0-9]{4,10}$/.test(partnerCode)) {
+    if (!partnerCode || !PARTNER_CODE_REGEX.test(partnerCode)) {
       return {
         valid: false,
-        message: 'Hub, Distributor, Representative, Promoter, or Sub-Promoter ID must be 4-10 alphanumeric characters',
+        message: `Hub, Distributor, Representative, Promoter, or Sub-Promoter ID must be ${PARTNER_CODE_MIN_LENGTH}-${PARTNER_CODE_MAX_LENGTH} alphanumeric characters`,
       };
     }
 

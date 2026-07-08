@@ -33,6 +33,11 @@ import {
   GLOBAL_HUB_PARTNER_CODE,
   isGlobalHubPartnerCode,
 } from '../common/global-hub';
+import {
+  PARTNER_CODE_MAX_LENGTH,
+  PARTNER_CODE_MIN_LENGTH,
+  PARTNER_CODE_REGEX,
+} from '../common/partner-code';
 
 @Injectable()
 export class AuthService {
@@ -303,9 +308,9 @@ export class AuthService {
         );
       }
       partnerId = GLOBAL_HUB_PARTNER_CODE;
-    } else if (!/^[A-Z0-9]{4,10}$/.test(partnerId)) {
+    } else if (!PARTNER_CODE_REGEX.test(partnerId)) {
       throw new BadRequestException(
-        `${NETWORK_REFERENCE_ID_LABEL} must be 4-10 alphanumeric characters`,
+        `${NETWORK_REFERENCE_ID_LABEL} must be ${PARTNER_CODE_MIN_LENGTH}-${PARTNER_CODE_MAX_LENGTH} alphanumeric characters`,
       );
     }
 
