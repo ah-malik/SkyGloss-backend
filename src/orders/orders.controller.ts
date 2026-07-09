@@ -105,6 +105,13 @@ export class OrdersController {
     return this.ordersService.getNetworkSalesStats(user);
   }
 
+  @Get('commission-orders')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.MASTER_PARTNER)
+  async getCommissionOrders(@GetUser() user: UserDocument) {
+    return this.ordersService.getCommissionOrders(user);
+  }
+
   @Get(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(

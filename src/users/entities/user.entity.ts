@@ -113,6 +113,40 @@ export class User {
   @Prop({ type: [String], default: [] })
   operationalRepresentativeCodes?: string[];
 
+  /**
+   * Representative who invited/added this Representative (their Partner
+   * Development Representative), OR — when set on a shop — the Partner
+   * Development Representative for that shop (copied from the shop
+   * introduction rep at shop create time). Shared field, role-dependent.
+   */
+  @Prop({ sparse: true })
+  partnerDevelopmentRepresentativeCode?: string;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
+  partnerDevelopmentRepresentativeId?: MongooseSchema.Types.ObjectId;
+
+  /** Shop Introduction Representative — assigned once at shop create, immutable. */
+  @Prop({ sparse: true })
+  shopIntroductionRepresentativeCode?: string;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
+  shopIntroductionRepresentativeId?: MongooseSchema.Types.ObjectId;
+
+  /** Operational Support Representative for this shop — assigned once at shop create. */
+  @Prop({ sparse: true })
+  operationalSupportRepresentativeCode?: string;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
+  operationalSupportRepresentativeId?: MongooseSchema.Types.ObjectId;
+
+  /**
+   * True once this shop's one-time 5% Partner Development commission has
+   * been paid out (on the shop's first successful, non-registration order).
+   * Shop-level flag — each shop pays Partner Development independently.
+   */
+  @Prop({ default: false })
+  partnerDevelopmentCommissionPaid?: boolean;
+
   @Prop()
   couponCode?: string;
 

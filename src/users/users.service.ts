@@ -19,7 +19,11 @@ import {
   requiresParentLink,
   validateParentRole,
 } from '../common/user-hierarchy';
-import { isCommissionEligibleRole, resolveShopCommissionChain } from '../common/commission-distribution';
+import {
+  isCommissionEligibleRole,
+  resolveShopCommissionChain,
+  resolveShopEarningAssignments,
+} from '../common/commission-distribution';
 import {
   GLOBAL_HUB_PARTNER_CODE,
   isGlobalHubAccount,
@@ -248,7 +252,158 @@ export class UsersService implements OnModuleInit {
     }
 
     const createdUser = new this.userModel(userData);
-    return createdUser.save();
+    const savedUser = await createdUser.save();
+
+    if (savedUser.role === UserRole.CERTIFIED_SHOP) {
+      await this.assignShopEarningRepresentatives(savedUser);
+    }
+
+    if (savedUser.role === UserRole.MASTER_PARTNER) {
+      return this.assignRepresentativePartnerDevelopment(savedUser);
+    }
+
+    return savedUser;
+  }
+
+  /** Assign Shop Introduction / Partner Development / Operational Support reps (one-time, immutable per earning type). */
+  async assignShopEarningRepresentatives(
+    shop: UserDocument,
+  ): Promise<UserDocument> {
+    if (shop.role !== UserRole.CERTIFIED_SHOP) return shop;
+
+    const assignments = await resolveShopEarningAssignments(
+      shop,
+      (code) => this.findByPartnerCode(code),
+      (shopIntroCode) =>
+        this.userModel
+          .findOne({
+            role: UserRole.MASTER_PARTNER,
+            operationalRepresentativeCodes: normalizePartnerCode(shopIntroCode),
+          })
+          .exec(),
+    );
+
+    const updatePayload: Record<string, unknown> = {};
+
+    if (
+      !shop.shopIntroductionRepresentativeCode &&
+      assignments.shopIntroductionRepresentativeCode
+    ) {
+      updatePayload.shopIntroductionRepresentativeId =
+        assignments.shopIntroductionRepresentativeId;
+      updatePayload.shopIntroductionRepresentativeCode =
+        assignments.shopIntroductionRepresentativeCode;
+    }
+
+    if (
+      !shop.partnerDevelopmentRepresentativeCode &&
+      assignments.partnerDevelopmentRepresentativeCode
+    ) {
+      updatePayload.partnerDevelopmentRepresentativeId =
+        assignments.partnerDevelopmentRepresentativeId;
+      updatePayload.partnerDevelopmentRepresentativeCode =
+        assignments.partnerDevelopmentRepresentativeCode;
+    }
+
+    if (
+      !shop.operationalSupportRepresentativeCode &&
+      assignments.operationalSupportRepresentativeCode
+    ) {
+      updatePayload.operationalSupportRepresentativeId =
+        assignments.operationalSupportRepresentativeId;
+      updatePayload.operationalSupportRepresentativeCode =
+        assignments.operationalSupportRepresentativeCode;
+    }
+
+    if (!Object.keys(updatePayload).length) {
+      return shop;
+    }
+
+    const updated = await this.userModel
+      .findByIdAndUpdate(shop._id, updatePayload, { new: true })
+      .exec();
+
+    return updated || shop;
+  }
+
+  /** Lazily backfill a shop's Partner Development Representative if missing. */
+  async ensureShopPartnerDevelopmentAssignment(
+    shop: UserDocument,
+  ): Promise<UserDocument> {
+    if (shop.role !== UserRole.CERTIFIED_SHOP) return shop;
+    if (shop.partnerDevelopmentRepresentativeCode) return shop;
+
+    return this.assignShopEarningRepresentatives(shop);
+  }
+
+  /** When Rep 1 invites/adds Rep 2, Rep 1 becomes Rep 2's Partner Development Representative. */
+  async assignRepresentativePartnerDevelopment(
+    rep: UserDocument,
+  ): Promise<UserDocument> {
+    if (rep.role !== UserRole.MASTER_PARTNER) return rep;
+    if (rep.partnerDevelopmentRepresentativeCode) return rep;
+
+    const parentCode = normalizePartnerCode(rep.referredByPartnerCode);
+    if (!parentCode) return rep;
+
+    const parent = await this.findByPartnerCode(parentCode);
+    if (!parent || parent.role !== UserRole.MASTER_PARTNER) return rep;
+
+    const updated = await this.userModel
+      .findByIdAndUpdate(
+        rep._id,
+        {
+          partnerDevelopmentRepresentativeCode: normalizePartnerCode(
+            parent.partnerCode,
+          ),
+        },
+        { new: true },
+      )
+      .exec();
+
+    return updated || rep;
+  }
+
+  /** Backfill Partner Development / Shop Introduction assignments on shops under a linked Representative. */
+  async backfillShopEarningAssignmentsForRepresentative(
+    representative: UserDocument,
+  ): Promise<void> {
+    if (representative.role !== UserRole.MASTER_PARTNER) return;
+
+    const network = await this.findNetworkUsersForViewer(representative);
+    for (const shop of network.shops) {
+      const fullShop = await this.findOne(shop._id.toString());
+      if (fullShop) {
+        await this.assignShopEarningRepresentatives(fullShop);
+      }
+    }
+  }
+
+  async markPartnerDevelopmentCommissionPaid(shopId: string): Promise<void> {
+    await this.userModel.findByIdAndUpdate(shopId, {
+      partnerDevelopmentCommissionPaid: true,
+    });
+  }
+
+  /**
+   * Shops whose Partner Development commission is still owed to `parentCode`
+   * (i.e. `partnerDevelopmentRepresentativeCode` matches and the shop-level
+   * `partnerDevelopmentCommissionPaid` flag is not yet true). Partner
+   * Development is paid once per SHOP's first successful order, not once
+   * per child Representative.
+   */
+  async findShopsPendingPartnerDevelopment(
+    parentCode: string,
+  ): Promise<UserDocument[]> {
+    const code = normalizePartnerCode(parentCode);
+    if (!code) return [];
+    return this.userModel
+      .find({
+        role: UserRole.CERTIFIED_SHOP,
+        partnerDevelopmentRepresentativeCode: code,
+        partnerDevelopmentCommissionPaid: { $ne: true },
+      })
+      .exec();
   }
 
   async findAll(): Promise<UserDocument[]> {
@@ -1026,6 +1181,19 @@ export class UsersService implements OnModuleInit {
     await this.userModel.findByIdAndUpdate(viewer._id, {
       $addToSet: { operationalRepresentativeCodes: targetCode },
     });
+
+    // Rule: when Rep 1 invites/adds Rep 2, Rep 1 becomes Rep 2's Partner
+    // Development Representative (one-time, immutable).
+    if (!target.partnerDevelopmentRepresentativeCode) {
+      await this.userModel.findByIdAndUpdate(target._id, {
+        partnerDevelopmentRepresentativeCode: viewerCode,
+      });
+    }
+
+    const refreshedTarget = await this.userModel.findById(target._id);
+    if (refreshedTarget) {
+      await this.backfillShopEarningAssignmentsForRepresentative(refreshedTarget);
+    }
 
     return {
       message: `${target.firstName} ${target.lastName} linked for operational support. Their Promoters and Shops are now visible in your network. New members under them will appear automatically.`,

@@ -29,6 +29,7 @@ import { RegistrationFeesService } from '../registration-fees/registration-fees.
 import { calculateShippingFee, getShippingRegion, SHIPPING_FEE_AMOUNT } from '../common/shipping-config';
 import {
   getItemsSubtotal,
+  isRegistrationOrder,
   registrationOrderExclusionFilter,
   shouldHideShopRegistrationFromViewer,
 } from '../common/order-totals';
@@ -39,14 +40,15 @@ import {
 } from '../common/role-labels';
 import { PdfService } from '../pdf/pdf.service';
 import {
-  calculateCommissionEntries,
+  calculateRepresentativeCommissionEntries,
+  CommissionRecipient,
   resolveCommissionOrderAmounts,
-  resolveShopCommissionChain,
 } from '../common/commission-distribution';
 import { ExchangeRatesService } from '../exchange-rates/exchange-rates.service';
 import {
   buildLockedMonetaryFields,
   recalculateBaseWithLockedRate,
+  roundMoney,
   SALES_REPORT_STATUSES,
   SYSTEM_BASE_CURRENCY,
   EFFECTIVE_BASE_AMOUNT_EXPR,
@@ -1446,7 +1448,7 @@ export class OrdersService implements OnModuleInit {
       .find({ user: { $in: userIds } } as any)
       .populate(
         'user',
-        'firstName lastName email shopName role couponCode partnerCode',
+        'firstName lastName email shopName role couponCode partnerCode referredByPartnerCode shopIntroductionRepresentativeCode',
       )
       .sort({ createdAt: -1 })
       .exec();
@@ -1531,6 +1533,41 @@ export class OrdersService implements OnModuleInit {
     return Array.from(idSet);
   }
 
+  /** Resolve a Representative partner code into a commission recipient. */
+  private async resolveCommissionRecipient(
+    partnerCode?: string,
+  ): Promise<CommissionRecipient | null> {
+    if (!partnerCode) return null;
+    const user = await this.usersService.findByPartnerCode(partnerCode);
+    if (!user?.partnerCode) return null;
+    return {
+      _id: user._id.toString(),
+      partnerCode: user.partnerCode,
+      role: user.role,
+    };
+  }
+
+  /** True when `orderId` is the shop's earliest successful (non-registration) order. */
+  private async isFirstSuccessfulShopOrder(
+    shopUserId: string,
+    orderId: string,
+  ): Promise<boolean> {
+    const earliest = await this.orderModel
+      .find({
+        user: shopUserId,
+        status: {
+          $in: [OrderStatus.PAID, OrderStatus.SHIPPED, OrderStatus.DELIVERED],
+        },
+        ...registrationOrderExclusionFilter(),
+      } as any)
+      .sort({ createdAt: 1 })
+      .limit(1)
+      .select('_id')
+      .lean();
+
+    return earliest.length > 0 && String(earliest[0]._id) === String(orderId);
+  }
+
   async applyOrderCommissions(
     orderId: string,
     newStatus: OrderStatus,
@@ -1541,6 +1578,7 @@ export class OrdersService implements OnModuleInit {
 
     const order = await this.orderModel.findById(orderId);
     if (!order) return;
+    if (isRegistrationOrder(order)) return;
 
     const shopUserId =
       typeof order.user === 'object' && order.user !== null && '_id' in (order.user as object)
@@ -1549,11 +1587,79 @@ export class OrdersService implements OnModuleInit {
 
     if (!shopUserId) return;
 
-    const shopUser = await this.usersService.findOne(shopUserId);
+    let shopUser = await this.usersService.findOne(shopUserId);
     if (!shopUser || shopUser.role !== UserRole.CERTIFIED_SHOP) return;
 
+    if (!shopUser.shopIntroductionRepresentativeCode) {
+      shopUser = await this.usersService.assignShopEarningRepresentatives(shopUser);
+    }
+    shopUser = await this.usersService.ensureShopPartnerDevelopmentAssignment(
+      shopUser,
+    );
+
+    if (!shopUser.shopIntroductionRepresentativeCode) return;
+
+    const isFirstSuccessfulOrder = await this.isFirstSuccessfulShopOrder(
+      shopUserId,
+      orderId,
+    );
+
+    // Partner Development is a ONE-TIME earning per SHOP — paid only on that
+    // shop's first successful (non-registration) order, tracked via the
+    // shop-level partnerDevelopmentCommissionPaid flag.
+    const partnerDevelopmentAlreadyPaid =
+      shopUser.partnerDevelopmentCommissionPaid === true;
+
     if (order.commissions && order.commissions.length > 0) {
-      if (newStatus === OrderStatus.SHIPPED) {
+      const hasPartnerDevelopment = order.commissions.some(
+        (entry) => entry.earningType === 'Partner Development',
+      );
+
+      if (
+        isFirstSuccessfulOrder &&
+        !hasPartnerDevelopment &&
+        shopUser.partnerDevelopmentRepresentativeCode &&
+        !partnerDevelopmentAlreadyPaid
+      ) {
+        const monetary = resolveCommissionOrderAmounts(order);
+        const partnerDevUser = await this.usersService.findByPartnerCode(
+          shopUser.partnerDevelopmentRepresentativeCode,
+        );
+        if (partnerDevUser) {
+          const commissionStatus =
+            newStatus === OrderStatus.SHIPPED
+              ? ('earned' as const)
+              : (order.commissions[0]?.status || 'pending');
+
+          const shopIntroEntry = order.commissions.find(
+            (entry) => entry.earningType === 'Shop Introduction',
+          );
+          if (shopIntroEntry && shopIntroEntry.percentage === 10) {
+            shopIntroEntry.percentage = 5;
+            shopIntroEntry.amount = roundMoney(monetary.convertedUsdAmount * 0.05);
+          }
+
+          order.commissions.push({
+            recipientUserId: partnerDevUser._id.toString(),
+            recipientPartnerCode: partnerDevUser.partnerCode!,
+            recipientRole: partnerDevUser.role,
+            earningType: 'Partner Development',
+            percentage: 5,
+            amount: roundMoney(monetary.convertedUsdAmount * 0.05),
+            status: commissionStatus,
+            shopId: shopUserId,
+            orderAmount: monetary.orderAmount,
+            originalCurrency: monetary.orderCurrency,
+            exchangeRate: monetary.exchangeRateToUsd,
+            convertedUsdAmount: monetary.convertedUsdAmount,
+          });
+
+          await order.save();
+          await this.usersService.markPartnerDevelopmentCommissionPaid(
+            shopUserId,
+          );
+        }
+      } else if (newStatus === OrderStatus.SHIPPED) {
         order.commissions = order.commissions.map((entry) => ({
           ...entry,
           status: 'earned' as const,
@@ -1563,17 +1669,32 @@ export class OrdersService implements OnModuleInit {
       return;
     }
 
-    const chain = await resolveShopCommissionChain(
-      shopUser,
-      (code) => this.usersService.findByPartnerCode(code),
+    const monetary = resolveCommissionOrderAmounts(order);
+
+    const shopIntroduction = await this.resolveCommissionRecipient(
+      shopUser.shopIntroductionRepresentativeCode,
     );
-    const { orderAmount, orderCurrency, exchangeRateToUsd } =
-      resolveCommissionOrderAmounts(order);
-    const entries = calculateCommissionEntries(
-      orderAmount,
-      chain,
-      exchangeRateToUsd,
+    const partnerDevelopment = await this.resolveCommissionRecipient(
+      shopUser.partnerDevelopmentRepresentativeCode,
     );
+
+    const entries = calculateRepresentativeCommissionEntries({
+      shopId: shopUserId,
+      assignments: {
+        shopIntroductionRepresentativeCode:
+          shopUser.shopIntroductionRepresentativeCode,
+        partnerDevelopmentRepresentativeCode:
+          shopUser.partnerDevelopmentRepresentativeCode,
+        partnerDevelopmentCommissionPaid: partnerDevelopmentAlreadyPaid,
+      },
+      recipients: {
+        shopIntroduction,
+        partnerDevelopment,
+      },
+      monetary,
+      isFirstSuccessfulOrder,
+    });
+
     const commissionStatus =
       newStatus === OrderStatus.SHIPPED ? ('earned' as const) : ('pending' as const);
 
@@ -1583,11 +1704,144 @@ export class OrdersService implements OnModuleInit {
     }));
     await order.save();
 
-    if (entries.length > 0) {
-      console.log(
-        `[Commission] Order ${order.orderNumber}: ${entries.length} recipient(s), status=${commissionStatus}, base=${orderAmount} ${orderCurrency} @ ${exchangeRateToUsd} → USD`,
+    const paidPartnerDevelopment = entries.some(
+      (entry) => entry.earningType === 'Partner Development',
+    );
+    if (paidPartnerDevelopment) {
+      await this.usersService.markPartnerDevelopmentCommissionPaid(
+        shopUserId,
       );
     }
+
+    if (entries.length > 0) {
+      console.log(
+        `[Commission] Order ${order.orderNumber}: ${entries.length} recipient(s), status=${commissionStatus}, base=${monetary.orderAmount} ${monetary.orderCurrency} @ ${monetary.exchangeRateToUsd} → USD`,
+      );
+    }
+  }
+
+  /** Orders where `viewer` (a Representative) is a commission recipient. */
+  async getCommissionOrders(viewer: UserDocument): Promise<Order[]> {
+    const partnerCode = viewer.partnerCode?.trim();
+    if (!partnerCode || viewer.role !== UserRole.MASTER_PARTNER) {
+      return [];
+    }
+
+    await this.repairPartnerDevelopmentCommissionsForRep(partnerCode);
+
+    const orders = await this.orderModel
+      .find({
+        'commissions.recipientPartnerCode': partnerCode,
+        ...registrationOrderExclusionFilter(),
+      } as any)
+      .populate(
+        'user',
+        'firstName lastName email shopName role couponCode partnerCode referredByPartnerCode shopIntroductionRepresentativeCode',
+      )
+      .sort({ createdAt: -1 })
+      .exec();
+
+    return orders.map((order) => {
+      const plain = order.toObject();
+      type CommissionEntry = NonNullable<Order['commissions']>[number];
+      plain.commissions = (plain.commissions || []).filter(
+        (entry: CommissionEntry) =>
+          entry.recipientPartnerCode?.trim() === partnerCode,
+      );
+      return plain;
+    });
+  }
+
+  /**
+   * Repair: for each shop that still owes `parentCode` a Partner Development
+   * commission (shop-level `partnerDevelopmentCommissionPaid !== true`), pay
+   * it on that shop's own earliest successful (non-registration) order.
+   */
+  private async repairPartnerDevelopmentCommissionsForRep(
+    parentCode: string,
+  ): Promise<void> {
+    const pendingShops =
+      await this.usersService.findShopsPendingPartnerDevelopment(parentCode);
+
+    for (const shop of pendingShops) {
+      const earliestOrder = await this.orderModel
+        .findOne({
+          user: shop._id,
+          status: {
+            $in: [OrderStatus.PAID, OrderStatus.SHIPPED, OrderStatus.DELIVERED],
+          },
+          ...registrationOrderExclusionFilter(),
+        } as any)
+        .sort({ createdAt: 1 })
+        .select('_id')
+        .lean();
+
+      if (earliestOrder) {
+        await this.repairPartnerDevelopmentCommission(
+          String(earliestOrder._id),
+          String(shop._id),
+        );
+      }
+    }
+  }
+
+  private async repairPartnerDevelopmentCommission(
+    orderId: string,
+    shopUserId: string,
+  ): Promise<void> {
+    const shopUser = await this.usersService.findOne(shopUserId);
+    if (!shopUser || shopUser.role !== UserRole.CERTIFIED_SHOP) return;
+
+    // Guard: never pay Partner Development twice for the same shop.
+    if (shopUser.partnerDevelopmentCommissionPaid === true) return;
+
+    const order = await this.orderModel.findById(orderId);
+    if (!order?.commissions?.length) return;
+
+    const hasPartnerDevelopment = order.commissions.some(
+      (entry) => entry.earningType === 'Partner Development',
+    );
+    if (hasPartnerDevelopment) return;
+
+    const updatedShop =
+      await this.usersService.ensureShopPartnerDevelopmentAssignment(shopUser);
+    if (!updatedShop.partnerDevelopmentRepresentativeCode) {
+      return;
+    }
+
+    const partnerDevUser = await this.usersService.findByPartnerCode(
+      updatedShop.partnerDevelopmentRepresentativeCode,
+    );
+    if (!partnerDevUser) return;
+
+    const monetary = resolveCommissionOrderAmounts(order);
+    const commissionStatus = order.commissions[0]?.status || 'pending';
+    const shopIntroEntry = order.commissions.find(
+      (entry) => entry.earningType === 'Shop Introduction',
+    );
+
+    if (shopIntroEntry && shopIntroEntry.percentage === 10) {
+      shopIntroEntry.percentage = 5;
+      shopIntroEntry.amount = roundMoney(monetary.convertedUsdAmount * 0.05);
+    }
+
+    order.commissions.push({
+      recipientUserId: partnerDevUser._id.toString(),
+      recipientPartnerCode: partnerDevUser.partnerCode!,
+      recipientRole: partnerDevUser.role,
+      earningType: 'Partner Development',
+      percentage: 5,
+      amount: roundMoney(monetary.convertedUsdAmount * 0.05),
+      status: commissionStatus,
+      shopId: shopUserId,
+      orderAmount: monetary.orderAmount,
+      originalCurrency: monetary.orderCurrency,
+      exchangeRate: monetary.exchangeRateToUsd,
+      convertedUsdAmount: monetary.convertedUsdAmount,
+    });
+
+    await order.save();
+    await this.usersService.markPartnerDevelopmentCommissionPaid(shopUserId);
   }
 
   async updateStatus(

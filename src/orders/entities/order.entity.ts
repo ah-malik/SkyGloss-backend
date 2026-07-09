@@ -150,9 +150,15 @@ export class Order {
     recipientUserId: string;
     recipientPartnerCode: string;
     recipientRole: string;
+    earningType?: 'Shop Introduction' | 'Partner Development' | 'Operational Support';
     percentage: number;
     amount: number;
     status: 'pending' | 'earned';
+    shopId?: string;
+    orderAmount?: number;
+    originalCurrency?: string;
+    exchangeRate?: number;
+    convertedUsdAmount?: number;
   }[];
 }
 
