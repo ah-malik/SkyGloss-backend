@@ -282,12 +282,43 @@ export class PdfService {
       doc.fontSize(14).font('Helvetica-Bold').text('Order Items:', { underline: true });
       doc.moveDown(0.5);
 
-      doc.fontSize(10).font('Helvetica-Bold');
-      doc.text('Item', 50, doc.y, { width: 200 });
-      doc.text('Size', 250, doc.y, { width: 70 });
-      doc.text('Type', 325, doc.y, { width: 45 });
-      doc.text('Qty', 375, doc.y, { width: 35 });
-      doc.text('Price', 415, doc.y, { width: 85 });
+      const itemColumns = {
+        item: { x: 50, w: 185, align: 'left' as const },
+        size: { x: 235, w: 60, align: 'left' as const },
+        type: { x: 295, w: 55, align: 'center' as const },
+        qty: { x: 350, w: 40, align: 'center' as const },
+        price: { x: 390, w: 75, align: 'right' as const },
+        total: { x: 465, w: 85, align: 'right' as const },
+      };
+
+      const drawItemRow = (
+        y: number,
+        values: Record<keyof typeof itemColumns, string>,
+        fontName: string,
+        fontSize: number,
+      ) => {
+        doc.fontSize(fontSize).font(fontName);
+        (Object.keys(itemColumns) as Array<keyof typeof itemColumns>).forEach((key) => {
+          const col = itemColumns[key];
+          doc.text(values[key], col.x, y, { width: col.w, align: col.align });
+        });
+      };
+
+      const headerY = doc.y;
+      drawItemRow(
+        headerY,
+        {
+          item: 'Item',
+          size: 'Size',
+          type: 'Type',
+          qty: 'Qty',
+          price: 'Price',
+          total: 'Total',
+        },
+        'Helvetica-Bold',
+        10,
+      );
+      doc.y = headerY + 14;
       doc.moveDown(0.5);
       doc.lineWidth(1).moveTo(50, doc.y).lineTo(550, doc.y).stroke();
       doc.moveDown(0.5);
@@ -312,17 +343,25 @@ export class PdfService {
 
       doc.font('Helvetica');
       order.items.forEach((item) => {
-        const currentY = doc.y;
-        doc.text(item.name.toUpperCase(), 50, currentY, { width: 200 });
-        doc.text(item.size, 250, currentY, { width: 70 });
-        doc.text(formatOrderItemTypeLabel(item.orderType), 325, currentY, {
-          width: 45,
-        });
-        doc.text(item.quantity.toString(), 375, currentY, { width: 35 });
-        doc.text(`${currencySymbol} ${item.price.toFixed(2)}`, 415, currentY, {
-          width: 85,
-        });
-        doc.moveDown();
+        const rowY = doc.y;
+        const lineTotal = item.price * item.quantity;
+        const rowValues = {
+          item: item.name.toUpperCase(),
+          size: item.size || '',
+          type: formatOrderItemTypeLabel(item.orderType),
+          qty: item.quantity.toString(),
+          price: `${currencySymbol}${item.price.toFixed(2)}`,
+          total: `${currencySymbol}${lineTotal.toFixed(2)}`,
+        };
+
+        doc.fontSize(10).font('Helvetica');
+        const rowHeight = Math.max(
+          doc.heightOfString(rowValues.item, { width: itemColumns.item.w }),
+          12,
+        );
+
+        drawItemRow(rowY, rowValues, 'Helvetica', 10);
+        doc.y = rowY + rowHeight + 6;
       });
 
       doc.moveDown();
