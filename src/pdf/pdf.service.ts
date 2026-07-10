@@ -283,15 +283,15 @@ export class PdfService {
       doc.moveDown(0.5);
 
       const itemColumns = {
-        item: { x: 50, w: 165, align: 'left' as const },
-        size: { x: 225, w: 75, align: 'left' as const },
-        type: { x: 310, w: 55, align: 'center' as const },
-        qty: { x: 375, w: 45, align: 'center' as const },
+        item: { x: 50, w: 155, align: 'left' as const },
+        size: { x: 215, w: 95, align: 'left' as const },
+        type: { x: 320, w: 50, align: 'center' as const },
+        qty: { x: 380, w: 40, align: 'center' as const },
         price: { x: 430, w: 55, align: 'right' as const },
         total: { x: 495, w: 55, align: 'right' as const },
       };
-      const tableLineGap = 3;
-      const tableRowPadding = 10;
+      const tableLineGap = 8;
+      const tableRowPadding = 12;
 
       const measureCellHeight = (text: string, width: number) =>
         doc.heightOfString(text || ' ', { width, lineGap: tableLineGap });
@@ -368,7 +368,7 @@ export class PdfService {
           ...(Object.keys(itemColumns) as Array<keyof typeof itemColumns>).map((key) =>
             measureCellHeight(rowValues[key], itemColumns[key].w),
           ),
-          14,
+          16,
         );
 
         drawItemRow(rowY, rowValues, 'Helvetica', 10);
