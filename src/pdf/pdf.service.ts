@@ -283,13 +283,18 @@ export class PdfService {
       doc.moveDown(0.5);
 
       const itemColumns = {
-        item: { x: 50, w: 185, align: 'left' as const },
-        size: { x: 235, w: 60, align: 'left' as const },
-        type: { x: 295, w: 55, align: 'center' as const },
-        qty: { x: 350, w: 40, align: 'center' as const },
-        price: { x: 390, w: 75, align: 'right' as const },
-        total: { x: 465, w: 85, align: 'right' as const },
+        item: { x: 50, w: 165, align: 'left' as const },
+        size: { x: 225, w: 75, align: 'left' as const },
+        type: { x: 310, w: 55, align: 'center' as const },
+        qty: { x: 375, w: 45, align: 'center' as const },
+        price: { x: 430, w: 55, align: 'right' as const },
+        total: { x: 495, w: 55, align: 'right' as const },
       };
+      const tableLineGap = 3;
+      const tableRowPadding = 10;
+
+      const measureCellHeight = (text: string, width: number) =>
+        doc.heightOfString(text || ' ', { width, lineGap: tableLineGap });
 
       const drawItemRow = (
         y: number,
@@ -300,7 +305,11 @@ export class PdfService {
         doc.fontSize(fontSize).font(fontName);
         (Object.keys(itemColumns) as Array<keyof typeof itemColumns>).forEach((key) => {
           const col = itemColumns[key];
-          doc.text(values[key], col.x, y, { width: col.w, align: col.align });
+          doc.text(values[key], col.x, y, {
+            width: col.w,
+            align: col.align,
+            lineGap: tableLineGap,
+          });
         });
       };
 
@@ -318,10 +327,10 @@ export class PdfService {
         'Helvetica-Bold',
         10,
       );
-      doc.y = headerY + 14;
-      doc.moveDown(0.5);
+      doc.y = headerY + 18;
+      doc.moveDown(0.75);
       doc.lineWidth(1).moveTo(50, doc.y).lineTo(550, doc.y).stroke();
-      doc.moveDown(0.5);
+      doc.moveDown(0.75);
 
       const getCurrencySymbol = (currency?: string) => {
         const symbols: Record<string, string> = {
@@ -356,12 +365,14 @@ export class PdfService {
 
         doc.fontSize(10).font('Helvetica');
         const rowHeight = Math.max(
-          doc.heightOfString(rowValues.item, { width: itemColumns.item.w }),
-          12,
+          ...(Object.keys(itemColumns) as Array<keyof typeof itemColumns>).map((key) =>
+            measureCellHeight(rowValues[key], itemColumns[key].w),
+          ),
+          14,
         );
 
         drawItemRow(rowY, rowValues, 'Helvetica', 10);
-        doc.y = rowY + rowHeight + 6;
+        doc.y = rowY + rowHeight + tableRowPadding;
       });
 
       doc.moveDown();
