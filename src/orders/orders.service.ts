@@ -67,6 +67,7 @@ import {
   type ShopOrderFlow,
 } from '../common/order-number';
 import { normalizeCurrencyCode } from '../common/currency-codes';
+import { normalizeOrderItemType } from '../common/order-type';
 import { CouponsService } from '../coupons/coupons.service';
 
 const USA_COUNTRIES = ['united states', 'usa', 'us', 'united states of america'];
@@ -476,7 +477,11 @@ export class OrdersService implements OnModuleInit {
     // DETERMINE CURRENCY
     const orderCurrency = await this.getCurrencyForUser(currentUser);
 
-    const { items, shippingAddress, couponCode } = createOrderDto;
+    const { items: rawItems, shippingAddress, couponCode } = createOrderDto;
+    const items = rawItems.map((item) => ({
+      ...item,
+      orderType: normalizeOrderItemType(item.orderType),
+    }));
 
     // Calculate total amount from items
     // Note: In a real app, we should fetch product prices from DB to secure against client-side manipulation.
@@ -1967,7 +1972,11 @@ export class OrdersService implements OnModuleInit {
       
       const orderCurrency = await this.getCurrencyForUser(currentUser);
 
-      const { items, shippingAddress, couponCode } = createOrderDto;
+      const { items: rawItems, shippingAddress, couponCode } = createOrderDto;
+      const items = rawItems.map((item) => ({
+        ...item,
+        orderType: normalizeOrderItemType(item.orderType),
+      }));
       
       if (!items || !Array.isArray(items) || items.length === 0) {
         throw new BadRequestException('Order items are required');

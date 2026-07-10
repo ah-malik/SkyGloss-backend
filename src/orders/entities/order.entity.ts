@@ -28,6 +28,9 @@ export class OrderItem {
   @Prop({ required: true })
   quantity: number;
 
+  @Prop({ type: String, enum: ['unit', 'case'], default: 'unit' })
+  orderType?: 'unit' | 'case';
+
   @Prop({ required: true })
   price: number;
 

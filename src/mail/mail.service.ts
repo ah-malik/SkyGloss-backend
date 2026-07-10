@@ -4,6 +4,7 @@ import * as nodemailer from 'nodemailer';
 import { formatRoleLabel } from '../common/role-labels';
 import { isGlobalHubPartnerCode } from '../common/global-hub';
 import { UserRole } from '../users/entities/user.entity';
+import { formatOrderItemTypeLabel } from '../common/order-type';
 @Injectable()
 export class MailService {
   private transporter: nodemailer.Transporter;
@@ -768,12 +769,7 @@ export class MailService {
                       <table width="100%" cellpadding="10" cellspacing="0" style="background:#f0f8fc; border-left:4px solid #0ea0dc; margin:20px 0;">
                         <tr>
                           <td>
-                            <strong>Customer Details:</strong><br>
-                            Name: ${user.firstName} ${user.lastName}<br>
-                            Email: ${user.email}<br>
-                            Order Number: ${order.orderNumber}<br>
-                            Currency: ${currency}<br>
-                            ${order.shippingAddress?.taxId ? `Tax ID: ${order.shippingAddress.taxId}` : ''}
+                            ${this.renderOrderCustomerDetails(order, user, currency)}
                           </td>
                         </tr>
                       </table>
@@ -853,13 +849,7 @@ export class MailService {
                       <table width="100%" cellpadding="10" cellspacing="0" style="background:#f0f8fc; border-left:4px solid #0ea0dc; margin:20px 0;">
                         <tr>
                           <td>
-                            <strong>Customer Details:</strong><br>
-                            Name: ${user.firstName} ${user.lastName}<br>
-                            Email: ${user.email}<br>
-                            Country: ${order.shippingAddress?.country || user?.country || 'N/A'}<br>
-                            Order Number: ${order.orderNumber}<br>
-                            Currency: ${currency}<br>
-                            ${order.shippingAddress?.taxId ? `Tax ID: ${order.shippingAddress.taxId}` : ''}
+                            ${this.renderOrderCustomerDetails(order, user, currency, { includeCountry: true })}
                           </td>
                         </tr>
                       </table>
@@ -1187,12 +1177,45 @@ export class MailService {
     }
   }
 
+  private renderOrderCustomerDetails(
+    order: any,
+    user: any,
+    currency: string,
+    options?: { includeCountry?: boolean },
+  ): string {
+    const includeCountry = options?.includeCountry ?? false;
+    const name =
+      [user?.firstName, user?.lastName].filter(Boolean).join(' ') ||
+      [order.shippingAddress?.firstName, order.shippingAddress?.lastName]
+        .filter(Boolean)
+        .join(' ') ||
+      'N/A';
+    const accountEmail = user?.email || 'N/A';
+    const shippingEmail = order.shippingAddress?.email || 'N/A';
+    const country = order.shippingAddress?.country || user?.country || 'N/A';
+    const taxIdLine = order.shippingAddress?.taxId
+      ? `Tax ID: ${order.shippingAddress.taxId}<br>`
+      : '';
+
+    return `
+      <strong>Customer Details:</strong><br>
+      Name: ${name}<br>
+      Email: ${accountEmail}<br>
+      Shipping Email: ${shippingEmail}<br>
+      ${includeCountry ? `Country: ${country}<br>` : ''}
+      Order Number: ${order.orderNumber}<br>
+      Currency: ${currency}<br>
+      ${taxIdLine}
+    `;
+  }
+
   private renderOrderItems(items: any[], symbol: string = '$') {
     let itemsHtml = `
       <table width="100%" cellpadding="10" cellspacing="0" style="border-collapse: collapse; margin-top: 10px;">
         <thead>
           <tr style="background-color: #f8f9fa; border-bottom: 1px solid #dee2e6;">
             <th align="left" style="padding: 10px; font-size: 11px; color: #666; text-transform: uppercase;">Product</th>
+            <th align="center" style="padding: 10px; font-size: 11px; color: #666; text-transform: uppercase;">Type</th>
             <th align="center" style="padding: 10px; font-size: 11px; color: #666; text-transform: uppercase;">Qty</th>
             <th align="right" style="padding: 10px; font-size: 11px; color: #666; text-transform: uppercase;">Price</th>
             <th align="right" style="padding: 10px; font-size: 11px; color: #666; text-transform: uppercase;">Total</th>
@@ -1215,6 +1238,7 @@ export class MailService {
               </tr>
             </table>
           </td>
+          <td align="center" style="padding: 10px; font-size: 13px; color: #272727;">${formatOrderItemTypeLabel(item.orderType)}</td>
           <td align="center" style="padding: 10px; font-size: 13px; color: #272727;">${item.quantity}</td>
           <td align="right" style="padding: 10px; font-size: 13px; color: #272727;">${symbol}${item.price.toFixed(2)}</td>
           <td align="right" style="padding: 10px; font-size: 13px; font-weight: bold; color: #272727;">${symbol}${(item.price * item.quantity).toFixed(2)}</td>
@@ -1228,6 +1252,118 @@ export class MailService {
     `;
 
     return itemsHtml;
+  }
+
+  async sendOrderInvoiceEmail(
+    to: string,
+    order: any,
+    user: any,
+    invoiceBuffer: Buffer,
+    options?: { payUrl?: string },
+  ) {
+    const currencySymbols: { [key: string]: string } = {
+      USD: '$',
+      AUD: '$',
+      CAD: '$',
+      EUR: '€',
+      GBP: '£',
+      INR: '₹',
+      AED: 'AED ',
+    };
+    const currency = (order.currency || 'USD').toUpperCase();
+    const symbol = currencySymbols[currency] || currency + ' ';
+    const subtotal = (order.items || []).reduce(
+      (sum: number, item: any) => sum + item.price * item.quantity,
+      0,
+    );
+    const shippingFee =
+      order.shippingFee != null && order.shippingFee > 0
+        ? order.shippingFee
+        : Math.max(0, order.totalAmount - subtotal + (order.discount || 0));
+    const payUrl = options?.payUrl;
+
+    const mailOptions: any = {
+      from: `"SkyGloss Portal" <sales@skygloss.com>`,
+      to,
+      subject: `Order Invoice: ${order.orderNumber}`,
+      html: `
+        <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
+            <tr>
+              <td align="center">
+                <table width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="margin:20px 0; border-radius:8px; overflow:hidden; border: 1px solid #e0e0e0;">
+                  <tr><td align="center" bgcolor="#0ea0dc" style="padding:20px; color:#ffffff; font-size:24px; font-weight:bold;">Order Invoice</td></tr>
+                  <tr>
+                    <td style="padding:30px; color:#333333; font-size:14px; line-height:1.6;">
+                      <h2 style="color:#272727; margin-bottom: 5px;">Hi ${user?.firstName || 'there'},</h2>
+                      <p style="margin-top: 0; color: #666;">Please find your invoice for order <strong>${order.orderNumber}</strong> attached to this email.</p>
+
+                      <table width="100%" cellpadding="10" cellspacing="0" style="background:#f0f8fc; border-left:4px solid #0ea0dc; margin:20px 0;">
+                        <tr>
+                          <td>
+                            ${this.renderOrderCustomerDetails(order, user, currency, { includeCountry: true })}
+                          </td>
+                        </tr>
+                      </table>
+
+                      <h3 style="color: #272727; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-top: 30px;">Order Summary</h3>
+                      ${this.renderOrderItems(order.items || [], symbol)}
+
+                      <table width="100%" cellpadding="5" cellspacing="0" style="margin-top: 20px; border-top: 2px solid #0ea0dc; padding-top: 10px;">
+                        <tr>
+                          <td align="right" style="color: #666;">Subtotal:</td>
+                          <td align="right" width="100" style="font-weight: bold;">${symbol}${subtotal.toFixed(2)}</td>
+                        </tr>
+                        ${shippingFee > 0.01 ? `
+                        <tr>
+                          <td align="right" style="color: #666;">Shipping:</td>
+                          <td align="right" width="100" style="font-weight: bold;">${symbol}${shippingFee.toFixed(2)}</td>
+                        </tr>` : ''}
+                        ${(order.discount || 0) > 0 ? `
+                        <tr>
+                          <td align="right" style="color: #666;">Discount${order.couponCode ? ` (${order.couponCode})` : ''}:</td>
+                          <td align="right" width="100" style="font-weight: bold; color: #16a34a;">-${symbol}${Number(order.discount).toFixed(2)}</td>
+                        </tr>` : ''}
+                        <tr>
+                          <td align="right" style="font-size: 18px; color: #272727; font-weight: bold;">Total:</td>
+                          <td align="right" style="font-size: 18px; color: #0ea0dc; font-weight: bold;">${symbol}${order.totalAmount.toFixed(2)} <span style="font-size:12px; color:#666;">${currency}</span></td>
+                        </tr>
+                      </table>
+
+                      ${
+                        payUrl
+                          ? `<p style="margin-top: 30px; text-align: center;">
+                              <a href="${payUrl}" style="display:inline-block; background-color:#0ea0dc; color:#ffffff; padding:14px 28px; text-decoration:none; border-radius:8px; font-weight:bold;">Pay Now</a>
+                            </p>`
+                          : ''
+                      }
+
+                      <p style="margin-top: 30px; text-align: center; color: #999; font-size: 12px;">
+                        If you have any questions, please contact our support team.
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+      `,
+      attachments: [
+        {
+          filename: `Invoice_${order.orderNumber}.pdf`,
+          content: invoiceBuffer,
+        },
+      ],
+    };
+
+    try {
+      await this.salesTransporter.sendMail(mailOptions);
+      this.logger.log(`Order invoice email sent to ${to} for ${order.orderNumber}`);
+    } catch (error) {
+      this.logger.error(`Failed to send order invoice email to ${to}`, error.stack);
+      throw error;
+    }
   }
 
   async sendCertificateEmail(toEmail: string, shopName: string, attachmentBuffer: Buffer) {
@@ -1299,11 +1435,7 @@ export class MailService {
                       <table width="100%" cellpadding="10" cellspacing="0" style="background:#fef2f2; border-left:4px solid #dc2626; margin:20px 0;">
                         <tr>
                           <td>
-                            <strong>Customer Details:</strong><br>
-                            Name: ${user.firstName} ${user.lastName}<br>
-                            Email: ${user.email}<br>
-                            Order Number: ${order.orderNumber}<br>
-                            Currency: ${currency}
+                            ${this.renderOrderCustomerDetails(order, user, currency)}
                           </td>
                         </tr>
                       </table>

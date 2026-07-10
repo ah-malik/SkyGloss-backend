@@ -91,7 +91,44 @@ export class UsersController {
       ...network,
       globalHub,
       operationalRepresentativeCodes: user.operationalRepresentativeCodes ?? [],
+      operationalPromoterCodes: user.operationalPromoterCodes ?? [],
     };
+  }
+
+  @Get('admin/network/:ownerId/links')
+  @Roles(UserRole.ADMIN)
+  getAdminNetworkLinks(@Param('ownerId') ownerId: string) {
+    return this.usersService.adminGetNetworkLinks(ownerId);
+  }
+
+  @Get('admin/network/search-member')
+  @Roles(UserRole.ADMIN)
+  searchAdminNetworkMember(
+    @Query('ownerId') ownerId: string,
+    @Query('role') role: 'master_partner' | 'regional_partner',
+    @Query('query') query: string,
+  ) {
+    return this.usersService.adminSearchNetworkMember(ownerId, role, query);
+  }
+
+  @Post('admin/network/add-member')
+  @Roles(UserRole.ADMIN)
+  addAdminNetworkMember(
+    @Body('ownerId') ownerId: string,
+    @Body('role') role: 'master_partner' | 'regional_partner',
+    @Body('query') query: string,
+  ) {
+    return this.usersService.adminLinkNetworkMember(ownerId, role, query);
+  }
+
+  @Post('admin/network/remove-member')
+  @Roles(UserRole.ADMIN)
+  removeAdminNetworkMember(
+    @Body('ownerId') ownerId: string,
+    @Body('role') role: 'master_partner' | 'regional_partner',
+    @Body('partnerCode') partnerCode: string,
+  ) {
+    return this.usersService.adminUnlinkNetworkMember(ownerId, role, partnerCode);
   }
 
   @Get('network/search-representative')

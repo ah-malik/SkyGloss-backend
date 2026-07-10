@@ -894,7 +894,72 @@ export class UsersService implements OnModuleInit {
           referredByPartnerCode: { $in: shopCodes },
         })
         .exec();
-      return { ...empty, shops, subPromoters };
+
+      const collected: UserDocument[] = [];
+      const seenIds = new Set<string>();
+      const freshViewer = await this.userModel
+        .findById(viewer._id)
+        .select('operationalPromoterCodes partnerCode')
+        .lean();
+      const operationalPromoterCodes = (freshViewer?.operationalPromoterCodes || [])
+        .map((code) => normalizePartnerCode(code))
+        .filter(
+          (code) => code && code !== normalizePartnerCode(partnerCode),
+        );
+
+      const linkedPromoters: UserDocument[] = [];
+      for (const operationalCode of operationalPromoterCodes) {
+        const linkedPromoter = await this.findByPartnerCode(operationalCode);
+        if (
+          linkedPromoter?.role === UserRole.REGIONAL_PARTNER &&
+          !seenIds.has(linkedPromoter._id.toString())
+        ) {
+          seenIds.add(linkedPromoter._id.toString());
+          linkedPromoters.push(linkedPromoter);
+          collected.push(linkedPromoter);
+        }
+        await this.collectNetworkDescendants(
+          [operationalCode],
+          collected,
+          seenIds,
+        );
+      }
+
+      const linkedSubPromoters = collected.filter(
+        (u) => u.role === UserRole.SUB_PROMOTER,
+      );
+      const linkedShops = collected.filter(
+        (u) => u.role === UserRole.CERTIFIED_SHOP,
+      );
+      const linkedPromoterMembers = collected.filter(
+        (u) => u.role === UserRole.REGIONAL_PARTNER,
+      );
+
+      const shopIds = new Set(shops.map((s) => s._id.toString()));
+      const mergedShops = [
+        ...shops,
+        ...linkedShops.filter((s) => !shopIds.has(s._id.toString())),
+      ];
+      const subIds = new Set(subPromoters.map((s) => s._id.toString()));
+      const mergedSubPromoters = [
+        ...subPromoters,
+        ...linkedSubPromoters.filter((s) => !subIds.has(s._id.toString())),
+      ];
+
+      const uniqueLinkedPromoters = [...linkedPromoters];
+      for (const promoter of linkedPromoterMembers) {
+        if (!uniqueLinkedPromoters.some((p) => p._id.toString() === promoter._id.toString())) {
+          uniqueLinkedPromoters.push(promoter);
+        }
+      }
+
+      return {
+        ...empty,
+        shops: mergedShops,
+        subPromoters: mergedSubPromoters,
+        promoters: uniqueLinkedPromoters,
+        partners: [...uniqueLinkedPromoters, ...mergedSubPromoters],
+      };
     }
 
     const collected: UserDocument[] = [];
@@ -1088,13 +1153,20 @@ export class UsersService implements OnModuleInit {
   async searchRepresentativeForLinking(
     query: string,
     viewer: UserDocument,
+    options?: { allowAdmin?: boolean },
   ) {
     const trimmed = query?.trim();
     if (!trimmed) {
       throw new BadRequestException('Please enter a Partner ID or email address.');
     }
-    if (viewer.role !== UserRole.MASTER_PARTNER || !viewer.partnerCode) {
+    if (
+      !options?.allowAdmin &&
+      (viewer.role !== UserRole.MASTER_PARTNER || !viewer.partnerCode)
+    ) {
       throw new ForbiddenException('Only Representatives can search for other Representatives.');
+    }
+    if (viewer.role !== UserRole.MASTER_PARTNER) {
+      throw new BadRequestException('Owner must be a Representative.');
     }
 
     const normalizedQuery = trimmed.toUpperCase();
@@ -1149,44 +1221,183 @@ export class UsersService implements OnModuleInit {
   }
 
   async linkRepresentativeToViewer(query: string, viewer: UserDocument) {
-    const targetPreview = await this.searchRepresentativeForLinking(query, viewer);
+    return this.linkRepresentativeToOwner(viewer._id.toString(), query, viewer);
+  }
+
+  async adminGetNetworkLinks(ownerId: string) {
+    const owner = await this.userModel.findById(ownerId);
+    if (!owner) {
+      throw new BadRequestException('Network owner not found.');
+    }
+
+    const repCodes = (owner.operationalRepresentativeCodes || [])
+      .map((code) => normalizePartnerCode(code))
+      .filter(Boolean) as string[];
+    const promoterCodes = (owner.operationalPromoterCodes || [])
+      .map((code) => normalizePartnerCode(code))
+      .filter(Boolean) as string[];
+
+    const linkedRepresentatives = repCodes.length
+      ? await this.userModel
+          .find({ partnerCode: { $in: repCodes }, role: UserRole.MASTER_PARTNER })
+          .select('firstName lastName email partnerCode city country status role')
+          .lean()
+      : [];
+    const linkedPromoters = promoterCodes.length
+      ? await this.userModel
+          .find({ partnerCode: { $in: promoterCodes }, role: UserRole.REGIONAL_PARTNER })
+          .select('firstName lastName email partnerCode city country status role')
+          .lean()
+      : [];
+
+    return {
+      owner: {
+        _id: owner._id,
+        firstName: owner.firstName,
+        lastName: owner.lastName,
+        email: owner.email,
+        partnerCode: owner.partnerCode,
+        role: owner.role,
+      },
+      linkedRepresentatives,
+      linkedPromoters,
+      operationalRepresentativeCodes: repCodes,
+      operationalPromoterCodes: promoterCodes,
+    };
+  }
+
+  async adminSearchNetworkMember(
+    ownerId: string,
+    role: 'master_partner' | 'regional_partner',
+    query: string,
+  ) {
+    const owner = await this.userModel.findById(ownerId);
+    if (!owner) {
+      throw new BadRequestException('Network owner not found.');
+    }
+    if (role === 'master_partner') {
+      if (owner.role !== UserRole.MASTER_PARTNER) {
+        throw new BadRequestException('Owner must be a Representative.');
+      }
+      return this.searchRepresentativeForLinking(query, owner, { allowAdmin: true });
+    }
+    if (owner.role !== UserRole.REGIONAL_PARTNER) {
+      throw new BadRequestException('Owner must be a Main Promoter.');
+    }
+    return this.searchPromoterForLinking(query, owner, { allowAdmin: true });
+  }
+
+  async adminLinkNetworkMember(
+    ownerId: string,
+    role: 'master_partner' | 'regional_partner',
+    query: string,
+  ) {
+    if (role === 'master_partner') {
+      return this.linkRepresentativeToOwner(ownerId, query);
+    }
+    return this.linkPromoterToOwner(ownerId, query);
+  }
+
+  async adminUnlinkNetworkMember(
+    ownerId: string,
+    role: 'master_partner' | 'regional_partner',
+    partnerCode: string,
+  ) {
+    const owner = await this.userModel.findById(ownerId);
+    if (!owner) {
+      throw new BadRequestException('Network owner not found.');
+    }
+    const normalizedCode = normalizePartnerCode(partnerCode);
+    if (!normalizedCode) {
+      throw new BadRequestException('Partner ID is required.');
+    }
+
+    if (role === 'master_partner') {
+      if (owner.role !== UserRole.MASTER_PARTNER) {
+        throw new BadRequestException('Owner must be a Representative.');
+      }
+      await this.userModel.findByIdAndUpdate(owner._id, {
+        $pull: { operationalRepresentativeCodes: normalizedCode },
+      });
+      return {
+        message: `Representative ${normalizedCode} removed from ${owner.firstName} ${owner.lastName}'s linked network.`,
+      };
+    }
+
+    if (owner.role !== UserRole.REGIONAL_PARTNER) {
+      throw new BadRequestException('Owner must be a Main Promoter.');
+    }
+    await this.userModel.findByIdAndUpdate(owner._id, {
+      $pull: { operationalPromoterCodes: normalizedCode },
+    });
+    return {
+      message: `Promoter ${normalizedCode} removed from ${owner.firstName} ${owner.lastName}'s linked network.`,
+    };
+  }
+
+  async linkRepresentativeToOwner(
+    ownerId: string,
+    query: string,
+    actingViewer?: UserDocument,
+  ) {
+    const owner = await this.userModel.findById(ownerId);
+    if (!owner) {
+      throw new BadRequestException('Network owner not found.');
+    }
+    if (owner.role !== UserRole.MASTER_PARTNER) {
+      throw new BadRequestException('Only Representatives can own representative network links.');
+    }
+    if (
+      actingViewer &&
+      actingViewer.role === UserRole.MASTER_PARTNER &&
+      actingViewer._id.toString() !== owner._id.toString()
+    ) {
+      throw new ForbiddenException('You can only manage your own representative links.');
+    }
+
+    const targetPreview = await this.searchRepresentativeForLinking(
+      query,
+      owner,
+      { allowAdmin: !actingViewer },
+    );
     const target = await this.userModel.findById(targetPreview._id);
     if (!target) {
       throw new BadRequestException('Representative not found.');
     }
 
-    const viewerSubtree = await this.findNetworkUsersForViewer(viewer);
+    const ownerSubtree = await this.findNetworkUsersForViewer(owner);
     const subtreeIds = new Set(
-      [...viewerSubtree.representatives, ...viewerSubtree.promoters, ...viewerSubtree.subPromoters, ...viewerSubtree.shops]
-        .map((member) => member._id.toString()),
+      [
+        ...ownerSubtree.representatives,
+        ...ownerSubtree.promoters,
+        ...ownerSubtree.subPromoters,
+        ...ownerSubtree.shops,
+      ].map((member) => member._id.toString()),
     );
     if (subtreeIds.has(target._id.toString())) {
-      throw new BadRequestException('This Representative is already in your network.');
+      throw new BadRequestException('This Representative is already in the network.');
     }
 
     const targetCode = normalizePartnerCode(target.partnerCode);
-    const viewerCode = normalizePartnerCode(viewer.partnerCode);
-    if (!targetCode || !viewerCode) {
+    const ownerCode = normalizePartnerCode(owner.partnerCode);
+    if (!targetCode || !ownerCode) {
       throw new BadRequestException('Partner ID is required to link Representatives.');
     }
 
-    const existingOperational = (viewer.operationalRepresentativeCodes || []).map(
+    const existingOperational = (owner.operationalRepresentativeCodes || []).map(
       (code) => normalizePartnerCode(code),
     );
     if (existingOperational.includes(targetCode)) {
       throw new BadRequestException('This Representative is already linked for operational support.');
     }
 
-    // Operational soft link only — never re-parent the target Representative.
-    await this.userModel.findByIdAndUpdate(viewer._id, {
+    await this.userModel.findByIdAndUpdate(owner._id, {
       $addToSet: { operationalRepresentativeCodes: targetCode },
     });
 
-    // Rule: when Rep 1 invites/adds Rep 2, Rep 1 becomes Rep 2's Partner
-    // Development Representative (one-time, immutable).
     if (!target.partnerDevelopmentRepresentativeCode) {
       await this.userModel.findByIdAndUpdate(target._id, {
-        partnerDevelopmentRepresentativeCode: viewerCode,
+        partnerDevelopmentRepresentativeCode: ownerCode,
       });
     }
 
@@ -1196,19 +1407,133 @@ export class UsersService implements OnModuleInit {
     }
 
     return {
-      message: `${target.firstName} ${target.lastName} linked for operational support. Their Promoters and Shops are now visible in your network. New members under them will appear automatically.`,
+      message: `${target.firstName} ${target.lastName} linked to ${owner.firstName} ${owner.lastName}'s network. Their Promoters and Shops are now visible in the owner's network.`,
       linkType: 'operational',
-      representative: {
-        _id: target._id,
-        firstName: target.firstName,
-        lastName: target.lastName,
-        email: target.email,
-        partnerCode: target.partnerCode,
-        referredByPartnerCode: target.referredByPartnerCode,
-        city: target.city,
-        country: target.country,
-        status: target.status,
-      },
+      representative: targetPreview,
+    };
+  }
+
+  async searchPromoterForLinking(
+    query: string,
+    viewer: UserDocument,
+    options?: { allowAdmin?: boolean },
+  ) {
+    const trimmed = query?.trim();
+    if (!trimmed) {
+      throw new BadRequestException('Please enter a Partner ID or email address.');
+    }
+    if (
+      !options?.allowAdmin &&
+      (viewer.role !== UserRole.REGIONAL_PARTNER || !viewer.partnerCode)
+    ) {
+      throw new ForbiddenException('Only Main Promoters can search for other Promoters.');
+    }
+    if (viewer.role !== UserRole.REGIONAL_PARTNER) {
+      throw new BadRequestException('Owner must be a Main Promoter.');
+    }
+
+    const normalizedQuery = trimmed.toUpperCase();
+    const isEmailQuery = trimmed.includes('@');
+    const target = await this.userModel.findOne(
+      isEmailQuery
+        ? {
+            email: {
+              $regex: new RegExp(
+                `^${trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+                'i',
+              ),
+            },
+            role: UserRole.REGIONAL_PARTNER,
+          }
+        : { partnerCode: normalizedQuery, role: UserRole.REGIONAL_PARTNER },
+    );
+
+    if (!target) {
+      throw new BadRequestException('No active Main Promoter found with that Partner ID or email.');
+    }
+    if (target._id.toString() === viewer._id.toString()) {
+      throw new BadRequestException('You cannot add yourself to your network.');
+    }
+    if (target.status === UserStatus.BLOCKED) {
+      throw new BadRequestException('This Promoter account is blocked.');
+    }
+
+    const targetCode = normalizePartnerCode(target.partnerCode);
+    const existingOperational = (viewer.operationalPromoterCodes || []).map(
+      (code) => normalizePartnerCode(code),
+    );
+    if (targetCode && existingOperational.includes(targetCode)) {
+      throw new BadRequestException('This Promoter is already linked to the network.');
+    }
+    if (
+      normalizePartnerCode(target.referredByPartnerCode) ===
+      normalizePartnerCode(viewer.partnerCode)
+    ) {
+      throw new BadRequestException('This Promoter is already linked to your network.');
+    }
+
+    return {
+      _id: target._id,
+      firstName: target.firstName,
+      lastName: target.lastName,
+      email: target.email,
+      partnerCode: target.partnerCode,
+      referredByPartnerCode: target.referredByPartnerCode,
+      city: target.city,
+      country: target.country,
+      status: target.status,
+    };
+  }
+
+  async linkPromoterToOwner(ownerId: string, query: string) {
+    const owner = await this.userModel.findById(ownerId);
+    if (!owner) {
+      throw new BadRequestException('Network owner not found.');
+    }
+    if (owner.role !== UserRole.REGIONAL_PARTNER) {
+      throw new BadRequestException('Only Main Promoters can own promoter network links.');
+    }
+
+    const targetPreview = await this.searchPromoterForLinking(query, owner, {
+      allowAdmin: true,
+    });
+    const target = await this.userModel.findById(targetPreview._id);
+    if (!target) {
+      throw new BadRequestException('Promoter not found.');
+    }
+
+    const ownerSubtree = await this.findNetworkUsersForViewer(owner);
+    const subtreeIds = new Set(
+      [
+        ...ownerSubtree.promoters,
+        ...ownerSubtree.subPromoters,
+        ...ownerSubtree.shops,
+      ].map((member) => member._id.toString()),
+    );
+    if (subtreeIds.has(target._id.toString())) {
+      throw new BadRequestException('This Promoter is already in the network.');
+    }
+
+    const targetCode = normalizePartnerCode(target.partnerCode);
+    if (!targetCode) {
+      throw new BadRequestException('Partner ID is required to link Promoters.');
+    }
+
+    const existingOperational = (owner.operationalPromoterCodes || []).map(
+      (code) => normalizePartnerCode(code),
+    );
+    if (existingOperational.includes(targetCode)) {
+      throw new BadRequestException('This Promoter is already linked to the network.');
+    }
+
+    await this.userModel.findByIdAndUpdate(owner._id, {
+      $addToSet: { operationalPromoterCodes: targetCode },
+    });
+
+    return {
+      message: `${target.firstName} ${target.lastName} linked to ${owner.firstName} ${owner.lastName}'s network. Their Sub-Promoters and Shops are now visible in the owner's network.`,
+      linkType: 'operational',
+      promoter: targetPreview,
     };
   }
 

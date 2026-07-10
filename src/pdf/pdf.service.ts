@@ -7,6 +7,7 @@ import {
   getOrderTotalsBreakdown,
   isRegistrationOrder,
 } from '../common/order-totals';
+import { formatOrderItemTypeLabel } from '../common/order-type';
 import axios from 'axios';
 
 @Injectable()
@@ -257,6 +258,7 @@ export class PdfService {
       doc.fontSize(12).font('Helvetica');
       doc.text(`${order.shippingAddress.firstName} ${order.shippingAddress.lastName}`);
       if (order.shippingAddress.companyName) doc.text(order.shippingAddress.companyName);
+      if (order.shippingAddress.email) doc.text(`Email: ${order.shippingAddress.email}`);
       doc.text(order.shippingAddress.address);
       doc.text(`${order.shippingAddress.city}, ${order.shippingAddress.state} ${order.shippingAddress.zipCode}`);
       doc.text(order.shippingAddress.country);
@@ -269,10 +271,11 @@ export class PdfService {
       doc.moveDown(0.5);
 
       doc.fontSize(10).font('Helvetica-Bold');
-      doc.text('Item', 50, doc.y, { width: 250 });
-      doc.text('Size', 300, doc.y, { width: 100 });
-      doc.text('Qty', 400, doc.y, { width: 50 });
-      doc.text('Price', 450, doc.y, { width: 100 });
+      doc.text('Item', 50, doc.y, { width: 200 });
+      doc.text('Size', 250, doc.y, { width: 70 });
+      doc.text('Type', 325, doc.y, { width: 45 });
+      doc.text('Qty', 375, doc.y, { width: 35 });
+      doc.text('Price', 415, doc.y, { width: 85 });
       doc.moveDown(0.5);
       doc.lineWidth(1).moveTo(50, doc.y).lineTo(550, doc.y).stroke();
       doc.moveDown(0.5);
@@ -298,10 +301,15 @@ export class PdfService {
       doc.font('Helvetica');
       order.items.forEach((item) => {
         const currentY = doc.y;
-        doc.text(item.name.toUpperCase(), 50, currentY, { width: 250 });
-        doc.text(item.size, 300, currentY, { width: 100 });
-        doc.text(item.quantity.toString(), 400, currentY, { width: 50 });
-        doc.text(`${currencySymbol} ${item.price.toFixed(2)}`, 450, currentY, { width: 100 });
+        doc.text(item.name.toUpperCase(), 50, currentY, { width: 200 });
+        doc.text(item.size, 250, currentY, { width: 70 });
+        doc.text(formatOrderItemTypeLabel(item.orderType), 325, currentY, {
+          width: 45,
+        });
+        doc.text(item.quantity.toString(), 375, currentY, { width: 35 });
+        doc.text(`${currencySymbol} ${item.price.toFixed(2)}`, 415, currentY, {
+          width: 85,
+        });
         doc.moveDown();
       });
 

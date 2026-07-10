@@ -113,6 +113,10 @@ export class User {
   @Prop({ type: [String], default: [] })
   operationalRepresentativeCodes?: string[];
 
+  /** Main Promoter partner codes linked for operational visibility without re-parenting. */
+  @Prop({ type: [String], default: [] })
+  operationalPromoterCodes?: string[];
+
   /**
    * Representative who invited/added this Representative (their Partner
    * Development Representative), OR — when set on a shop — the Partner

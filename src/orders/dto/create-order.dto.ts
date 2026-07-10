@@ -26,6 +26,10 @@ class OrderItemDto {
   @IsNotEmpty()
   quantity: number;
 
+  @IsString()
+  @IsOptional()
+  orderType?: 'unit' | 'case';
+
   @IsNumber()
   @IsNotEmpty()
   price: number;
