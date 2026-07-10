@@ -254,16 +254,28 @@ export class PdfService {
       doc.moveDown();
 
       // Shipping Info
+      const shipping = order.shippingAddress;
       doc.fontSize(14).font('Helvetica-Bold').text('Shipping Address:');
       doc.fontSize(12).font('Helvetica');
-      doc.text(`${order.shippingAddress.firstName} ${order.shippingAddress.lastName}`);
-      if (order.shippingAddress.companyName) doc.text(order.shippingAddress.companyName);
-      if (order.shippingAddress.email) doc.text(`Email: ${order.shippingAddress.email}`);
-      doc.text(order.shippingAddress.address);
-      doc.text(`${order.shippingAddress.city}, ${order.shippingAddress.state} ${order.shippingAddress.zipCode}`);
-      doc.text(order.shippingAddress.country);
-      doc.text(`Phone: ${order.shippingAddress.phoneNumber}`);
-      if (order.shippingAddress.taxId) doc.text(`Tax ID: ${order.shippingAddress.taxId}`);
+      doc.text(
+        `Name: ${[shipping.firstName, shipping.lastName].filter(Boolean).join(' ') || 'N/A'}`,
+      );
+      doc.text(`Email: ${shipping.email || 'N/A'}`);
+      if (shipping.companyName) {
+        doc.text(`Company: ${shipping.companyName}`);
+      }
+      doc.text(`Address: ${shipping.address || 'N/A'}`);
+      if (shipping.address2) {
+        doc.text(`Address Line 2: ${shipping.address2}`);
+      }
+      doc.text(`City: ${shipping.city || 'N/A'}`);
+      doc.text(`State: ${shipping.state || 'N/A'}`);
+      doc.text(`Zip Code: ${shipping.zipCode || 'N/A'}`);
+      doc.text(`Country: ${shipping.country || 'N/A'}`);
+      doc.text(`Phone: ${shipping.phoneNumber || 'N/A'}`);
+      if (shipping.taxId) {
+        doc.text(`Tax ID: ${shipping.taxId}`);
+      }
       doc.moveDown();
 
       // Items Table
