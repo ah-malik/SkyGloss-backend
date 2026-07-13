@@ -146,7 +146,8 @@ export class User {
   /**
    * True once this shop's one-time 5% Partner Development commission has
    * been paid out (on the shop's first successful, non-registration order).
-   * Shop-level flag — each shop pays Partner Development independently.
+   * Shop-level flag — each shop under a linked Rep pays Partner Development
+   * independently (Rep1 gets 5% on every shop's first order, not only the first shop).
    */
   @Prop({ default: false })
   partnerDevelopmentCommissionPaid?: boolean;

@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
 const PDFDocument = require('pdfkit');
+import * as fs from 'fs';
+import * as path from 'path';
 import { User } from '../users/entities/user.entity';
 import { Order } from '../orders/entities/order.entity';
 import {
@@ -7,221 +9,194 @@ import {
   getOrderTotalsBreakdown,
   isRegistrationOrder,
 } from '../common/order-totals';
-import { formatOrderItemTypeLabel } from '../common/order-type';
+import { formatOrderItemDisplayName, formatOrderItemTypeLabel } from '../common/order-type';
 import axios from 'axios';
 
 @Injectable()
 export class PdfService {
 
+  private withCloudinaryQuality(url: string, transforms: string): string {
+    if (!url.includes('/upload/')) return url;
+    if (url.includes('/upload/' + transforms + '/')) return url;
+    return url.replace('/upload/', `/upload/${transforms}/`);
+  }
+
+  private async fetchImageBuffer(url: string): Promise<Buffer> {
+    const response = await axios.get(url, {
+      responseType: 'arraybuffer',
+      timeout: 30000,
+      headers: { Accept: 'image/*' },
+    });
+    return Buffer.from(response.data);
+  }
+
+  private formatCertificateDate(date: Date): string {
+    const months = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December',
+    ];
+    const day = date.getDate();
+    const suffix =
+      day % 10 === 1 && day !== 11
+        ? 'st'
+        : day % 10 === 2 && day !== 12
+          ? 'nd'
+          : day % 10 === 3 && day !== 13
+            ? 'rd'
+            : 'th';
+    return `${months[date.getMonth()]} ${day}${suffix}, ${date.getFullYear()}`;
+  }
+
+  private resolveSignatureFontPath(): string | null {
+    const candidates = [
+      path.join(process.cwd(), 'src', 'assets', 'fonts', 'GreatVibes-Regular.ttf'),
+      path.join(process.cwd(), 'assets', 'fonts', 'GreatVibes-Regular.ttf'),
+      path.join(process.cwd(), 'dist', 'assets', 'fonts', 'GreatVibes-Regular.ttf'),
+      path.join(__dirname, '..', 'assets', 'fonts', 'GreatVibes-Regular.ttf'),
+      path.join(__dirname, 'assets', 'fonts', 'GreatVibes-Regular.ttf'),
+    ];
+    return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+  }
+
   async generateCertificate(user: User): Promise<Buffer> {
-    return new Promise(async (resolve) => {
-      const doc = new PDFDocument({
-        size: 'A4',
-        layout: 'landscape',
-        margin: 0,
-      });
-
-      const chunks: Buffer[] = [];
-      doc.on('data', (chunk) => chunks.push(chunk));
-      doc.on('end', () => resolve(Buffer.concat(chunks)));
-
-      // ✅ Background
-      const bgUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1782826882/i76ou1myhdphtsxs2rc3.jpg';
-      // const bgUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1777377593/ikbhkmhdwj6t0rsghffz.jpg';
-      const bg = await axios.get(bgUrl, { responseType: 'arraybuffer' });
-
-      doc.image(Buffer.from(bg.data), 0, 40, {
-        width: doc.page.width,
-        height: doc.page.height,
-      });
-
-      // ✅ Small Signature(LEFT)
-      const signUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1778551478/bmitulyne2fueroz5fyg.png';
-      const sign = await axios.get(signUrl, { responseType: 'arraybuffer' });
-
-      doc.image(Buffer.from(sign.data), 60, 70, {
-        width: 200,
-      });
-
-      // ✅ TEXT (perfect positioning)
-      const storeName = user.shopName || user.companyName || `${user.firstName} ${user.lastName}`;
-
-      // Main Title
-      doc.fontSize(42)
-        .fillColor('#111')
-        .text(storeName || 'Car Care Melbourne', 0, 20, {
-          align: 'center',
+    return new Promise(async (resolve, reject) => {
+      try {
+        const doc = new PDFDocument({
+          size: 'A4',
+          layout: 'landscape',
+          margin: 0,
+          compress: false,
+          pdfVersion: '1.7',
         });
 
-      // Subtitle
-      doc.fontSize(16)
-        .text('SKYGLOSS CERTIFIED', 0, 65, { align: 'center' });
+        const chunks: Buffer[] = [];
+        doc.on('data', (chunk) => chunks.push(chunk));
+        doc.on('end', () => resolve(Buffer.concat(chunks)));
+        doc.on('error', reject);
 
-      // Left block
-      // doc.fontSize(12).text('Jonas Svirtautas', 80, 100);
-      doc.moveTo(80, 120).lineTo(280, 120).stroke();
-      doc.text('SkyGloss Inc.', 80, 130);
-      // "CERTIFICATE NUMBER" label START
-      doc.fontSize(11)
-        .fillColor('#222222')
-        .font('Helvetica-Bold')
-        .text('CERTIFICATE', 80, 200);
-      doc.moveTo(80, 190).lineTo(200, 190).stroke();
+        const pageWidth = doc.page.width;
+        const pageHeight = doc.page.height;
 
-      const certNo = (user as any).certificateNumber || '14943212';
-      doc.fontSize(15)
-        .fillColor('#222222')
-        .font('Helvetica-Bold')
-        .text(certNo.toString(), 80, 165);
-      //       // "CERTIFICATE NUMBER" label END
-      // doc.text('12831154', 80, 165);
-      // doc.moveTo(80, 195).lineTo(200, 195).stroke();
-      // doc.text('Certification No', 80, 205);
+        // Full-bleed certificate template; nudge down so large watermark clears the title
+        const bgUrl = this.withCloudinaryQuality(
+          'https://res.cloudinary.com/dxhmopbei/image/upload/v1782826882/i76ou1myhdphtsxs2rc3.jpg',
+          'q_100,w_4200,c_limit,f_jpg,fl_progressive',
+        );
+        const bg = await this.fetchImageBuffer(bgUrl);
+        const bgOffsetY = 150;
+        doc.image(bg, 0, bgOffsetY, {
+          width: pageWidth,
+          height: pageHeight - bgOffsetY,
+        });
 
-      // Date (right)
-      const date = new Date().toLocaleDateString();
-      doc.text(date, 225, 165);
-      doc.moveTo(225, 190).lineTo(300, 190).stroke();
-      doc.fontSize(11).text('DATE', 225, 200);
+        const storeName =
+          user.shopName ||
+          user.companyName ||
+          `${user.firstName || ''} ${user.lastName || ''}`.trim() ||
+          'SkyGloss Certified Shop';
 
-      doc.end();
+        // ── Top: shop name + certified label (matches reference layout) ──
+        const titleSize =
+          storeName.length > 32 ? 30 : storeName.length > 22 ? 34 : 40;
+        doc
+          .font('Helvetica')
+          .fontSize(titleSize)
+          .fillColor('#111111')
+          .text(storeName, 50, 36, {
+            width: pageWidth - 100,
+            align: 'center',
+            lineBreak: false,
+          });
+
+        doc
+          .font('Helvetica')
+          .fontSize(11)
+          .fillColor('#111111')
+          .text('SKYGLOSS CERTIFIED', 50, 82, {
+            width: pageWidth - 100,
+            align: 'center',
+          });
+
+        // ── Left: previous Factory Forever signature image (smaller) + Skygloss Inc. ──
+        const signUrl = this.withCloudinaryQuality(
+          'https://res.cloudinary.com/dxhmopbei/image/upload/v1778551478/bmitulyne2fueroz5fyg.png',
+          'q_100,w_900,f_png',
+        );
+        const sign = await this.fetchImageBuffer(signUrl);
+        const signWidth = 110;
+        const signX = 68;
+        const signY = 112;
+        doc.image(sign, signX, signY, { width: signWidth });
+
+        const signLineY = signY + 48;
+        doc
+          .strokeColor('#111111')
+          .lineWidth(0.75)
+          .moveTo(signX, signLineY)
+          .lineTo(signX + 180, signLineY)
+          .stroke();
+
+        doc
+          .font('Helvetica')
+          .fontSize(10)
+          .fillColor('#333333')
+          .text('SkyGloss Inc.', signX, signLineY + 6);
+
+        // ── Mid-right: date (same row as signature) ──
+        const certifiedAt =
+          (user as any).updatedAt ||
+          (user as any).createdAt ||
+          new Date();
+        const dateStr = this.formatCertificateDate(new Date(certifiedAt));
+        const dateX = 310;
+
+        doc
+          .font('Helvetica')
+          .fontSize(12)
+          .fillColor('#111111')
+          .text(dateStr, dateX, signY + 18, { width: 200, align: 'left' });
+
+        doc
+          .strokeColor('#111111')
+          .lineWidth(0.75)
+          .moveTo(dateX, signLineY)
+          .lineTo(dateX + 170, signLineY)
+          .stroke();
+
+        doc
+          .font('Helvetica')
+          .fontSize(10)
+          .fillColor('#333333')
+          .text('Date', dateX, signLineY + 6);
+
+        // ── Below signature: certification number ──
+        const certNo = (user as any).certificateNumber || '14943212';
+        const certY = signLineY + 36;
+        doc
+          .font('Helvetica')
+          .fontSize(13)
+          .fillColor('#111111')
+          .text(String(certNo), signX, certY, { width: 160, align: 'left' });
+
+        doc
+          .strokeColor('#111111')
+          .lineWidth(0.75)
+          .moveTo(signX, certY + 20)
+          .lineTo(signX + 130, certY + 20)
+          .stroke();
+
+        doc
+          .font('Helvetica')
+          .fontSize(10)
+          .fillColor('#333333')
+          .text('Certification No', signX, certY + 26);
+
+        doc.end();
+      } catch (error) {
+        reject(error);
+      }
     });
   }
-  //   async generateCertificate(user: User): Promise<Buffer> {
-  //     return new Promise(async (resolve) => {
-  //       const doc = new PDFDocument({
-  //         size: 'A4',
-  //         layout: 'landscape',
-  //         margin: 0,
-  //       });
-  // d
-  //       const chunks: Buffer[] = [];
-  //       doc.on('data', (chunk) => chunks.push(chunk));
-  //       doc.on('end', () => resolve(Buffer.concat(chunks)));
-
-  //       const pageWidth = doc.page.width;   // 842
-  //       const pageHeight = doc.page.height; // 595
-
-  //       // ── SECTION 1: Blue Header Banner Image ──
-  //       const headerUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1777952451/u0a7gcyy9mpis8e0opwz.png';
-  //       const headerImg = await axios.get(headerUrl, { responseType: 'arraybuffer' });
-  //       const headerHeight = 280;
-  //       doc.image(Buffer.from(headerImg.data), 0, 0, {
-  //         width: pageWidth,
-  //         height: headerHeight,
-  //       });
-
-  //       // ── SECTION 2: White Content Area ──
-  //       const contentY = headerHeight + 30;
-  //       const leftMargin = 60;
-  //       const midX = pageWidth * 0.52;
-  //       const rightX = pageWidth * 0.78;
-
-  //       // "MASTER DISTRIBUTOR" label
-  //       doc.fontSize(11)
-  //         .fillColor('#222222')
-  //         .font('Helvetica-Bold')
-  //         .text('MASTER DISTRIBUTOR', leftMargin, contentY);
-
-  //       // "CERTIFICATE NUMBER" label START
-  //       doc.fontSize(11)
-  //         .fillColor('#222222')
-  //         .font('Helvetica-Bold')
-  //         .text('CERTIFICATE NUMBER:', leftMargin, contentY + 22);
-
-  //       const certNo = (user as any).certificateNumber || '14943212';
-  //       doc.fontSize(15)
-  //         .fillColor('#222222')
-  //         .font('Helvetica-Bold')
-  //         .text(certNo.toString(), leftMargin + 135, contentY + 20);
-  //       // "CERTIFICATE NUMBER" label END
-
-  //       // ── Signature Image (center area) ──
-  //       const signUrl = 'https://res.cloudinary.com/dxhmopbei/image/upload/v1778551478/bmitulyne2fueroz5fyg.png';
-  //       const signImg = await axios.get(signUrl, { responseType: 'arraybuffer' });
-  //       const signWidth = 150;
-  //       const signY = contentY - 15;
-  //       doc.image(Buffer.from(signImg.data), midX, signY, {
-  //         width: signWidth,
-  //       });
-
-  //       // Line under signature
-  //       const signLineY = signY + 50;
-  //       doc.lineWidth(0.5)
-  //         .strokeColor('#333333')
-  //         .moveTo(midX, signLineY)
-  //         .lineTo(midX + signWidth + 10, signLineY)
-  //         .stroke();
-
-  //       // "Skygloss Inc." label under signature
-  //       doc.fontSize(9)
-  //         .fillColor('#555555')
-  //         .font('Helvetica')
-  //         .text('Skygloss Inc.', midX, signLineY + 5);
-
-  //       // ── Date (right side) ──
-  //       const months = ['January', 'February', 'March', 'April', 'May', 'June',
-  //         'July', 'August', 'September', 'October', 'November', 'December'];
-  //       const now = new Date();
-  //       const day = now.getDate();
-  //       const suffix = day === 1 || day === 21 || day === 31 ? 'st' : day === 2 || day === 22 ? 'nd' : day === 3 || day === 23 ? 'rd' : 'th';
-  //       const dateStr = `${day}${suffix} ${months[now.getMonth()]} ${now.getFullYear()}`;
-
-  //       doc.fontSize(11)
-  //         .fillColor('#222222')
-  //         .font('Helvetica-Bold')
-  //         .text(dateStr, rightX, contentY + 20);
-
-  //       // Line under date
-  //       const dateLine = contentY + 35;
-  //       doc.lineWidth(0.5)
-  //         .strokeColor('#333333')
-  //         .moveTo(rightX, dateLine)
-  //         .lineTo(rightX + 130, dateLine)
-  //         .stroke();
-
-  //       // "Date" label
-  //       doc.fontSize(9)
-  //         .fillColor('#555555')
-  //         .font('Helvetica')
-  //         .text('Date', rightX, dateLine + 5);
-
-  //       // ── Store Name (large, left side) ──
-  //       const storeName = user.shopName || user.companyName || `${user.firstName} ${user.lastName}`;
-  //       const storeNameY = contentY + 55;
-  //       doc.fontSize(36)
-  //         .fillColor('#111111')
-  //         .font('Helvetica-Bold')
-  //         .text(storeName, leftMargin, storeNameY, {
-  //           width: pageWidth * 0.45,
-  //         });
-
-  //       // ── Territory (right side, aligned with store name) ──
-  //       const territoryY = storeNameY + 15;
-  //       doc.fontSize(10)
-  //         .fillColor('#555555')
-  //         .font('Helvetica')
-  //         .text('Territory:', midX, territoryY);
-
-  //       // Territory line
-  //       const territoryLineY = territoryY + 15;
-  //       doc.lineWidth(0.5)
-  //         .strokeColor('#333333')
-  //         .moveTo(midX + 55, territoryLineY)
-  //         .lineTo(pageWidth - 60, territoryLineY)
-  //         .stroke();
-
-  //       // Territory value (country)
-  //       if (user.country) {
-  //         doc.fontSize(10)
-  //           .fillColor('#222222')
-  //           .font('Helvetica')
-  //           .text(user.country, midX + 60, territoryY);
-  //       }
-
-  //       doc.end();
-  //     });
-  //   }
 
   async generateOrderDetails(order: Order): Promise<Buffer> {
     return new Promise((resolve) => {
@@ -355,7 +330,7 @@ export class PdfService {
         const rowY = doc.y;
         const lineTotal = item.price * item.quantity;
         const rowValues = {
-          item: item.name.toUpperCase(),
+          item: formatOrderItemDisplayName(item).toUpperCase(),
           size: item.size || '',
           type: formatOrderItemTypeLabel(item.orderType),
           qty: item.quantity.toString(),

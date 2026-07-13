@@ -4,7 +4,7 @@ import * as nodemailer from 'nodemailer';
 import { formatRoleLabel } from '../common/role-labels';
 import { isGlobalHubPartnerCode } from '../common/global-hub';
 import { UserRole } from '../users/entities/user.entity';
-import { formatOrderItemTypeLabel } from '../common/order-type';
+import { formatOrderItemDisplayName, formatOrderItemTypeLabel } from '../common/order-type';
 @Injectable()
 export class MailService {
   private transporter: nodemailer.Transporter;
@@ -1232,7 +1232,7 @@ export class MailService {
               <tr>
                 ${item.image ? `<td style="padding-right: 10px;"><img src="${item.image}" width="45" height="45" style="border-radius: 6px; object-fit: cover; border: 1px solid #eee;"></td>` : ''}
                 <td>
-                  <div style="font-weight: bold; font-size: 13px; color: #272727;">${item.name}</div>
+                  <div style="font-weight: bold; font-size: 13px; color: #272727;">${formatOrderItemDisplayName(item)}</div>
                   ${item.size ? `<div style="font-size: 11px; color: #888;">Size: ${item.size}</div>` : ''}
                 </td>
               </tr>

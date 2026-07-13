@@ -74,6 +74,32 @@ describe('calculateRepresentativeCommissionEntries', () => {
     expect(total).toBe(10);
   });
 
+  it('second shop first order still pays 5% Partner Development (per-shop, not once per child Rep)', () => {
+    const entries = calculateRepresentativeCommissionEntries({
+      shopId: 'shop2',
+      assignments: { partnerDevelopmentCommissionPaid: false },
+      recipients: { shopIntroduction: rep2, partnerDevelopment: rep1 },
+      monetary: monetary(200),
+      isFirstSuccessfulOrder: true,
+    });
+
+    expect(entries).toHaveLength(2);
+    expect(entries.map((e) => e.earningType).sort()).toEqual([
+      'Partner Development',
+      'Shop Introduction',
+    ]);
+    expect(entries.find((e) => e.earningType === 'Partner Development')).toMatchObject({
+      recipientPartnerCode: 'REP0001',
+      percentage: 5,
+      amount: 10,
+    });
+    expect(entries.find((e) => e.earningType === 'Shop Introduction')).toMatchObject({
+      recipientPartnerCode: 'REP0002',
+      percentage: 5,
+      amount: 10,
+    });
+  });
+
   it('subsequent orders: 10% Shop Introduction only, Partner Development is $0', () => {
     const entries = calculateRepresentativeCommissionEntries({
       shopId: 'shop1',

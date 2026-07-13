@@ -400,8 +400,19 @@ function buildCommissionEntry(
 
 /**
  * Representative-only commission by earning type.
- * First order: 10% total (5% Shop Introduction + 5% Partner Development).
- * Subsequent orders: 10% Shop Introduction only.
+ *
+ * When Rep1 links Rep2, every shop under Rep2 pays on that shop's FIRST
+ * successful order:
+ *   - 5% Shop Introduction → Rep2
+ *   - 5% Partner Development → Rep1
+ * Total = 10% (never 15%).
+ *
+ * All subsequent orders for that shop:
+ *   - 10% Shop Introduction → Rep2 only
+ *   - Partner Development = $0
+ *
+ * Partner Development is tracked per shop via partnerDevelopmentCommissionPaid,
+ * so Rep1 earns 5% again on each additional shop's first order.
  */
 export function calculateRepresentativeCommissionEntries(params: {
   shopId: string;

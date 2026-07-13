@@ -371,10 +371,22 @@ export class UsersService implements OnModuleInit {
     if (representative.role !== UserRole.MASTER_PARTNER) return;
 
     const network = await this.findNetworkUsersForViewer(representative);
+    const parentPdCode = normalizePartnerCode(
+      representative.partnerDevelopmentRepresentativeCode,
+    );
+
     for (const shop of network.shops) {
-      const fullShop = await this.findOne(shop._id.toString());
-      if (fullShop) {
-        await this.assignShopEarningRepresentatives(fullShop);
+      let fullShop = await this.findOne(shop._id.toString());
+      if (!fullShop) continue;
+
+      fullShop = await this.assignShopEarningRepresentatives(fullShop);
+
+      // Ensure each shop under Rep2 inherits Rep1 as Partner Development parent
+      // so EVERY shop's first order pays 5% to Rep1 + 5% to Rep2.
+      if (parentPdCode && !fullShop.partnerDevelopmentRepresentativeCode) {
+        await this.userModel.findByIdAndUpdate(fullShop._id, {
+          partnerDevelopmentRepresentativeCode: parentPdCode,
+        });
       }
     }
   }
@@ -1150,6 +1162,157 @@ export class UsersService implements OnModuleInit {
     };
   }
 
+  /**
+   * Validates representative network linking:
+   * - no self-assignment
+   * - no circular parent/child relationships
+   * - one parent only
+   */
+  private async assertRepresentativeNetworkLinkAllowed(
+    target: UserDocument,
+    owner: UserDocument,
+  ): Promise<void> {
+    const targetCode = normalizePartnerCode(target.partnerCode);
+    const ownerCode = normalizePartnerCode(owner.partnerCode);
+    if (!targetCode || !ownerCode) {
+      throw new BadRequestException('Partner ID is required to link Representatives.');
+    }
+
+    if (
+      target._id.toString() === owner._id.toString() ||
+      targetCode === ownerCode
+    ) {
+      throw new BadRequestException(
+        'A Representative cannot add themselves to their own network.',
+      );
+    }
+
+    await this.assertRepresentativeHasSingleParent(target, owner);
+    await this.assertNoCircularRepresentativeLink(target, owner);
+  }
+
+  /**
+   * A Representative may only sit under one parent Representative network.
+   * Checks both operational links and an existing Partner Development parent.
+   */
+  private async assertRepresentativeHasSingleParent(
+    target: UserDocument,
+    owner: UserDocument,
+  ): Promise<void> {
+    const targetCode = normalizePartnerCode(target.partnerCode);
+    const ownerCode = normalizePartnerCode(owner.partnerCode);
+    if (!targetCode || !ownerCode) {
+      throw new BadRequestException('Partner ID is required to link Representatives.');
+    }
+
+    const operationalParents = await this.userModel
+      .find({
+        role: UserRole.MASTER_PARTNER,
+        operationalRepresentativeCodes: targetCode,
+        _id: { $ne: owner._id },
+      })
+      .select('firstName lastName partnerCode')
+      .exec();
+
+    if (operationalParents.length > 0) {
+      const parent = operationalParents[0];
+      const parentLabel = `${parent.firstName} ${parent.lastName}`.trim();
+      throw new BadRequestException(
+        `This Representative is already linked under ${parentLabel} (${parent.partnerCode}). A Representative can only belong to one parent Representative's network.`,
+      );
+    }
+
+    const existingPdParent = normalizePartnerCode(
+      target.partnerDevelopmentRepresentativeCode,
+    );
+    if (existingPdParent && existingPdParent !== ownerCode) {
+      throw new BadRequestException(
+        `This Representative is already assigned to parent ${existingPdParent}. A Representative can only belong to one parent Representative's network.`,
+      );
+    }
+  }
+
+  /**
+   * Blocks cycles such as Rep1 → Rep2 then Rep2 → Rep1 (or longer chains).
+   * Walks upward from the prospective parent (owner); if the target appears
+   * as an ancestor, linking target under owner would create a circle.
+   */
+  private async assertNoCircularRepresentativeLink(
+    target: UserDocument,
+    owner: UserDocument,
+  ): Promise<void> {
+    const targetCode = normalizePartnerCode(target.partnerCode);
+    const ownerCode = normalizePartnerCode(owner.partnerCode);
+    if (!targetCode || !ownerCode) return;
+
+    // Quick check: target already lists owner as an operational child
+    const targetOperationalChildren = (target.operationalRepresentativeCodes || []).map(
+      (code) => normalizePartnerCode(code),
+    );
+    if (targetOperationalChildren.includes(ownerCode)) {
+      throw new BadRequestException(
+        `Circular link not allowed. ${ownerCode} is already under ${targetCode}'s network, so ${targetCode} cannot be added under ${ownerCode}.`,
+      );
+    }
+
+    const visited = new Set<string>();
+    let currentCode: string | null = ownerCode;
+    let depth = 0;
+    const maxDepth = 50;
+
+    while (currentCode && depth < maxDepth) {
+      if (visited.has(currentCode)) break;
+      visited.add(currentCode);
+
+      if (currentCode === targetCode) {
+        throw new BadRequestException(
+          `Circular link not allowed. ${targetCode} is already an ancestor of ${ownerCode}, so ${ownerCode} cannot add ${targetCode} to their network.`,
+        );
+      }
+
+      const currentUser = await this.userModel
+        .findOne({
+          role: UserRole.MASTER_PARTNER,
+          partnerCode: currentCode,
+        })
+        .select('partnerCode partnerDevelopmentRepresentativeCode')
+        .exec();
+
+      if (!currentUser) break;
+
+      const pdParent = normalizePartnerCode(
+        currentUser.partnerDevelopmentRepresentativeCode,
+      );
+      if (pdParent) {
+        currentCode = pdParent;
+        depth += 1;
+        continue;
+      }
+
+      const operationalParent = await this.userModel
+        .findOne({
+          role: UserRole.MASTER_PARTNER,
+          operationalRepresentativeCodes: currentCode,
+        })
+        .select('partnerCode')
+        .exec();
+
+      currentCode = normalizePartnerCode(operationalParent?.partnerCode) || null;
+      depth += 1;
+    }
+
+    // Also block if owner already appears in target's linked descendant network
+    const targetSubtree = await this.findNetworkUsersForViewer(target);
+    const descendantIds = new Set(
+      targetSubtree.representatives.map((member) => member._id.toString()),
+    );
+    if (descendantIds.has(owner._id.toString())) {
+      throw new BadRequestException(
+        `Circular link not allowed. ${ownerCode} is already in ${targetCode}'s network, so ${targetCode} cannot be added under ${ownerCode}.`,
+      );
+    }
+  }
+
   async searchRepresentativeForLinking(
     query: string,
     viewer: UserDocument,
@@ -1181,14 +1344,8 @@ export class UsersService implements OnModuleInit {
     if (!target) {
       throw new BadRequestException('No active Representative found with that Partner ID or email.');
     }
-    if (target._id.toString() === viewer._id.toString()) {
-      throw new BadRequestException('You cannot add yourself to your network.');
-    }
     if (target.status === UserStatus.BLOCKED) {
       throw new BadRequestException('This Representative account is blocked.');
-    }
-    if (target.referredByPartnerCode === viewer.partnerCode) {
-      throw new BadRequestException('This Representative is already linked to your network.');
     }
     if (
       normalizePartnerCode(target.referredByPartnerCode) ===
@@ -1206,6 +1363,8 @@ export class UsersService implements OnModuleInit {
         'This Representative is already linked for operational support.',
       );
     }
+
+    await this.assertRepresentativeNetworkLinkAllowed(target, viewer);
 
     return {
       _id: target._id,
@@ -1391,10 +1550,14 @@ export class UsersService implements OnModuleInit {
       throw new BadRequestException('This Representative is already linked for operational support.');
     }
 
+    await this.assertRepresentativeNetworkLinkAllowed(target, owner);
+
     await this.userModel.findByIdAndUpdate(owner._id, {
       $addToSet: { operationalRepresentativeCodes: targetCode },
     });
 
+    // Rep1 becomes Rep2's Partner Development parent (immutable once set).
+    // Every shop under Rep2 then pays Rep1 5% + Rep2 5% on that shop's first order.
     if (!target.partnerDevelopmentRepresentativeCode) {
       await this.userModel.findByIdAndUpdate(target._id, {
         partnerDevelopmentRepresentativeCode: ownerCode,
@@ -1407,7 +1570,7 @@ export class UsersService implements OnModuleInit {
     }
 
     return {
-      message: `${target.firstName} ${target.lastName} linked to ${owner.firstName} ${owner.lastName}'s network. Their Promoters and Shops are now visible in the owner's network.`,
+      message: `${target.firstName} ${target.lastName} linked to ${owner.firstName} ${owner.lastName}'s network. Each of their shops' first orders will split 5% Partner Development to the parent and 5% Shop Introduction to the linked Representative.`,
       linkType: 'operational',
       representative: targetPreview,
     };
