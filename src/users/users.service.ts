@@ -391,6 +391,63 @@ export class UsersService implements OnModuleInit {
     }
   }
 
+  /**
+   * Ensure Rep↔shop Partner Development links are set so first-order repair can
+   * find shops. Covers:
+   * - Parent Rep: operationally linked children inherit this parent as PD
+   * - Child Rep: their shops inherit their partnerDevelopmentRepresentativeCode
+   */
+  async ensurePartnerDevelopmentNetworkForRepresentative(
+    representativeCode: string,
+  ): Promise<void> {
+    const code = normalizePartnerCode(representativeCode);
+    if (!code) return;
+
+    const rep = await this.findByPartnerCode(code);
+    if (!rep || rep.role !== UserRole.MASTER_PARTNER) return;
+
+    // Ensure this Rep's PD parent is set from referredBy when missing.
+    let refreshed = await this.assignRepresentativePartnerDevelopment(rep);
+
+    // As parent: link operational children → this Rep as PD parent, then backfill shops.
+    const childCodes = (refreshed.operationalRepresentativeCodes || [])
+      .map((c) => normalizePartnerCode(c))
+      .filter(Boolean);
+
+    for (const childCode of childCodes) {
+      const child = await this.findByPartnerCode(childCode);
+      if (!child || child.role !== UserRole.MASTER_PARTNER) continue;
+
+      if (!normalizePartnerCode(child.partnerDevelopmentRepresentativeCode)) {
+        await this.userModel.findByIdAndUpdate(child._id, {
+          partnerDevelopmentRepresentativeCode: code,
+        });
+      }
+
+      const childFresh = await this.findOne(child._id.toString());
+      if (childFresh) {
+        await this.backfillShopEarningAssignmentsForRepresentative(childFresh);
+      }
+    }
+
+    // As shop-intro Rep (or after refresh): backfill this Rep's own shops with PD parent.
+    refreshed = (await this.findOne(refreshed._id.toString())) || refreshed;
+    await this.backfillShopEarningAssignmentsForRepresentative(refreshed);
+
+    // Any other Rep already pointing at this parent as PD — backfill their shops too.
+    const otherChildren = await this.userModel
+      .find({
+        role: UserRole.MASTER_PARTNER,
+        partnerDevelopmentRepresentativeCode: code,
+        partnerCode: { $nin: childCodes.length ? childCodes : ['__none__'] },
+      })
+      .exec();
+
+    for (const child of otherChildren) {
+      await this.backfillShopEarningAssignmentsForRepresentative(child);
+    }
+  }
+
   async markPartnerDevelopmentCommissionPaid(shopId: string): Promise<void> {
     await this.userModel.findByIdAndUpdate(shopId, {
       partnerDevelopmentCommissionPaid: true,
@@ -414,6 +471,18 @@ export class UsersService implements OnModuleInit {
         role: UserRole.CERTIFIED_SHOP,
         partnerDevelopmentRepresentativeCode: code,
         partnerDevelopmentCommissionPaid: { $ne: true },
+      })
+      .exec();
+  }
+
+  /** Shops whose Shop Introduction Representative is `repCode`. */
+  async findShopsByIntroductionRep(repCode: string): Promise<UserDocument[]> {
+    const code = normalizePartnerCode(repCode);
+    if (!code) return [];
+    return this.userModel
+      .find({
+        role: UserRole.CERTIFIED_SHOP,
+        shopIntroductionRepresentativeCode: code,
       })
       .exec();
   }

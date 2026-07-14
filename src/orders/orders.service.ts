@@ -57,7 +57,7 @@ import {
 } from '../common/order-monetary';
 import {
   canViewerSeeOrderPlacerRole,
-  filterCommissionsForViewer,
+  filterCommissionsForViewerWithSplitContext,
   shouldIncludeViewerInNetworkOrders,
 } from '../common/user-hierarchy';
 import {
@@ -1444,6 +1444,16 @@ export class OrdersService implements OnModuleInit {
   }
 
   async getNetworkOrders(viewer: UserDocument): Promise<Order[]> {
+    if (
+      viewer.role === UserRole.MASTER_PARTNER &&
+      viewer.partnerCode?.trim()
+    ) {
+      await this.repairPartnerDevelopmentCommissionsForRep(
+        viewer.partnerCode.trim(),
+      );
+      await this.repairInflatedShopIntroSplitsForRep(viewer.partnerCode.trim());
+    }
+
     const userIds = await this.getNetworkOrderUserIds(viewer);
     if (userIds.length === 0) {
       return [];
@@ -1453,7 +1463,7 @@ export class OrdersService implements OnModuleInit {
       .find({ user: { $in: userIds } } as any)
       .populate(
         'user',
-        'firstName lastName email shopName role couponCode partnerCode referredByPartnerCode shopIntroductionRepresentativeCode',
+        'firstName lastName email shopName role couponCode partnerCode referredByPartnerCode shopIntroductionRepresentativeCode city country',
       )
       .sort({ createdAt: -1 })
       .exec();
@@ -1487,7 +1497,7 @@ export class OrdersService implements OnModuleInit {
       .map((order) => {
         const plain = order.toObject();
         type CommissionEntry = NonNullable<Order['commissions']>[number];
-        plain.commissions = filterCommissionsForViewer<CommissionEntry>(
+        plain.commissions = filterCommissionsForViewerWithSplitContext<CommissionEntry>(
           plain.commissions,
           viewer.role,
           viewer.partnerCode,
@@ -1636,13 +1646,8 @@ export class OrdersService implements OnModuleInit {
               ? ('earned' as const)
               : (order.commissions[0]?.status || 'pending');
 
-          const shopIntroEntry = order.commissions.find(
-            (entry) => entry.earningType === 'Shop Introduction',
-          );
-          if (shopIntroEntry && shopIntroEntry.percentage === 10) {
-            shopIntroEntry.percentage = 5;
-            shopIntroEntry.amount = roundMoney(monetary.convertedUsdAmount * 0.05);
-          }
+          // Always shrink FO Shop Intro to 5% when adding Partner Development.
+          this.shrinkShopIntroToFivePercent(order, monetary);
 
           order.commissions.push({
             recipientUserId: partnerDevUser._id.toString(),
@@ -1659,10 +1664,23 @@ export class OrdersService implements OnModuleInit {
             convertedUsdAmount: monetary.convertedUsdAmount,
           });
 
+          order.markModified('commissions');
           await order.save();
           await this.usersService.markPartnerDevelopmentCommissionPaid(
             shopUserId,
           );
+        }
+      } else if (
+        isFirstSuccessfulOrder &&
+        hasPartnerDevelopment
+      ) {
+        await this.normalizeFirstOrderSplitOnOrder(order);
+        if (newStatus === OrderStatus.SHIPPED) {
+          order.commissions = order.commissions.map((entry) => ({
+            ...entry,
+            status: 'earned' as const,
+          }));
+          await order.save();
         }
       } else if (newStatus === OrderStatus.SHIPPED) {
         order.commissions = order.commissions.map((entry) => ({
@@ -1733,45 +1751,64 @@ export class OrdersService implements OnModuleInit {
     }
 
     await this.repairPartnerDevelopmentCommissionsForRep(partnerCode);
+    await this.repairInflatedShopIntroSplitsForRep(partnerCode);
 
+    // Case-insensitive partner code match (legacy rows may differ in casing).
     const orders = await this.orderModel
       .find({
-        'commissions.recipientPartnerCode': partnerCode,
+        'commissions.recipientPartnerCode': {
+          $regex: `^${partnerCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+          $options: 'i',
+        },
         ...registrationOrderExclusionFilter(),
       } as any)
       .populate(
         'user',
-        'firstName lastName email shopName role couponCode partnerCode referredByPartnerCode shopIntroductionRepresentativeCode',
+        'firstName lastName email shopName role couponCode partnerCode referredByPartnerCode shopIntroductionRepresentativeCode city country',
       )
       .sort({ createdAt: -1 })
       .exec();
 
     return orders.map((order) => {
       const plain = order.toObject();
-      type CommissionEntry = NonNullable<Order['commissions']>[number];
-      plain.commissions = (plain.commissions || []).filter(
-        (entry: CommissionEntry) =>
-          entry.recipientPartnerCode?.trim() === partnerCode,
-      );
+      // Keep the full commission split on these orders so Rep viewers can see
+      // sibling First Order lines (e.g. Shop Intro 5% + Partner Dev 5%).
+      // Totals aggregation still scopes amounts to the intended recipient in the UI.
+      plain.commissions = plain.commissions || [];
       return plain;
     });
   }
 
   /**
-   * Repair: for each shop that still owes `parentCode` a Partner Development
-   * commission (shop-level `partnerDevelopmentCommissionPaid !== true`), pay
-   * it on that shop's own earliest successful (non-registration) order.
+   * Repair: for each shop that still owes `repCode` a Partner Development
+   * commission (as PD parent), OR shops introduced by `repCode` that still
+   * need the first-order 5%+5% split — pay / split on that shop's earliest
+   * successful (non-registration) order.
    */
   private async repairPartnerDevelopmentCommissionsForRep(
-    parentCode: string,
+    repCode: string,
   ): Promise<void> {
-    const pendingShops =
-      await this.usersService.findShopsPendingPartnerDevelopment(parentCode);
+    await this.usersService.ensurePartnerDevelopmentNetworkForRepresentative(
+      repCode,
+    );
 
-    for (const shop of pendingShops) {
+    const pendingShops =
+      await this.usersService.findShopsPendingPartnerDevelopment(repCode);
+
+    const shopIds = new Set(pendingShops.map((shop) => String(shop._id)));
+
+    // Also include shops introduced by this Rep that still need PD split
+    // (covers Rep2 loading commissions and triggering parent PD repair).
+    const introShops = await this.usersService.findShopsByIntroductionRep(repCode);
+    for (const shop of introShops) {
+      if (shop.partnerDevelopmentCommissionPaid === true) continue;
+      shopIds.add(String(shop._id));
+    }
+
+    for (const shopId of shopIds) {
       const earliestOrder = await this.orderModel
         .findOne({
-          user: shop._id,
+          user: shopId,
           status: {
             $in: [OrderStatus.PAID, OrderStatus.SHIPPED, OrderStatus.DELIVERED],
           },
@@ -1784,9 +1821,130 @@ export class OrdersService implements OnModuleInit {
       if (earliestOrder) {
         await this.repairPartnerDevelopmentCommission(
           String(earliestOrder._id),
-          String(shop._id),
+          shopId,
         );
       }
+    }
+  }
+  /**
+   * When Partner Development already exists on a first-order split, Shop
+   * Introduction must be 5% — not 10%. Fixes inflated 15% totals after a
+   * partial repair that added PD without shrinking SI.
+   */
+  private async normalizeFirstOrderSplitOnOrder(order: any): Promise<boolean> {
+    if (!order?.commissions?.length) return false;
+
+    const hasPartnerDevelopment = order.commissions.some(
+      (entry: { earningType?: string }) =>
+        entry.earningType === 'Partner Development',
+    );
+    if (!hasPartnerDevelopment) return false;
+
+    const monetary = resolveCommissionOrderAmounts(order);
+    const fivePercent = roundMoney(monetary.convertedUsdAmount * 0.05);
+    const tenPercent = roundMoney(monetary.convertedUsdAmount * 0.1);
+    if (!(fivePercent > 0)) return false;
+
+    let changed = false;
+    for (const entry of order.commissions) {
+      if (entry.earningType === 'Partner Development') continue;
+
+      const pct = Number(entry.percentage);
+      const amt = Number(entry.amount) || 0;
+      const isShopIntro =
+        entry.earningType === 'Shop Introduction' ||
+        (!entry.earningType &&
+          entry.recipientRole === UserRole.MASTER_PARTNER &&
+          (pct === 10 || Math.abs(amt - tenPercent) < 0.05));
+
+      if (!isShopIntro) continue;
+      if (pct === 5 && Math.abs(amt - fivePercent) < 0.02) continue;
+
+      // PD present ⇒ FO Shop Intro must be 5% (never remain 10%).
+      entry.earningType = 'Shop Introduction';
+      entry.percentage = 5;
+      entry.amount = fivePercent;
+      changed = true;
+    }
+
+    if (!changed) return false;
+
+    // Nested subdocument mutations need markModified or Mongoose may skip save.
+    order.markModified('commissions');
+    await order.save();
+
+    // Atomic fallback — ensure DB reflects 5% SI even if document save is flaky.
+    await this.orderModel.updateOne(
+      {
+        _id: order._id,
+        commissions: {
+          $elemMatch: {
+            earningType: 'Partner Development',
+          },
+        },
+      },
+      {
+        $set: {
+          'commissions.$[si].earningType': 'Shop Introduction',
+          'commissions.$[si].percentage': 5,
+          'commissions.$[si].amount': fivePercent,
+        },
+      },
+      {
+        arrayFilters: [
+          {
+            $or: [
+              {
+                'si.earningType': 'Shop Introduction',
+                'si.percentage': { $in: [10, '10'] },
+              },
+              {
+                'si.earningType': 'Shop Introduction',
+                'si.amount': { $gt: fivePercent + 0.01 },
+              },
+              {
+                'si.earningType': { $exists: false },
+                'si.recipientRole': UserRole.MASTER_PARTNER,
+                'si.percentage': { $in: [10, '10'] },
+              },
+            ],
+          },
+        ],
+      },
+    );
+
+    console.log(
+      `[Commission] Normalized FO split on ${order.orderNumber || order._id}: Shop Intro → 5% ($${fivePercent})`,
+    );
+    return true;
+  }
+
+  private shrinkShopIntroToFivePercent(order: any, monetary: {
+    convertedUsdAmount: number;
+  }): void {
+    const fivePercent = roundMoney(monetary.convertedUsdAmount * 0.05);
+    const tenPercent = roundMoney(monetary.convertedUsdAmount * 0.1);
+
+    for (const entry of order.commissions || []) {
+      if (entry.earningType === 'Partner Development') continue;
+
+      const pct = Number(entry.percentage);
+      const amt = Number(entry.amount) || 0;
+      const isShopIntro =
+        entry.earningType === 'Shop Introduction' ||
+        (!entry.earningType &&
+          (pct === 10 || Math.abs(amt - tenPercent) < 0.05));
+
+      if (!isShopIntro) continue;
+      if (pct === 5 && Math.abs(amt - fivePercent) < 0.02) continue;
+
+      entry.earningType = 'Shop Introduction';
+      entry.percentage = 5;
+      entry.amount = fivePercent;
+    }
+
+    if (typeof order.markModified === 'function') {
+      order.markModified('commissions');
     }
   }
 
@@ -1797,16 +1955,23 @@ export class OrdersService implements OnModuleInit {
     const shopUser = await this.usersService.findOne(shopUserId);
     if (!shopUser || shopUser.role !== UserRole.CERTIFIED_SHOP) return;
 
-    // Guard: never pay Partner Development twice for the same shop.
-    if (shopUser.partnerDevelopmentCommissionPaid === true) return;
-
     const order = await this.orderModel.findById(orderId);
     if (!order?.commissions?.length) return;
 
     const hasPartnerDevelopment = order.commissions.some(
       (entry) => entry.earningType === 'Partner Development',
     );
-    if (hasPartnerDevelopment) return;
+
+    // Already split — still fix SI if it remained at 10% (inflated 15% bug).
+    if (hasPartnerDevelopment) {
+      await this.normalizeFirstOrderSplitOnOrder(order);
+      return;
+    }
+
+    // Guard: never pay Partner Development twice for the same shop.
+    if (shopUser.partnerDevelopmentCommissionPaid === true) {
+      return;
+    }
 
     const updatedShop =
       await this.usersService.ensureShopPartnerDevelopmentAssignment(shopUser);
@@ -1821,14 +1986,8 @@ export class OrdersService implements OnModuleInit {
 
     const monetary = resolveCommissionOrderAmounts(order);
     const commissionStatus = order.commissions[0]?.status || 'pending';
-    const shopIntroEntry = order.commissions.find(
-      (entry) => entry.earningType === 'Shop Introduction',
-    );
 
-    if (shopIntroEntry && shopIntroEntry.percentage === 10) {
-      shopIntroEntry.percentage = 5;
-      shopIntroEntry.amount = roundMoney(monetary.convertedUsdAmount * 0.05);
-    }
+    this.shrinkShopIntroToFivePercent(order, monetary);
 
     order.commissions.push({
       recipientUserId: partnerDevUser._id.toString(),
@@ -1845,8 +2004,42 @@ export class OrdersService implements OnModuleInit {
       convertedUsdAmount: monetary.convertedUsdAmount,
     });
 
+    order.markModified('commissions');
     await order.save();
     await this.usersService.markPartnerDevelopmentCommissionPaid(shopUserId);
+  }
+
+  /**
+   * Scan commission orders for this Rep and shrink any FO Shop Intro still at
+   * 10% when Partner Development is already present on the same order.
+   */
+  private async repairInflatedShopIntroSplitsForRep(
+    repCode: string,
+  ): Promise<void> {
+    const code = repCode?.trim();
+    if (!code) return;
+
+    // Any order involving this Rep that already has a PD line (including
+    // sibling PD when this Rep is Shop Intro) — normalize SI to 5%.
+    const orders = await this.orderModel
+      .find({
+        $and: [
+          registrationOrderExclusionFilter(),
+          {
+            commissions: {
+              $elemMatch: { earningType: 'Partner Development' },
+            },
+          },
+          {
+            'commissions.recipientPartnerCode': code,
+          },
+        ],
+      } as any)
+      .exec();
+
+    for (const order of orders) {
+      await this.normalizeFirstOrderSplitOnOrder(order);
+    }
   }
 
   async updateStatus(

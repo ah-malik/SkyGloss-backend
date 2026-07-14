@@ -81,6 +81,62 @@ export function filterCommissionsForViewer<T extends CommissionLike>(
   );
 }
 
+/**
+ * Includes related Representative first-order split lines when the viewer is
+ * already a commission recipient on the same order (e.g. Shop Intro + Partner Dev).
+ */
+export function filterCommissionsForViewerWithSplitContext<T extends CommissionLike & {
+  amount?: number;
+  earningType?: string;
+}>(
+  commissions: T[] | undefined,
+  viewerRole?: string,
+  viewerPartnerCode?: string,
+): T[] {
+  if (!commissions?.length) return [];
+
+  const base = filterCommissionsForViewer(
+    commissions,
+    viewerRole,
+    viewerPartnerCode,
+  );
+
+  const normalizedViewerCode = viewerPartnerCode?.trim();
+  if (viewerRole !== UserRole.MASTER_PARTNER || !normalizedViewerCode) {
+    return base;
+  }
+
+  const viewerIsRecipient = commissions.some(
+    (entry) => entry.recipientPartnerCode?.trim() === normalizedViewerCode,
+  );
+  if (!viewerIsRecipient) return base;
+
+  const relatedRepLines = commissions.filter((entry) => {
+    const code = entry.recipientPartnerCode?.trim();
+    if (!code || code === normalizedViewerCode) return false;
+    return entry.recipientRole === UserRole.MASTER_PARTNER;
+  });
+
+  if (relatedRepLines.length === 0) return base;
+
+  const seen = new Set(
+    base.map(
+      (entry) =>
+        `${entry.recipientPartnerCode?.trim() || ''}:${entry.recipientRole || ''}:${(entry as any).amount ?? ''}:${(entry as any).earningType || ''}`,
+    ),
+  );
+
+  const merged = [...base];
+  relatedRepLines.forEach((entry) => {
+    const key = `${entry.recipientPartnerCode?.trim() || ''}:${entry.recipientRole || ''}:${(entry as any).amount ?? ''}:${(entry as any).earningType || ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(entry);
+  });
+
+  return merged;
+}
+
 /** Roles that must be linked to a parent network user via referredByPartnerCode. */
 export const HIERARCHY_PARENT_ROLES: Partial<Record<UserRole, UserRole[]>> = {
   [UserRole.DISTRIBUTOR]: [UserRole.PARTNER],
