@@ -117,8 +117,30 @@ export class UsersController {
     @Body('ownerId') ownerId: string,
     @Body('role') role: 'master_partner' | 'regional_partner',
     @Body('query') query: string,
+    @Body('firstOrderPartnerDevelopmentRate')
+    firstOrderPartnerDevelopmentRate?: number,
   ) {
-    return this.usersService.adminLinkNetworkMember(ownerId, role, query);
+    return this.usersService.adminLinkNetworkMember(
+      ownerId,
+      role,
+      query,
+      firstOrderPartnerDevelopmentRate,
+    );
+  }
+
+  @Patch('admin/network/linked-representative-rate')
+  @Roles(UserRole.ADMIN)
+  updateLinkedRepresentativeRate(
+    @Body('ownerId') ownerId: string,
+    @Body('partnerCode') partnerCode: string,
+    @Body('firstOrderPartnerDevelopmentRate')
+    firstOrderPartnerDevelopmentRate: number,
+  ) {
+    return this.usersService.adminUpdateLinkedRepresentativeRate(
+      ownerId,
+      partnerCode,
+      firstOrderPartnerDevelopmentRate,
+    );
   }
 
   @Post('admin/network/remove-member')

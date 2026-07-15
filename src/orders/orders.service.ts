@@ -42,7 +42,10 @@ import { PdfService } from '../pdf/pdf.service';
 import {
   calculateRepresentativeCommissionEntries,
   CommissionRecipient,
+  normalizePartnerDevelopmentRatePercent,
   resolveCommissionOrderAmounts,
+  resolveCommissionRatePercent,
+  TOTAL_FIRST_ORDER_COMMISSION_RATE,
 } from '../common/commission-distribution';
 import { ExchangeRatesService } from '../exchange-rates/exchange-rates.service';
 import {
@@ -541,6 +544,14 @@ export class OrdersService implements OnModuleInit {
           `Failed to create order: ${saveError.message}`,
         );
       }
+    }
+
+    // Non-USA checkout starts as PENDING — show commission as pending immediately.
+    if (order?.status === OrderStatus.PENDING) {
+      await this.applyOrderCommissions(
+        order._id.toString(),
+        OrderStatus.PENDING,
+      );
     }
 
     try {
@@ -1459,6 +1470,30 @@ export class OrdersService implements OnModuleInit {
       return [];
     }
 
+    // Backfill pending commissions on PENDING shop orders so the orders table
+    // can show "Pending" amounts (cards still exclude these from totals).
+    const pendingMissing = await this.orderModel
+      .find({
+        user: { $in: userIds },
+        status: OrderStatus.PENDING,
+        ...registrationOrderExclusionFilter(),
+        $or: [
+          { commissions: { $exists: false } },
+          { commissions: { $size: 0 } },
+          { commissions: null },
+        ],
+      } as any)
+      .select('_id')
+      .limit(50)
+      .lean();
+
+    for (const row of pendingMissing) {
+      await this.applyOrderCommissions(
+        String(row._id),
+        OrderStatus.PENDING,
+      );
+    }
+
     const orders = await this.orderModel
       .find({ user: { $in: userIds } } as any)
       .populate(
@@ -1562,7 +1597,8 @@ export class OrdersService implements OnModuleInit {
     };
   }
 
-  /** True when `orderId` is the shop's earliest successful (non-registration) order. */
+  /** True when `orderId` is the shop's earliest commissionable order
+   *  (PENDING / PAID / SHIPPED / DELIVERED — so FO rates apply while still pending). */
   private async isFirstSuccessfulShopOrder(
     shopUserId: string,
     orderId: string,
@@ -1571,7 +1607,12 @@ export class OrdersService implements OnModuleInit {
       .find({
         user: shopUserId,
         status: {
-          $in: [OrderStatus.PAID, OrderStatus.SHIPPED, OrderStatus.DELIVERED],
+          $in: [
+            OrderStatus.PENDING,
+            OrderStatus.PAID,
+            OrderStatus.SHIPPED,
+            OrderStatus.DELIVERED,
+          ],
         },
         ...registrationOrderExclusionFilter(),
       } as any)
@@ -1587,7 +1628,12 @@ export class OrdersService implements OnModuleInit {
     orderId: string,
     newStatus: OrderStatus,
   ): Promise<void> {
-    if (newStatus !== OrderStatus.PAID && newStatus !== OrderStatus.SHIPPED) {
+    if (
+      newStatus !== OrderStatus.PENDING &&
+      newStatus !== OrderStatus.PAID &&
+      newStatus !== OrderStatus.SHIPPED &&
+      newStatus !== OrderStatus.DELIVERED
+    ) {
       return;
     }
 
@@ -1606,6 +1652,12 @@ export class OrdersService implements OnModuleInit {
     if (!shopUser || shopUser.role !== UserRole.CERTIFIED_SHOP) return;
 
     if (!shopUser.shopIntroductionRepresentativeCode) {
+      shopUser = await this.usersService.assignShopEarningRepresentatives(shopUser);
+    } else if (
+      shopUser.partnerDevelopmentEligible !== true ||
+      !shopUser.partnerDevelopmentRepresentativeCode
+    ) {
+      // Re-evaluate FO eligibility (fixes shops blocked by the old default=false bug).
       shopUser = await this.usersService.assignShopEarningRepresentatives(shopUser);
     }
     shopUser = await this.usersService.ensureShopPartnerDevelopmentAssignment(
@@ -1633,6 +1685,7 @@ export class OrdersService implements OnModuleInit {
       if (
         isFirstSuccessfulOrder &&
         !hasPartnerDevelopment &&
+        shopUser.partnerDevelopmentEligible === true &&
         shopUser.partnerDevelopmentRepresentativeCode &&
         !partnerDevelopmentAlreadyPaid
       ) {
@@ -1642,20 +1695,32 @@ export class OrdersService implements OnModuleInit {
         );
         if (partnerDevUser) {
           const commissionStatus =
-            newStatus === OrderStatus.SHIPPED
+            newStatus === OrderStatus.SHIPPED ||
+            newStatus === OrderStatus.DELIVERED
               ? ('earned' as const)
-              : (order.commissions[0]?.status || 'pending');
+              : ('pending' as const);
 
-          // Always shrink FO Shop Intro to 5% when adding Partner Development.
-          this.shrinkShopIntroToFivePercent(order, monetary);
+          const pdPercent = normalizePartnerDevelopmentRatePercent(
+            shopUser.partnerDevelopmentRatePercent ?? 5,
+          );
+          const shopIntroPercent =
+            TOTAL_FIRST_ORDER_COMMISSION_RATE * 100 - pdPercent;
+
+          this.shrinkShopIntroToPercent(order, monetary, shopIntroPercent);
+
+          // Keep existing lines pending until shipped.
+          order.commissions = order.commissions.map((entry) => ({
+            ...entry,
+            status: commissionStatus,
+          }));
 
           order.commissions.push({
             recipientUserId: partnerDevUser._id.toString(),
             recipientPartnerCode: partnerDevUser.partnerCode!,
             recipientRole: partnerDevUser.role,
             earningType: 'Partner Development',
-            percentage: 5,
-            amount: roundMoney(monetary.convertedUsdAmount * 0.05),
+            percentage: pdPercent,
+            amount: roundMoney(monetary.convertedUsdAmount * (pdPercent / 100)),
             status: commissionStatus,
             shopId: shopUserId,
             orderAmount: monetary.orderAmount,
@@ -1666,27 +1731,48 @@ export class OrdersService implements OnModuleInit {
 
           order.markModified('commissions');
           await order.save();
-          await this.usersService.markPartnerDevelopmentCommissionPaid(
-            shopUserId,
-          );
+          if (
+            newStatus === OrderStatus.PAID ||
+            newStatus === OrderStatus.SHIPPED ||
+            newStatus === OrderStatus.DELIVERED
+          ) {
+            await this.usersService.markPartnerDevelopmentCommissionPaid(
+              shopUserId,
+            );
+          }
         }
       } else if (
         isFirstSuccessfulOrder &&
         hasPartnerDevelopment
       ) {
         await this.normalizeFirstOrderSplitOnOrder(order);
-        if (newStatus === OrderStatus.SHIPPED) {
-          order.commissions = order.commissions.map((entry) => ({
-            ...entry,
-            status: 'earned' as const,
-          }));
-          await order.save();
-        }
-      } else if (newStatus === OrderStatus.SHIPPED) {
+        const commissionStatus =
+          newStatus === OrderStatus.SHIPPED ||
+          newStatus === OrderStatus.DELIVERED
+            ? ('earned' as const)
+            : ('pending' as const);
         order.commissions = order.commissions.map((entry) => ({
           ...entry,
-          status: 'earned' as const,
+          status: commissionStatus,
         }));
+        order.markModified('commissions');
+        await order.save();
+      } else if (
+        newStatus === OrderStatus.SHIPPED ||
+        newStatus === OrderStatus.DELIVERED ||
+        newStatus === OrderStatus.PAID ||
+        newStatus === OrderStatus.PENDING
+      ) {
+        const commissionStatus =
+          newStatus === OrderStatus.SHIPPED ||
+          newStatus === OrderStatus.DELIVERED
+            ? ('earned' as const)
+            : ('pending' as const);
+        order.commissions = order.commissions.map((entry) => ({
+          ...entry,
+          status: commissionStatus,
+        }));
+        order.markModified('commissions');
         await order.save();
       }
       return;
@@ -1697,8 +1783,21 @@ export class OrdersService implements OnModuleInit {
     const shopIntroduction = await this.resolveCommissionRecipient(
       shopUser.shopIntroductionRepresentativeCode,
     );
-    const partnerDevelopment = await this.resolveCommissionRecipient(
-      shopUser.partnerDevelopmentRepresentativeCode,
+    const partnerDevelopment =
+      shopUser.partnerDevelopmentEligible === true
+        ? await this.resolveCommissionRecipient(
+            shopUser.partnerDevelopmentRepresentativeCode,
+          )
+        : null;
+
+    const shopIntroUser = shopUser.shopIntroductionRepresentativeCode
+      ? await this.usersService.findByPartnerCode(
+          shopUser.shopIntroductionRepresentativeCode,
+        )
+      : null;
+    const defaultShopIntroductionRatePercent = resolveCommissionRatePercent(
+      shopIntroUser?.role || UserRole.MASTER_PARTNER,
+      shopIntroUser?.customCommissionRate,
     );
 
     const entries = calculateRepresentativeCommissionEntries({
@@ -1709,6 +1808,8 @@ export class OrdersService implements OnModuleInit {
         partnerDevelopmentRepresentativeCode:
           shopUser.partnerDevelopmentRepresentativeCode,
         partnerDevelopmentCommissionPaid: partnerDevelopmentAlreadyPaid,
+        partnerDevelopmentEligible: shopUser.partnerDevelopmentEligible === true,
+        partnerDevelopmentRatePercent: shopUser.partnerDevelopmentRatePercent,
       },
       recipients: {
         shopIntroduction,
@@ -1716,10 +1817,14 @@ export class OrdersService implements OnModuleInit {
       },
       monetary,
       isFirstSuccessfulOrder,
+      defaultShopIntroductionRatePercent,
     });
 
     const commissionStatus =
-      newStatus === OrderStatus.SHIPPED ? ('earned' as const) : ('pending' as const);
+      newStatus === OrderStatus.SHIPPED ||
+      newStatus === OrderStatus.DELIVERED
+        ? ('earned' as const)
+        : ('pending' as const);
 
     order.commissions = entries.map((entry) => ({
       ...entry,
@@ -1730,7 +1835,13 @@ export class OrdersService implements OnModuleInit {
     const paidPartnerDevelopment = entries.some(
       (entry) => entry.earningType === 'Partner Development',
     );
-    if (paidPartnerDevelopment) {
+    // Only lock PD after real payment / fulfillment — not while still PENDING.
+    if (
+      paidPartnerDevelopment &&
+      (newStatus === OrderStatus.PAID ||
+        newStatus === OrderStatus.SHIPPED ||
+        newStatus === OrderStatus.DELIVERED)
+    ) {
       await this.usersService.markPartnerDevelopmentCommissionPaid(
         shopUserId,
       );
@@ -1806,6 +1917,12 @@ export class OrdersService implements OnModuleInit {
     }
 
     for (const shopId of shopIds) {
+      const shop = await this.usersService.findOne(shopId);
+      // Pre-Add-to-Network shops are not FO Partner Development eligible.
+      if (!shop || shop.partnerDevelopmentEligible !== true) {
+        continue;
+      }
+
       const earliestOrder = await this.orderModel
         .findOne({
           user: shopId,
@@ -1922,7 +2039,18 @@ export class OrdersService implements OnModuleInit {
   private shrinkShopIntroToFivePercent(order: any, monetary: {
     convertedUsdAmount: number;
   }): void {
-    const fivePercent = roundMoney(monetary.convertedUsdAmount * 0.05);
+    this.shrinkShopIntroToPercent(order, monetary, 5);
+  }
+
+  private shrinkShopIntroToPercent(
+    order: any,
+    monetary: { convertedUsdAmount: number },
+    shopIntroPercent: number,
+  ): void {
+    const introPercent = Math.max(0, Math.min(10, Number(shopIntroPercent) || 5));
+    const introAmount = roundMoney(
+      monetary.convertedUsdAmount * (introPercent / 100),
+    );
     const tenPercent = roundMoney(monetary.convertedUsdAmount * 0.1);
 
     for (const entry of order.commissions || []) {
@@ -1936,11 +2064,16 @@ export class OrdersService implements OnModuleInit {
           (pct === 10 || Math.abs(amt - tenPercent) < 0.05));
 
       if (!isShopIntro) continue;
-      if (pct === 5 && Math.abs(amt - fivePercent) < 0.02) continue;
+      if (
+        pct === introPercent &&
+        Math.abs(amt - introAmount) < 0.02
+      ) {
+        continue;
+      }
 
       entry.earningType = 'Shop Introduction';
-      entry.percentage = 5;
-      entry.amount = fivePercent;
+      entry.percentage = introPercent;
+      entry.amount = introAmount;
     }
 
     if (typeof order.markModified === 'function') {
@@ -1954,6 +2087,11 @@ export class OrdersService implements OnModuleInit {
   ): Promise<void> {
     const shopUser = await this.usersService.findOne(shopUserId);
     if (!shopUser || shopUser.role !== UserRole.CERTIFIED_SHOP) return;
+
+    // Only shops created after Add-to-Network get FO Partner Development.
+    if (shopUser.partnerDevelopmentEligible !== true) {
+      return;
+    }
 
     const order = await this.orderModel.findById(orderId);
     if (!order?.commissions?.length) return;
@@ -1975,7 +2113,10 @@ export class OrdersService implements OnModuleInit {
 
     const updatedShop =
       await this.usersService.ensureShopPartnerDevelopmentAssignment(shopUser);
-    if (!updatedShop.partnerDevelopmentRepresentativeCode) {
+    if (
+      updatedShop.partnerDevelopmentEligible !== true ||
+      !updatedShop.partnerDevelopmentRepresentativeCode
+    ) {
       return;
     }
 
@@ -1986,16 +2127,21 @@ export class OrdersService implements OnModuleInit {
 
     const monetary = resolveCommissionOrderAmounts(order);
     const commissionStatus = order.commissions[0]?.status || 'pending';
+    const pdPercent = normalizePartnerDevelopmentRatePercent(
+      updatedShop.partnerDevelopmentRatePercent ?? 5,
+    );
+    const shopIntroPercent =
+      TOTAL_FIRST_ORDER_COMMISSION_RATE * 100 - pdPercent;
 
-    this.shrinkShopIntroToFivePercent(order, monetary);
+    this.shrinkShopIntroToPercent(order, monetary, shopIntroPercent);
 
     order.commissions.push({
       recipientUserId: partnerDevUser._id.toString(),
       recipientPartnerCode: partnerDevUser.partnerCode!,
       recipientRole: partnerDevUser.role,
       earningType: 'Partner Development',
-      percentage: 5,
-      amount: roundMoney(monetary.convertedUsdAmount * 0.05),
+      percentage: pdPercent,
+      amount: roundMoney(monetary.convertedUsdAmount * (pdPercent / 100)),
       status: commissionStatus,
       shopId: shopUserId,
       orderAmount: monetary.orderAmount,
@@ -2143,8 +2289,10 @@ export class OrdersService implements OnModuleInit {
     }
 
     if (
+      status === OrderStatus.PENDING ||
       status === OrderStatus.PAID ||
-      status === OrderStatus.SHIPPED
+      status === OrderStatus.SHIPPED ||
+      status === OrderStatus.DELIVERED
     ) {
       await this.applyOrderCommissions(updatedOrder._id.toString(), status);
     }
@@ -2226,6 +2374,13 @@ export class OrdersService implements OnModuleInit {
           }
           throw saveError;
         }
+      }
+
+      if (savedOrder) {
+        await this.applyOrderCommissions(
+          savedOrder._id.toString(),
+          OrderStatus.PENDING,
+        );
       }
 
       // Create notification for admin

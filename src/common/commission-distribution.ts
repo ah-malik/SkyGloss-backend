@@ -19,9 +19,9 @@ export const PARTNER_DEVELOPMENT_FIRST_ORDER_RATE = 0.05;
 export const SHOP_INTRODUCTION_SUBSEQUENT_RATE = 0.1;
 export const TOTAL_FIRST_ORDER_COMMISSION_RATE = 0.1;
 
-/** @deprecated Legacy role defaults — representative commissions use earning-type rates only. */
+/** Default Rep Shop Introduction % when Add-to-Network FO split does not apply. */
 export const DEFAULT_COMMISSION_RATES_PERCENT = {
-  master_partner: 10,
+  master_partner: 20,
   regional_partner: 0,
   sub_promoter: 0,
 } as const;
@@ -39,12 +39,27 @@ export function getDefaultCommissionRatePercent(role?: string): number {
   return 0;
 }
 
-/** @deprecated Custom rates are not used for representative earning-type commissions. */
+/** Resolve Rep commission % (admin custom override, else role default 20%). */
+export function resolveCommissionRatePercent(
+  role: string,
+  customCommissionRate?: number | null,
+): number {
+  if (
+    customCommissionRate != null &&
+    customCommissionRate !== ('' as unknown) &&
+    !Number.isNaN(Number(customCommissionRate))
+  ) {
+    const n = Number(customCommissionRate);
+    if (n >= 0 && n <= 100) return Math.round(n * 100) / 100;
+  }
+  return getDefaultCommissionRatePercent(role);
+}
+
 export function resolveCommissionRateDecimal(
   role: string,
-  _customCommissionRate?: number | null,
+  customCommissionRate?: number | null,
 ): number {
-  return getDefaultCommissionRatePercent(role) / 100;
+  return resolveCommissionRatePercent(role, customCommissionRate) / 100;
 }
 
 export interface CommissionRecipient {
@@ -83,6 +98,24 @@ export interface ShopEarningAssignments {
   operationalSupportRepresentativeId?: string;
   operationalSupportRepresentativeCode?: string;
   partnerDevelopmentCommissionPaid?: boolean;
+  /** Only shops created after Add-to-Network get FO Partner Development. */
+  partnerDevelopmentEligible?: boolean;
+  /** Frozen PD % for this shop (e.g. 5). Defaults to 5 when eligible. */
+  partnerDevelopmentRatePercent?: number;
+}
+
+/** Clamp admin FO Partner Development % to a safe 0–10 range (default 5). */
+export function normalizePartnerDevelopmentRatePercent(
+  value?: number | null,
+): number {
+  const fallback = PARTNER_DEVELOPMENT_FIRST_ORDER_RATE * 100;
+  if (value == null || Number.isNaN(Number(value))) return fallback;
+  const n = Number(value);
+  if (n < 0) return 0;
+  if (n > TOTAL_FIRST_ORDER_COMMISSION_RATE * 100) {
+    return TOTAL_FIRST_ORDER_COMMISSION_RATE * 100;
+  }
+  return Math.round(n * 100) / 100;
 }
 
 export interface CommissionOrderAmounts {
@@ -401,18 +434,17 @@ function buildCommissionEntry(
 /**
  * Representative-only commission by earning type.
  *
- * When Rep1 links Rep2, every shop under Rep2 pays on that shop's FIRST
- * successful order:
- *   - 5% Shop Introduction → Rep2
- *   - 5% Partner Development → Rep1
- * Total = 10% (never 15%).
+ * Default (Rep NOT Add-to-Network linked, or shop existed before the link):
+ *   - Full Shop Introduction at admin/default rate (20%, or custom on the Rep)
+ *   - No Partner Development / First Order split
  *
- * All subsequent orders for that shop:
- *   - 10% Shop Introduction → Rep2 only
- *   - Partner Development = $0
+ * When Rep2 is linked under Rep1 via Add to Network, only shops that join
+ * Rep2 AFTER that link are FO-eligible. On an eligible shop's FIRST order:
+ *   - (10 − PD%) Shop Introduction → Rep2
+ *   - PD% Partner Development → Rep1  (per-link admin %, default 5)
+ * Total FO = 10%. Subsequent orders on eligible shops: 10% Shop Introduction.
  *
- * Partner Development is tracked per shop via partnerDevelopmentCommissionPaid,
- * so Rep1 earns 5% again on each additional shop's first order.
+ * Partner Development is tracked per shop via partnerDevelopmentCommissionPaid.
  */
 export function calculateRepresentativeCommissionEntries(params: {
   shopId: string;
@@ -423,6 +455,8 @@ export function calculateRepresentativeCommissionEntries(params: {
   };
   monetary: CommissionOrderAmounts;
   isFirstSuccessfulOrder: boolean;
+  /** Admin/default Shop Intro % when FO network split does not apply. */
+  defaultShopIntroductionRatePercent?: number;
 }): CommissionEntry[] {
   const { shopId, assignments, recipients, monetary, isFirstSuccessfulOrder } =
     params;
@@ -441,6 +475,30 @@ export function calculateRepresentativeCommissionEntries(params: {
   };
 
   const entries: CommissionEntry[] = [];
+  const useNetworkFirstOrderSplit =
+    assignments.partnerDevelopmentEligible === true;
+  const defaultSiPercent =
+    params.defaultShopIntroductionRatePercent != null &&
+    !Number.isNaN(Number(params.defaultShopIntroductionRatePercent))
+      ? Math.max(
+          0,
+          Math.min(100, Number(params.defaultShopIntroductionRatePercent)),
+        )
+      : DEFAULT_COMMISSION_RATES_PERCENT.master_partner;
+
+  // Unlinked Rep / pre-link shops: always default Shop Introduction (e.g. 20%).
+  if (!useNetworkFirstOrderSplit) {
+    entries.push(
+      buildCommissionEntry(
+        shopIntro,
+        'Shop Introduction',
+        defaultSiPercent,
+        usdBase * (defaultSiPercent / 100),
+        context,
+      ),
+    );
+    return entries;
+  }
 
   if (isFirstSuccessfulOrder) {
     const partnerDev = recipients.partnerDevelopment;
@@ -450,23 +508,32 @@ export function calculateRepresentativeCommissionEntries(params: {
       partnerDev._id !== shopIntro._id;
 
     if (canPayPartnerDev) {
+      const pdPercent = normalizePartnerDevelopmentRatePercent(
+        assignments.partnerDevelopmentRatePercent,
+      );
+      const pdRate = pdPercent / 100;
+      const shopIntroPercent =
+        TOTAL_FIRST_ORDER_COMMISSION_RATE * 100 - pdPercent;
+      const shopIntroRate = shopIntroPercent / 100;
+
       entries.push(
         buildCommissionEntry(
           shopIntro,
           'Shop Introduction',
-          SHOP_INTRODUCTION_FIRST_ORDER_RATE * 100,
-          usdBase * SHOP_INTRODUCTION_FIRST_ORDER_RATE,
+          shopIntroPercent,
+          usdBase * shopIntroRate,
           context,
         ),
         buildCommissionEntry(
           partnerDev,
           'Partner Development',
-          PARTNER_DEVELOPMENT_FIRST_ORDER_RATE * 100,
-          usdBase * PARTNER_DEVELOPMENT_FIRST_ORDER_RATE,
+          pdPercent,
+          usdBase * pdRate,
           context,
         ),
       );
     } else {
+      // FO-eligible shop but PD not payable → FO total to Shop Introduction.
       entries.push(
         buildCommissionEntry(
           shopIntro,

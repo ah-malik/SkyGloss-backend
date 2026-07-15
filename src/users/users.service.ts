@@ -21,6 +21,7 @@ import {
 } from '../common/user-hierarchy';
 import {
   isCommissionEligibleRole,
+  normalizePartnerDevelopmentRatePercent,
   resolveShopCommissionChain,
   resolveShopEarningAssignments,
 } from '../common/commission-distribution';
@@ -285,6 +286,10 @@ export class UsersService implements OnModuleInit {
 
     const updatePayload: Record<string, unknown> = {};
 
+    const shopIntroCode =
+      shop.shopIntroductionRepresentativeCode ||
+      assignments.shopIntroductionRepresentativeCode;
+
     if (
       !shop.shopIntroductionRepresentativeCode &&
       assignments.shopIntroductionRepresentativeCode
@@ -295,14 +300,44 @@ export class UsersService implements OnModuleInit {
         assignments.shopIntroductionRepresentativeCode;
     }
 
-    if (
-      !shop.partnerDevelopmentRepresentativeCode &&
-      assignments.partnerDevelopmentRepresentativeCode
-    ) {
-      updatePayload.partnerDevelopmentRepresentativeId =
-        assignments.partnerDevelopmentRepresentativeId;
-      updatePayload.partnerDevelopmentRepresentativeCode =
-        assignments.partnerDevelopmentRepresentativeCode;
+    // Partner Development only for shops that joined AFTER Add-to-Network.
+    if (!shop.partnerDevelopmentRepresentativeCode) {
+      let pdCode = normalizePartnerCode(
+        assignments.partnerDevelopmentRepresentativeCode,
+      );
+      let pdId = assignments.partnerDevelopmentRepresentativeId;
+
+      // Fallback: if Rep2 has no PD parent field yet, resolve from operational link owner.
+      if (!pdCode && shopIntroCode) {
+        const operationalParent = await this.userModel
+          .findOne({
+            role: UserRole.MASTER_PARTNER,
+            operationalRepresentativeCodes: normalizePartnerCode(shopIntroCode),
+          })
+          .exec();
+        if (operationalParent?.partnerCode) {
+          pdCode = normalizePartnerCode(operationalParent.partnerCode);
+          pdId = operationalParent._id?.toString();
+        }
+      }
+
+      if (pdCode) {
+        const eligibility = await this.resolveShopPartnerDevelopmentEligibility(
+          shop,
+          shopIntroCode,
+          pdCode,
+        );
+
+        if (eligibility.eligible) {
+          updatePayload.partnerDevelopmentRepresentativeId = pdId;
+          updatePayload.partnerDevelopmentRepresentativeCode = pdCode;
+          updatePayload.partnerDevelopmentEligible = true;
+          updatePayload.partnerDevelopmentRatePercent = eligibility.ratePercent;
+        } else if (shop.partnerDevelopmentEligible !== false) {
+          // Freeze as ineligible so pre-link shops stay on default Shop Intro.
+          updatePayload.partnerDevelopmentEligible = false;
+        }
+      }
     }
 
     if (
@@ -324,6 +359,113 @@ export class UsersService implements OnModuleInit {
       .exec();
 
     return updated || shop;
+  }
+
+  /**
+   * First Order Partner Development applies only when the shop was created
+   * after Rep2 was Add-to-Network linked under Rep1. Pre-link shops keep
+   * full Shop Introduction on first order (no PD split).
+   */
+  async resolveShopPartnerDevelopmentEligibility(
+    shop: {
+      createdAt?: Date | string;
+      partnerDevelopmentEligible?: boolean;
+      partnerDevelopmentRatePercent?: number;
+    },
+    shopIntroductionCode?: string,
+    partnerDevelopmentCode?: string,
+  ): Promise<{ eligible: boolean; ratePercent: number }> {
+    const defaultRate = normalizePartnerDevelopmentRatePercent(5);
+
+    // Already confirmed eligible (frozen at shop assignment).
+    if (shop.partnerDevelopmentEligible === true) {
+      return {
+        eligible: true,
+        ratePercent: normalizePartnerDevelopmentRatePercent(
+          shop.partnerDevelopmentRatePercent ?? defaultRate,
+        ),
+      };
+    }
+
+    const introCode = normalizePartnerCode(shopIntroductionCode);
+    const pdCode = normalizePartnerCode(partnerDevelopmentCode);
+    if (!introCode || !pdCode || introCode === pdCode) {
+      return { eligible: false, ratePercent: defaultRate };
+    }
+
+    const parent = await this.findByPartnerCode(pdCode);
+    if (!parent || parent.role !== UserRole.MASTER_PARTNER) {
+      return { eligible: false, ratePercent: defaultRate };
+    }
+
+    await this.ensureOperationalRepresentativeLinksMigrated(parent);
+
+    const refreshedParent = await this.findOne(parent._id.toString());
+    const links = refreshedParent?.operationalRepresentativeLinks || [];
+    const link = links.find(
+      (entry) => normalizePartnerCode(entry.partnerCode) === introCode,
+    );
+
+    if (!link?.linkedAt) {
+      // No Add-to-Network link metadata for this child Rep → no FO PD split.
+      return { eligible: false, ratePercent: defaultRate };
+    }
+
+    const shopCreatedAt = shop.createdAt
+      ? new Date(shop.createdAt).getTime()
+      : Date.now();
+    const linkedAt = new Date(link.linkedAt).getTime();
+    // Brand-new shops created after Add-to-Network must qualify.
+    const eligible = shopCreatedAt >= linkedAt - 5000;
+    return {
+      eligible,
+      ratePercent: normalizePartnerDevelopmentRatePercent(
+        link.firstOrderPartnerDevelopmentRate ?? defaultRate,
+      ),
+    };
+  }
+
+  /** Migrate legacy string codes into structured links (linkedAt = now for unknown history). */
+  async ensureOperationalRepresentativeLinksMigrated(
+    owner: UserDocument,
+  ): Promise<UserDocument> {
+    if (owner.role !== UserRole.MASTER_PARTNER) return owner;
+
+    const codes = (owner.operationalRepresentativeCodes || [])
+      .map((code) => normalizePartnerCode(code))
+      .filter(Boolean) as string[];
+    const existingLinks = owner.operationalRepresentativeLinks || [];
+    const linkedCodes = new Set(
+      existingLinks
+        .map((link) => normalizePartnerCode(link.partnerCode))
+        .filter(Boolean),
+    );
+
+    const missing = codes.filter((code) => !linkedCodes.has(code));
+    if (missing.length === 0) return owner;
+
+    // Legacy links without a known linkedAt: stamp "now" so only shops
+    // created after this migration (and future links) get FO Partner Development.
+    const legacyLinkedAt = new Date();
+    const additions = missing.map((partnerCode) => ({
+      partnerCode,
+      linkedAt: legacyLinkedAt,
+      firstOrderPartnerDevelopmentRate: 5,
+    }));
+
+    const updated = await this.userModel
+      .findByIdAndUpdate(
+        owner._id,
+        {
+          $push: {
+            operationalRepresentativeLinks: { $each: additions },
+          },
+        },
+        { new: true },
+      )
+      .exec();
+
+    return updated || owner;
   }
 
   /** Lazily backfill a shop's Partner Development Representative if missing. */
@@ -364,30 +506,22 @@ export class UsersService implements OnModuleInit {
     return updated || rep;
   }
 
-  /** Backfill Partner Development / Shop Introduction assignments on shops under a linked Representative. */
+  /**
+   * Backfill Shop Introduction / Operational Support on shops under a linked
+   * Representative. Does NOT copy Partner Development onto pre-existing shops —
+   * FO PD is only assigned at shop create time after Add-to-Network.
+   */
   async backfillShopEarningAssignmentsForRepresentative(
     representative: UserDocument,
   ): Promise<void> {
     if (representative.role !== UserRole.MASTER_PARTNER) return;
 
     const network = await this.findNetworkUsersForViewer(representative);
-    const parentPdCode = normalizePartnerCode(
-      representative.partnerDevelopmentRepresentativeCode,
-    );
 
     for (const shop of network.shops) {
-      let fullShop = await this.findOne(shop._id.toString());
+      const fullShop = await this.findOne(shop._id.toString());
       if (!fullShop) continue;
-
-      fullShop = await this.assignShopEarningRepresentatives(fullShop);
-
-      // Ensure each shop under Rep2 inherits Rep1 as Partner Development parent
-      // so EVERY shop's first order pays 5% to Rep1 + 5% to Rep2.
-      if (parentPdCode && !fullShop.partnerDevelopmentRepresentativeCode) {
-        await this.userModel.findByIdAndUpdate(fullShop._id, {
-          partnerDevelopmentRepresentativeCode: parentPdCode,
-        });
-      }
+      await this.assignShopEarningRepresentatives(fullShop);
     }
   }
 
@@ -470,6 +604,7 @@ export class UsersService implements OnModuleInit {
       .find({
         role: UserRole.CERTIFIED_SHOP,
         partnerDevelopmentRepresentativeCode: code,
+        partnerDevelopmentEligible: true,
         partnerDevelopmentCommissionPaid: { $ne: true },
       })
       .exec();
@@ -1458,19 +1593,41 @@ export class UsersService implements OnModuleInit {
       throw new BadRequestException('Network owner not found.');
     }
 
-    const repCodes = (owner.operationalRepresentativeCodes || [])
+    const migrated = await this.ensureOperationalRepresentativeLinksMigrated(owner);
+
+    const repCodes = (migrated.operationalRepresentativeCodes || [])
       .map((code) => normalizePartnerCode(code))
       .filter(Boolean) as string[];
-    const promoterCodes = (owner.operationalPromoterCodes || [])
+    const promoterCodes = (migrated.operationalPromoterCodes || [])
       .map((code) => normalizePartnerCode(code))
       .filter(Boolean) as string[];
 
-    const linkedRepresentatives = repCodes.length
+    const linkByCode = new Map(
+      (migrated.operationalRepresentativeLinks || []).map((link) => [
+        normalizePartnerCode(link.partnerCode),
+        link,
+      ]),
+    );
+
+    const linkedRepresentativesRaw = repCodes.length
       ? await this.userModel
           .find({ partnerCode: { $in: repCodes }, role: UserRole.MASTER_PARTNER })
           .select('firstName lastName email partnerCode city country status role')
           .lean()
       : [];
+
+    const linkedRepresentatives = linkedRepresentativesRaw.map((rep) => {
+      const code = normalizePartnerCode(rep.partnerCode);
+      const link = code ? linkByCode.get(code) : undefined;
+      return {
+        ...rep,
+        linkedAt: link?.linkedAt || null,
+        firstOrderPartnerDevelopmentRate: normalizePartnerDevelopmentRatePercent(
+          link?.firstOrderPartnerDevelopmentRate ?? 5,
+        ),
+      };
+    });
+
     const linkedPromoters = promoterCodes.length
       ? await this.userModel
           .find({ partnerCode: { $in: promoterCodes }, role: UserRole.REGIONAL_PARTNER })
@@ -1480,12 +1637,12 @@ export class UsersService implements OnModuleInit {
 
     return {
       owner: {
-        _id: owner._id,
-        firstName: owner.firstName,
-        lastName: owner.lastName,
-        email: owner.email,
-        partnerCode: owner.partnerCode,
-        role: owner.role,
+        _id: migrated._id,
+        firstName: migrated.firstName,
+        lastName: migrated.lastName,
+        email: migrated.email,
+        partnerCode: migrated.partnerCode,
+        role: migrated.role,
       },
       linkedRepresentatives,
       linkedPromoters,
@@ -1519,11 +1676,90 @@ export class UsersService implements OnModuleInit {
     ownerId: string,
     role: 'master_partner' | 'regional_partner',
     query: string,
+    firstOrderPartnerDevelopmentRate?: number,
   ) {
     if (role === 'master_partner') {
-      return this.linkRepresentativeToOwner(ownerId, query);
+      return this.linkRepresentativeToOwner(
+        ownerId,
+        query,
+        undefined,
+        firstOrderPartnerDevelopmentRate,
+      );
     }
     return this.linkPromoterToOwner(ownerId, query);
+  }
+
+  async adminUpdateLinkedRepresentativeRate(
+    ownerId: string,
+    partnerCode: string,
+    firstOrderPartnerDevelopmentRate: number,
+  ) {
+    const owner = await this.userModel.findById(ownerId);
+    if (!owner) {
+      throw new BadRequestException('Network owner not found.');
+    }
+    if (owner.role !== UserRole.MASTER_PARTNER) {
+      throw new BadRequestException('Owner must be a Representative.');
+    }
+
+    const normalizedCode = normalizePartnerCode(partnerCode);
+    if (!normalizedCode) {
+      throw new BadRequestException('Partner ID is required.');
+    }
+
+    const rate = normalizePartnerDevelopmentRatePercent(
+      firstOrderPartnerDevelopmentRate,
+    );
+
+    await this.ensureOperationalRepresentativeLinksMigrated(owner);
+
+    const result = await this.userModel.updateOne(
+      {
+        _id: owner._id,
+        'operationalRepresentativeLinks.partnerCode': normalizedCode,
+      },
+      {
+        $set: {
+          'operationalRepresentativeLinks.$.firstOrderPartnerDevelopmentRate':
+            rate,
+        },
+      },
+    );
+
+    if (!result.matchedCount) {
+      // Case-insensitive / missing structured link — rebuild from codes then retry
+      const refreshed = await this.findOne(owner._id.toString());
+      if (!refreshed) {
+        throw new BadRequestException('Network owner not found.');
+      }
+      const codes = (refreshed.operationalRepresentativeCodes || []).map((c) =>
+        normalizePartnerCode(c),
+      );
+      if (!codes.includes(normalizedCode)) {
+        throw new BadRequestException(
+          'Representative is not linked in this network.',
+        );
+      }
+
+      await this.userModel.findByIdAndUpdate(owner._id, {
+        $pull: { operationalRepresentativeLinks: { partnerCode: normalizedCode } },
+      });
+      await this.userModel.findByIdAndUpdate(owner._id, {
+        $push: {
+          operationalRepresentativeLinks: {
+            partnerCode: normalizedCode,
+            linkedAt: new Date(),
+            firstOrderPartnerDevelopmentRate: rate,
+          },
+        },
+      });
+    }
+
+    return {
+      message: `First Order Commission set to ${rate}% for ${normalizedCode}.`,
+      partnerCode: normalizedCode,
+      firstOrderPartnerDevelopmentRate: rate,
+    };
   }
 
   async adminUnlinkNetworkMember(
@@ -1545,7 +1781,10 @@ export class UsersService implements OnModuleInit {
         throw new BadRequestException('Owner must be a Representative.');
       }
       await this.userModel.findByIdAndUpdate(owner._id, {
-        $pull: { operationalRepresentativeCodes: normalizedCode },
+        $pull: {
+          operationalRepresentativeCodes: normalizedCode,
+          operationalRepresentativeLinks: { partnerCode: normalizedCode },
+        },
       });
       return {
         message: `Representative ${normalizedCode} removed from ${owner.firstName} ${owner.lastName}'s linked network.`,
@@ -1567,6 +1806,7 @@ export class UsersService implements OnModuleInit {
     ownerId: string,
     query: string,
     actingViewer?: UserDocument,
+    firstOrderPartnerDevelopmentRate?: number,
   ) {
     const owner = await this.userModel.findById(ownerId);
     if (!owner) {
@@ -1621,26 +1861,44 @@ export class UsersService implements OnModuleInit {
 
     await this.assertRepresentativeNetworkLinkAllowed(target, owner);
 
+    const pdRate = normalizePartnerDevelopmentRatePercent(
+      firstOrderPartnerDevelopmentRate ?? 5,
+    );
+    const linkedAt = new Date();
+
+    await this.ensureOperationalRepresentativeLinksMigrated(owner);
+
     await this.userModel.findByIdAndUpdate(owner._id, {
       $addToSet: { operationalRepresentativeCodes: targetCode },
+      $push: {
+        operationalRepresentativeLinks: {
+          partnerCode: targetCode,
+          linkedAt,
+          firstOrderPartnerDevelopmentRate: pdRate,
+        },
+      },
     });
 
     // Rep1 becomes Rep2's Partner Development parent (immutable once set).
-    // Every shop under Rep2 then pays Rep1 5% + Rep2 5% on that shop's first order.
+    // Only shops created AFTER this link get FO Partner Development.
     if (!target.partnerDevelopmentRepresentativeCode) {
       await this.userModel.findByIdAndUpdate(target._id, {
         partnerDevelopmentRepresentativeCode: ownerCode,
       });
     }
 
+    // Backfill Shop Intro / Operational Support only — do NOT stamp PD on
+    // pre-existing shops under Rep2.
     const refreshedTarget = await this.userModel.findById(target._id);
     if (refreshedTarget) {
       await this.backfillShopEarningAssignmentsForRepresentative(refreshedTarget);
     }
 
     return {
-      message: `${target.firstName} ${target.lastName} linked to ${owner.firstName} ${owner.lastName}'s network. Each of their shops' first orders will split 5% Partner Development to the parent and 5% Shop Introduction to the linked Representative.`,
+      message: `${target.firstName} ${target.lastName} linked to ${owner.firstName} ${owner.lastName}'s network. Shops already under the linked Representative keep their current commission. New shops added after this link use First Order Commission (${pdRate}% Partner Development + ${10 - pdRate}% Shop Introduction on the first order).`,
       linkType: 'operational',
+      linkedAt,
+      firstOrderPartnerDevelopmentRate: pdRate,
       representative: targetPreview,
     };
   }

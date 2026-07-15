@@ -50,7 +50,11 @@ describe('calculateRepresentativeCommissionEntries', () => {
   it('first order: 5% Shop Introduction + 5% Partner Development (10% total, never 15%)', () => {
     const entries = calculateRepresentativeCommissionEntries({
       shopId: 'shop1',
-      assignments: { partnerDevelopmentCommissionPaid: false },
+      assignments: {
+        partnerDevelopmentCommissionPaid: false,
+        partnerDevelopmentEligible: true,
+        partnerDevelopmentRatePercent: 5,
+      },
       recipients: { shopIntroduction: rep2, partnerDevelopment: rep1 },
       monetary: monetary(100),
       isFirstSuccessfulOrder: true,
@@ -74,10 +78,76 @@ describe('calculateRepresentativeCommissionEntries', () => {
     expect(total).toBe(10);
   });
 
+  it('unlinked / pre-link shops: default 20% Shop Introduction (no FO split)', () => {
+    const entries = calculateRepresentativeCommissionEntries({
+      shopId: 'shop-old',
+      assignments: {
+        partnerDevelopmentCommissionPaid: false,
+        partnerDevelopmentEligible: false,
+      },
+      recipients: { shopIntroduction: rep2, partnerDevelopment: rep1 },
+      monetary: monetary(100),
+      isFirstSuccessfulOrder: true,
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      recipientPartnerCode: 'REP0002',
+      earningType: 'Shop Introduction',
+      percentage: 20,
+      amount: 20,
+    });
+  });
+
+  it('unlinked Rep respects admin custom default Shop Introduction rate', () => {
+    const entries = calculateRepresentativeCommissionEntries({
+      shopId: 'shop-custom',
+      assignments: { partnerDevelopmentEligible: false },
+      recipients: { shopIntroduction: rep2, partnerDevelopment: null },
+      monetary: monetary(100),
+      isFirstSuccessfulOrder: true,
+      defaultShopIntroductionRatePercent: 25,
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      percentage: 25,
+      amount: 25,
+    });
+  });
+
+  it('supports admin-configured First Order Partner Development rate', () => {
+    const entries = calculateRepresentativeCommissionEntries({
+      shopId: 'shop-new',
+      assignments: {
+        partnerDevelopmentCommissionPaid: false,
+        partnerDevelopmentEligible: true,
+        partnerDevelopmentRatePercent: 3,
+      },
+      recipients: { shopIntroduction: rep2, partnerDevelopment: rep1 },
+      monetary: monetary(100),
+      isFirstSuccessfulOrder: true,
+    });
+
+    expect(entries).toHaveLength(2);
+    expect(entries.find((e) => e.earningType === 'Partner Development')).toMatchObject({
+      percentage: 3,
+      amount: 3,
+    });
+    expect(entries.find((e) => e.earningType === 'Shop Introduction')).toMatchObject({
+      percentage: 7,
+      amount: 7,
+    });
+  });
+
   it('second shop first order still pays 5% Partner Development (per-shop, not once per child Rep)', () => {
     const entries = calculateRepresentativeCommissionEntries({
       shopId: 'shop2',
-      assignments: { partnerDevelopmentCommissionPaid: false },
+      assignments: {
+        partnerDevelopmentCommissionPaid: false,
+        partnerDevelopmentEligible: true,
+        partnerDevelopmentRatePercent: 5,
+      },
       recipients: { shopIntroduction: rep2, partnerDevelopment: rep1 },
       monetary: monetary(200),
       isFirstSuccessfulOrder: true,
@@ -103,7 +173,10 @@ describe('calculateRepresentativeCommissionEntries', () => {
   it('subsequent orders: 10% Shop Introduction only, Partner Development is $0', () => {
     const entries = calculateRepresentativeCommissionEntries({
       shopId: 'shop1',
-      assignments: { partnerDevelopmentCommissionPaid: true },
+      assignments: {
+        partnerDevelopmentCommissionPaid: true,
+        partnerDevelopmentEligible: true,
+      },
       recipients: { shopIntroduction: rep2, partnerDevelopment: rep1 },
       monetary: monetary(100),
       isFirstSuccessfulOrder: false,
@@ -118,10 +191,26 @@ describe('calculateRepresentativeCommissionEntries', () => {
     });
   });
 
+  it('unlinked subsequent orders still use default 20% Shop Introduction', () => {
+    const entries = calculateRepresentativeCommissionEntries({
+      shopId: 'shop1',
+      assignments: { partnerDevelopmentEligible: false },
+      recipients: { shopIntroduction: rep2, partnerDevelopment: null },
+      monetary: monetary(100),
+      isFirstSuccessfulOrder: false,
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      percentage: 20,
+      amount: 20,
+    });
+  });
+
   it('first order without a Partner Development rep: full 10% to Shop Introduction', () => {
     const entries = calculateRepresentativeCommissionEntries({
       shopId: 'shop1',
-      assignments: {},
+      assignments: { partnerDevelopmentEligible: true },
       recipients: { shopIntroduction: rep2, partnerDevelopment: null },
       monetary: monetary(100),
       isFirstSuccessfulOrder: true,
@@ -138,7 +227,10 @@ describe('calculateRepresentativeCommissionEntries', () => {
   it('first order when Partner Development already paid: full 10% to Shop Introduction', () => {
     const entries = calculateRepresentativeCommissionEntries({
       shopId: 'shop1',
-      assignments: { partnerDevelopmentCommissionPaid: true },
+      assignments: {
+        partnerDevelopmentCommissionPaid: true,
+        partnerDevelopmentEligible: true,
+      },
       recipients: { shopIntroduction: rep2, partnerDevelopment: rep1 },
       monetary: monetary(100),
       isFirstSuccessfulOrder: true,
@@ -155,7 +247,7 @@ describe('calculateRepresentativeCommissionEntries', () => {
   it('never pays Partner Development to the same Representative as Shop Introduction', () => {
     const entries = calculateRepresentativeCommissionEntries({
       shopId: 'shop1',
-      assignments: {},
+      assignments: { partnerDevelopmentEligible: true },
       recipients: { shopIntroduction: rep2, partnerDevelopment: rep2 },
       monetary: monetary(100),
       isFirstSuccessfulOrder: true,
@@ -180,7 +272,10 @@ describe('calculateRepresentativeCommissionEntries', () => {
   it('converts to USD using the locked FX rate', () => {
     const entries = calculateRepresentativeCommissionEntries({
       shopId: 'shop1',
-      assignments: {},
+      assignments: {
+        partnerDevelopmentEligible: true,
+        partnerDevelopmentRatePercent: 5,
+      },
       recipients: { shopIntroduction: rep2, partnerDevelopment: rep1 },
       monetary: {
         orderAmount: 100,
@@ -372,8 +467,8 @@ describe('calculateCommissionEntries (deprecated legacy wrapper)', () => {
     expect(entries[0]).toMatchObject({
       recipientPartnerCode: 'REP01',
       earningType: 'Shop Introduction',
-      percentage: 10,
-      amount: 10,
+      percentage: 20,
+      amount: 20,
     });
   });
 

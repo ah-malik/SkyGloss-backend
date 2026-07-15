@@ -113,6 +113,27 @@ export class User {
   @Prop({ type: [String], default: [] })
   operationalRepresentativeCodes?: string[];
 
+  /**
+   * Structured operational Rep links (keeps codes array in sync for compatibility).
+   * First Order Partner Development applies only to shops created after linkedAt.
+   */
+  @Prop({
+    type: [
+      {
+        partnerCode: { type: String, required: true },
+        linkedAt: { type: Date, required: true },
+        /** Partner Development % on eligible shops' first order (default 5). */
+        firstOrderPartnerDevelopmentRate: { type: Number, default: 5 },
+      },
+    ],
+    default: [],
+  })
+  operationalRepresentativeLinks?: Array<{
+    partnerCode: string;
+    linkedAt: Date;
+    firstOrderPartnerDevelopmentRate?: number;
+  }>;
+
   /** Main Promoter partner codes linked for operational visibility without re-parenting. */
   @Prop({ type: [String], default: [] })
   operationalPromoterCodes?: string[];
@@ -144,10 +165,26 @@ export class User {
   operationalSupportRepresentativeId?: MongooseSchema.Types.ObjectId;
 
   /**
-   * True once this shop's one-time 5% Partner Development commission has
+   * When true, this shop is eligible for First Order Partner Development split
+   * (shop joined the intro Rep AFTER that Rep was Add-to-Network linked).
+   * Unset/false until evaluated at assignment time — do not default to false
+   * or new shops are incorrectly blocked from FO eligibility checks.
+   */
+  @Prop()
+  partnerDevelopmentEligible?: boolean;
+
+  /**
+   * Frozen Partner Development % for this shop's first-order split (e.g. 5).
+   * Copied from the operational link at shop assignment time.
+   */
+  @Prop()
+  partnerDevelopmentRatePercent?: number;
+
+  /**
+   * True once this shop's one-time Partner Development commission has
    * been paid out (on the shop's first successful, non-registration order).
-   * Shop-level flag — each shop under a linked Rep pays Partner Development
-   * independently (Rep1 gets 5% on every shop's first order, not only the first shop).
+   * Shop-level flag — each eligible shop under a linked Rep pays Partner
+   * Development independently.
    */
   @Prop({ default: false })
   partnerDevelopmentCommissionPaid?: boolean;
