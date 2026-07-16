@@ -114,15 +114,17 @@ export class User {
   operationalRepresentativeCodes?: string[];
 
   /**
-   * Structured operational Rep links (keeps codes array in sync for compatibility).
-   * First Order Partner Development applies only to shops created after linkedAt.
-   */
+ * Structured operational Rep links (keeps codes array in sync for compatibility).
+ * First Order rates apply only to shops created after linkedAt.
+ */
   @Prop({
     type: [
       {
         partnerCode: { type: String, required: true },
         linkedAt: { type: Date, required: true },
-        /** Partner Development % on eligible shops' first order (default 5). */
+        /** REP2 Shop Introduction % on eligible shops' first order (default 10). */
+        firstOrderShopIntroductionRate: { type: Number, default: 10 },
+        /** Parent (REP1) Partner Development % on eligible shops' first order (default 5). */
         firstOrderPartnerDevelopmentRate: { type: Number, default: 5 },
       },
     ],
@@ -131,6 +133,7 @@ export class User {
   operationalRepresentativeLinks?: Array<{
     partnerCode: string;
     linkedAt: Date;
+    firstOrderShopIntroductionRate?: number;
     firstOrderPartnerDevelopmentRate?: number;
   }>;
 
@@ -174,11 +177,18 @@ export class User {
   partnerDevelopmentEligible?: boolean;
 
   /**
-   * Frozen Partner Development % for this shop's first-order split (e.g. 5).
+   * Frozen Partner Development % for this shop's first-order split (parent share).
    * Copied from the operational link at shop assignment time.
    */
   @Prop()
   partnerDevelopmentRatePercent?: number;
+
+  /**
+   * Frozen Shop Introduction % for this shop's first-order split (child Rep share).
+   * Copied from the operational link at shop assignment time (default 10).
+   */
+  @Prop()
+  shopIntroductionFirstOrderRatePercent?: number;
 
   /**
    * True once this shop's one-time Partner Development commission has

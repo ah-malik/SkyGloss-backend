@@ -43,9 +43,10 @@ import {
   calculateRepresentativeCommissionEntries,
   CommissionRecipient,
   normalizePartnerDevelopmentRatePercent,
+  normalizeShopIntroductionFirstOrderRatePercent,
   resolveCommissionOrderAmounts,
   resolveCommissionRatePercent,
-  TOTAL_FIRST_ORDER_COMMISSION_RATE,
+  resolveFirstOrderPoolSplit,
 } from '../common/commission-distribution';
 import { ExchangeRatesService } from '../exchange-rates/exchange-rates.service';
 import {
@@ -1665,6 +1666,11 @@ export class OrdersService implements OnModuleInit {
     shopUser = await this.usersService.ensureShopPartnerDevelopmentAssignment(
       shopUser,
     );
+    // Admin may have edited Child/Parent FO % after shop assignment — use live rates
+    // until Partner Development is locked on first paid/fulfilled order.
+    shopUser = await this.usersService.refreshShopFirstOrderRatesIfUnpaid(
+      shopUser,
+    );
 
     if (!shopUser.shopIntroductionRepresentativeCode) return;
 
@@ -1702,13 +1708,18 @@ export class OrdersService implements OnModuleInit {
               ? ('earned' as const)
               : ('pending' as const);
 
-          const pdPercent = normalizePartnerDevelopmentRatePercent(
-            shopUser.partnerDevelopmentRatePercent ?? 5,
-          );
-          const shopIntroPercent =
-            TOTAL_FIRST_ORDER_COMMISSION_RATE * 100 - pdPercent;
+          const split = resolveFirstOrderPoolSplit({
+            shopIntroductionRate:
+              shopUser.shopIntroductionFirstOrderRatePercent,
+            partnerDevelopmentRate: shopUser.partnerDevelopmentRatePercent,
+          });
 
-          this.shrinkShopIntroToPercent(order, monetary, shopIntroPercent);
+          // Child keeps remainder of the FO pool after parent cut.
+          this.shrinkShopIntroToPercent(
+            order,
+            monetary,
+            split.childKeepPercent,
+          );
 
           // Keep existing lines pending until shipped.
           order.commissions = order.commissions.map((entry) => ({
@@ -1721,8 +1732,10 @@ export class OrdersService implements OnModuleInit {
             recipientPartnerCode: partnerDevUser.partnerCode!,
             recipientRole: partnerDevUser.role,
             earningType: 'Partner Development',
-            percentage: pdPercent,
-            amount: roundMoney(monetary.convertedUsdAmount * (pdPercent / 100)),
+            percentage: split.parentPercent,
+            amount: roundMoney(
+              monetary.convertedUsdAmount * (split.parentPercent / 100),
+            ),
             status: commissionStatus,
             shopId: shopUserId,
             orderAmount: monetary.orderAmount,
@@ -1747,7 +1760,16 @@ export class OrdersService implements OnModuleInit {
         isFirstSuccessfulOrder &&
         hasPartnerDevelopment
       ) {
-        await this.normalizeFirstOrderSplitOnOrder(order);
+        const monetary = resolveCommissionOrderAmounts(order);
+        // Prefer live admin FO rates over legacy "normalize 20% → 10%" repair.
+        const ratesSynced = this.syncFirstOrderCommissionRatesOnOrder(
+          order,
+          shopUser,
+          monetary,
+        );
+        if (!ratesSynced) {
+          await this.normalizeFirstOrderSplitOnOrder(order);
+        }
         const commissionStatus =
           newStatus === OrderStatus.SHIPPED ||
           newStatus === OrderStatus.DELIVERED
@@ -1812,6 +1834,8 @@ export class OrdersService implements OnModuleInit {
         partnerDevelopmentCommissionPaid: partnerDevelopmentAlreadyPaid,
         partnerDevelopmentEligible: shopUser.partnerDevelopmentEligible === true,
         partnerDevelopmentRatePercent: shopUser.partnerDevelopmentRatePercent,
+        shopIntroductionFirstOrderRatePercent:
+          shopUser.shopIntroductionFirstOrderRatePercent,
       },
       recipients: {
         shopIntroduction,
@@ -1946,9 +1970,9 @@ export class OrdersService implements OnModuleInit {
     }
   }
   /**
-   * When Partner Development already exists on a first-order split, Shop
-   * Introduction must be 5% — not 10%. Fixes inflated 15% totals after a
-   * partial repair that added PD without shrinking SI.
+   * When Partner Development exists, Shop Introduction must not remain at the
+   * unlinked default (20%). FO pool model: child keeps (pool − parent).
+   * Legacy repair without shop rates: defaults to 10% pool / 5% parent → child 5%.
    */
   private async normalizeFirstOrderSplitOnOrder(order: any): Promise<boolean> {
     if (!order?.commissions?.length) return false;
@@ -1960,9 +1984,13 @@ export class OrdersService implements OnModuleInit {
     if (!hasPartnerDevelopment) return false;
 
     const monetary = resolveCommissionOrderAmounts(order);
-    const fivePercent = roundMoney(monetary.convertedUsdAmount * 0.05);
-    const tenPercent = roundMoney(monetary.convertedUsdAmount * 0.1);
-    if (!(fivePercent > 0)) return false;
+    const twentyPercent = roundMoney(monetary.convertedUsdAmount * 0.2);
+    const defaultSplit = resolveFirstOrderPoolSplit();
+    const foSiPercent = defaultSplit.childKeepPercent;
+    const foSiAmount = roundMoney(
+      monetary.convertedUsdAmount * (foSiPercent / 100),
+    );
+    if (!(foSiAmount >= 0)) return false;
 
     let changed = false;
     for (const entry of order.commissions) {
@@ -1974,66 +2002,25 @@ export class OrdersService implements OnModuleInit {
         entry.earningType === 'Shop Introduction' ||
         (!entry.earningType &&
           entry.recipientRole === UserRole.MASTER_PARTNER &&
-          (pct === 10 || Math.abs(amt - tenPercent) < 0.05));
+          (pct === 20 || Math.abs(amt - twentyPercent) < 0.05));
 
       if (!isShopIntro) continue;
-      if (pct === 5 && Math.abs(amt - fivePercent) < 0.02) continue;
+      // Only rewrite clearly-wrong unlinked 20% SI when PD is already present.
+      if (!(pct === 20 || Math.abs(amt - twentyPercent) < 0.05)) continue;
 
-      // PD present ⇒ FO Shop Intro must be 5% (never remain 10%).
       entry.earningType = 'Shop Introduction';
-      entry.percentage = 5;
-      entry.amount = fivePercent;
+      entry.percentage = foSiPercent;
+      entry.amount = foSiAmount;
       changed = true;
     }
 
     if (!changed) return false;
 
-    // Nested subdocument mutations need markModified or Mongoose may skip save.
     order.markModified('commissions');
     await order.save();
 
-    // Atomic fallback — ensure DB reflects 5% SI even if document save is flaky.
-    await this.orderModel.updateOne(
-      {
-        _id: order._id,
-        commissions: {
-          $elemMatch: {
-            earningType: 'Partner Development',
-          },
-        },
-      },
-      {
-        $set: {
-          'commissions.$[si].earningType': 'Shop Introduction',
-          'commissions.$[si].percentage': 5,
-          'commissions.$[si].amount': fivePercent,
-        },
-      },
-      {
-        arrayFilters: [
-          {
-            $or: [
-              {
-                'si.earningType': 'Shop Introduction',
-                'si.percentage': { $in: [10, '10'] },
-              },
-              {
-                'si.earningType': 'Shop Introduction',
-                'si.amount': { $gt: fivePercent + 0.01 },
-              },
-              {
-                'si.earningType': { $exists: false },
-                'si.recipientRole': UserRole.MASTER_PARTNER,
-                'si.percentage': { $in: [10, '10'] },
-              },
-            ],
-          },
-        ],
-      },
-    );
-
     console.log(
-      `[Commission] Normalized FO split on ${order.orderNumber || order._id}: Shop Intro → 5% ($${fivePercent})`,
+      `[Commission] Normalized FO split on ${order.orderNumber || order._id}: Shop Intro → ${foSiPercent}% ($${foSiAmount}) with Partner Development present`,
     );
     return true;
   }
@@ -2049,7 +2036,10 @@ export class OrdersService implements OnModuleInit {
     monetary: { convertedUsdAmount: number },
     shopIntroPercent: number,
   ): void {
-    const introPercent = Math.max(0, Math.min(10, Number(shopIntroPercent) || 5));
+    // Child Rep FO can be any admin-configured % (e.g. 50), not capped at 10.
+    const introPercent = normalizeShopIntroductionFirstOrderRatePercent(
+      shopIntroPercent,
+    );
     const introAmount = roundMoney(
       monetary.convertedUsdAmount * (introPercent / 100),
     );
@@ -2083,17 +2073,97 @@ export class OrdersService implements OnModuleInit {
     }
   }
 
+  /**
+   * When admin changes Child/Parent FO % before Partner Development is locked,
+   * rewrite pending first-order commission lines to the live shop rates.
+   */
+  private syncFirstOrderCommissionRatesOnOrder(
+    order: any,
+    shopUser: {
+      partnerDevelopmentEligible?: boolean;
+      partnerDevelopmentCommissionPaid?: boolean;
+      shopIntroductionFirstOrderRatePercent?: number;
+      partnerDevelopmentRatePercent?: number;
+    },
+    monetary: { convertedUsdAmount: number },
+  ): boolean {
+    if (shopUser.partnerDevelopmentEligible !== true) return false;
+    if (shopUser.partnerDevelopmentCommissionPaid === true) return false;
+    if (!order?.commissions?.length) return false;
+
+    const hasPartnerDevelopment = order.commissions.some(
+      (entry: { earningType?: string }) =>
+        entry.earningType === 'Partner Development',
+    );
+    if (!hasPartnerDevelopment) return false;
+
+    const split = resolveFirstOrderPoolSplit({
+      shopIntroductionRate: shopUser.shopIntroductionFirstOrderRatePercent,
+      partnerDevelopmentRate: shopUser.partnerDevelopmentRatePercent,
+    });
+
+    const shopIntroAmount = roundMoney(
+      monetary.convertedUsdAmount * (split.childKeepPercent / 100),
+    );
+    const pdAmount = roundMoney(
+      monetary.convertedUsdAmount * (split.parentPercent / 100),
+    );
+
+    let changed = false;
+    for (const entry of order.commissions) {
+      if (entry.earningType === 'Partner Development') {
+        if (
+          Number(entry.percentage) !== split.parentPercent ||
+          Math.abs(Number(entry.amount) - pdAmount) >= 0.02
+        ) {
+          entry.percentage = split.parentPercent;
+          entry.amount = pdAmount;
+          changed = true;
+        }
+        continue;
+      }
+
+      const pct = Number(entry.percentage);
+      const amt = Number(entry.amount) || 0;
+      const isShopIntro =
+        entry.earningType === 'Shop Introduction' ||
+        (!entry.earningType && entry.recipientRole === UserRole.MASTER_PARTNER);
+
+      if (!isShopIntro) continue;
+      if (
+        pct === split.childKeepPercent &&
+        Math.abs(amt - shopIntroAmount) < 0.02
+      ) {
+        continue;
+      }
+
+      entry.earningType = 'Shop Introduction';
+      entry.percentage = split.childKeepPercent;
+      entry.amount = shopIntroAmount;
+      changed = true;
+    }
+
+    if (changed && typeof order.markModified === 'function') {
+      order.markModified('commissions');
+    }
+    return changed;
+  }
+
   private async repairPartnerDevelopmentCommission(
     orderId: string,
     shopUserId: string,
   ): Promise<void> {
-    const shopUser = await this.usersService.findOne(shopUserId);
+    let shopUser = await this.usersService.findOne(shopUserId);
     if (!shopUser || shopUser.role !== UserRole.CERTIFIED_SHOP) return;
 
     // Only shops created after Add-to-Network get FO Partner Development.
     if (shopUser.partnerDevelopmentEligible !== true) {
       return;
     }
+
+    shopUser = await this.usersService.refreshShopFirstOrderRatesIfUnpaid(
+      shopUser,
+    );
 
     const order = await this.orderModel.findById(orderId);
     if (!order?.commissions?.length) return;
@@ -2102,9 +2172,19 @@ export class OrdersService implements OnModuleInit {
       (entry) => entry.earningType === 'Partner Development',
     );
 
-    // Already split — still fix SI if it remained at 10% (inflated 15% bug).
+    // Already split — sync to live FO rates (or legacy 20% → FO repair).
     if (hasPartnerDevelopment) {
-      await this.normalizeFirstOrderSplitOnOrder(order);
+      const monetary = resolveCommissionOrderAmounts(order);
+      const ratesSynced = this.syncFirstOrderCommissionRatesOnOrder(
+        order,
+        shopUser,
+        monetary,
+      );
+      if (ratesSynced) {
+        await order.save();
+      } else {
+        await this.normalizeFirstOrderSplitOnOrder(order);
+      }
       return;
     }
 
@@ -2129,21 +2209,22 @@ export class OrdersService implements OnModuleInit {
 
     const monetary = resolveCommissionOrderAmounts(order);
     const commissionStatus = order.commissions[0]?.status || 'pending';
-    const pdPercent = normalizePartnerDevelopmentRatePercent(
-      updatedShop.partnerDevelopmentRatePercent ?? 5,
-    );
-    const shopIntroPercent =
-      TOTAL_FIRST_ORDER_COMMISSION_RATE * 100 - pdPercent;
+    const split = resolveFirstOrderPoolSplit({
+      shopIntroductionRate: updatedShop.shopIntroductionFirstOrderRatePercent,
+      partnerDevelopmentRate: updatedShop.partnerDevelopmentRatePercent,
+    });
 
-    this.shrinkShopIntroToPercent(order, monetary, shopIntroPercent);
+    this.shrinkShopIntroToPercent(order, monetary, split.childKeepPercent);
 
     order.commissions.push({
       recipientUserId: partnerDevUser._id.toString(),
       recipientPartnerCode: partnerDevUser.partnerCode!,
       recipientRole: partnerDevUser.role,
       earningType: 'Partner Development',
-      percentage: pdPercent,
-      amount: roundMoney(monetary.convertedUsdAmount * (pdPercent / 100)),
+      percentage: split.parentPercent,
+      amount: roundMoney(
+        monetary.convertedUsdAmount * (split.parentPercent / 100),
+      ),
       status: commissionStatus,
       shopId: shopUserId,
       orderAmount: monetary.orderAmount,

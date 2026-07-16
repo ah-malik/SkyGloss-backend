@@ -119,12 +119,15 @@ export class UsersController {
     @Body('query') query: string,
     @Body('firstOrderPartnerDevelopmentRate')
     firstOrderPartnerDevelopmentRate?: number,
+    @Body('firstOrderShopIntroductionRate')
+    firstOrderShopIntroductionRate?: number,
   ) {
     return this.usersService.adminLinkNetworkMember(
       ownerId,
       role,
       query,
       firstOrderPartnerDevelopmentRate,
+      firstOrderShopIntroductionRate,
     );
   }
 
@@ -135,11 +138,14 @@ export class UsersController {
     @Body('partnerCode') partnerCode: string,
     @Body('firstOrderPartnerDevelopmentRate')
     firstOrderPartnerDevelopmentRate: number,
+    @Body('firstOrderShopIntroductionRate')
+    firstOrderShopIntroductionRate?: number,
   ) {
     return this.usersService.adminUpdateLinkedRepresentativeRate(
       ownerId,
       partnerCode,
       firstOrderPartnerDevelopmentRate,
+      firstOrderShopIntroductionRate,
     );
   }
 
