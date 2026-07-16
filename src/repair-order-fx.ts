@@ -100,7 +100,7 @@ async function bootstrap() {
 
   const cursor = orders.find({
     totalAmount: { $gt: 0 },
-    orderNumber: { $not: /^REG/i },
+    orderNumber: { $not: /^(SGREG|REG)/i },
   });
 
   let scanned = 0;

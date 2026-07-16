@@ -64,9 +64,11 @@ import {
   shouldIncludeViewerInNetworkOrders,
 } from '../common/user-hierarchy';
 import {
+  formatRegistrationOrderNumber,
   formatShopOrderNumber,
+  getNextRegistrationOrderSequence,
   getNextShopOrderSequenceForFlow,
-  resolveOrderCountryCode,
+  getShopOrderPrefix,
   type ShopOrderFlow,
 } from '../common/order-number';
 import { normalizeCurrencyCode } from '../common/currency-codes';
@@ -2645,21 +2647,21 @@ export class OrdersService implements OnModuleInit {
   }
 
   private async generateShopOrderNumber(
-    country: string,
+    _country: string,
     flow: ShopOrderFlow,
   ): Promise<string> {
-    const countryCode = resolveOrderCountryCode(country);
     const nextSequence = await this.getNextShopOrderSequence(flow);
-    return formatShopOrderNumber(countryCode, nextSequence);
+    return formatShopOrderNumber(flow, nextSequence);
   }
 
   private async getNextShopOrderSequence(
     flow: ShopOrderFlow,
   ): Promise<number> {
+    const prefix = getShopOrderPrefix(flow);
     const matchingOrders = await this.orderModel
       .find({
         orderFlow: flow,
-        orderNumber: { $regex: /^SG[A-Z]{3}-\d+$/ },
+        orderNumber: { $regex: new RegExp(`^${prefix}\\d+$`, 'i') },
       })
       .select('orderNumber orderFlow')
       .lean()
@@ -2676,24 +2678,16 @@ export class OrdersService implements OnModuleInit {
 
   private async generateRegistrationOrderNumber(): Promise<string> {
     const matchingOrders = await this.orderModel
-      .find({ orderNumber: new RegExp('^REG') })
+      .find({ orderNumber: { $regex: /^SGREG\d+$/i } })
       .select('orderNumber')
       .lean()
       .exec();
 
-    let maxNum = 0;
-    for (const order of matchingOrders) {
-      const numPart = String((order as { orderNumber?: string }).orderNumber || '').replace(
-        /^REG/,
-        '',
-      );
-      const num = parseInt(numPart, 10);
-      if (!Number.isNaN(num) && num > maxNum) {
-        maxNum = num;
-      }
-    }
-
-    const nextNumber = maxNum + 1;
-    return `REG${nextNumber.toString().padStart(6, '0')}`;
+    const nextNumber = getNextRegistrationOrderSequence(
+      matchingOrders.map(
+        (order) => (order as { orderNumber?: string }).orderNumber,
+      ),
+    );
+    return formatRegistrationOrderNumber(nextNumber);
   }
 }

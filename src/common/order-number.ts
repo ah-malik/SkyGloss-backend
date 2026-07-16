@@ -1,12 +1,35 @@
-/** Shop order IDs: SG{COUNTRY}-{7-digit sequence} e.g. SGUSA-0000000, SGUSA-0000007 */
+/**
+ * Shop / registration order IDs:
+ * - Order request (non-USA / unpaid): SGPAKR0110, SGPAKR0117, …
+ * - Paid / checkout:                   SGUSAP0110, SGUSAP0117, …
+ * - Registration:                      SGREG0110,  SGREG0117, …
+ *
+ * Numeric part starts at 0110 and increases by 7 on every new entry.
+ */
 
 export const SHOP_ORDER_LEGACY_REQ_BASE = 254700;
 
 export type ShopOrderFlow = 'request' | 'purchase';
 
-export const SHOP_ORDER_REQUEST_START = 0;
-export const SHOP_ORDER_PURCHASE_START = 7;
-export const SHOP_ORDER_SEQUENCE_DIGITS = 7;
+/** Fixed prefixes for each ID family. */
+export const SHOP_ORDER_REQUEST_PREFIX = 'SGPAKR';
+export const SHOP_ORDER_PURCHASE_PREFIX = 'SGUSAP';
+export const REGISTRATION_ORDER_PREFIX = 'SGREG';
+
+/** First number issued after reset for all three ID families. */
+export const ORDER_SEQUENCE_START = 110;
+export const SHOP_ORDER_REQUEST_START = ORDER_SEQUENCE_START;
+export const SHOP_ORDER_PURCHASE_START = ORDER_SEQUENCE_START;
+export const REGISTRATION_ORDER_START = ORDER_SEQUENCE_START;
+
+/** Every new order / registration advances the sequence by this step. */
+export const ORDER_SEQUENCE_STEP = 7;
+
+/** Pad width for the numeric suffix (0110). Grows past 4 digits when needed. */
+export const ORDER_SEQUENCE_DIGITS = 4;
+
+/** @deprecated Use ORDER_SEQUENCE_DIGITS — kept for older imports. */
+export const SHOP_ORDER_SEQUENCE_DIGITS = ORDER_SEQUENCE_DIGITS;
 
 const ORDER_COUNTRY_CODES: Record<string, string> = {
   'united states': 'USA',
@@ -77,20 +100,78 @@ export function resolveOrderCountryCode(country?: string): string {
   return 'GLB';
 }
 
-export function formatShopOrderNumber(
-  countryCode: string,
-  sequence: number,
-): string {
-  const padded = String(sequence).padStart(SHOP_ORDER_SEQUENCE_DIGITS, '0');
-  return `SG${countryCode}-${padded}`;
+export function getShopOrderPrefix(flow: ShopOrderFlow): string {
+  return flow === 'request'
+    ? SHOP_ORDER_REQUEST_PREFIX
+    : SHOP_ORDER_PURCHASE_PREFIX;
 }
 
-/** Extract the numeric sequence from legacy or current shop order numbers. */
+function padOrderSequence(sequence: number): string {
+  return String(sequence).padStart(ORDER_SEQUENCE_DIGITS, '0');
+}
+
+/** Format shop order ID: SGPAKR0110 (request) or SGUSAP0110 (purchase). */
+export function formatShopOrderNumber(
+  flow: ShopOrderFlow,
+  sequence: number,
+): string {
+  return `${getShopOrderPrefix(flow)}${padOrderSequence(sequence)}`;
+}
+
+/** Format registration ID: SGREG0110. */
+export function formatRegistrationOrderNumber(sequence: number): string {
+  return `${REGISTRATION_ORDER_PREFIX}${padOrderSequence(sequence)}`;
+}
+
+/**
+ * Extract sequence from the current shop ID formats only
+ * (SGPAKR0110 / SGUSAP0110). Legacy formats are ignored so counters can reset.
+ */
+export function extractCurrentShopOrderSequence(
+  orderNumber?: string,
+  flow?: ShopOrderFlow,
+): number | null {
+  if (!orderNumber) return null;
+  const value = orderNumber.trim().toUpperCase();
+
+  const prefixes = flow
+    ? [getShopOrderPrefix(flow)]
+    : [SHOP_ORDER_REQUEST_PREFIX, SHOP_ORDER_PURCHASE_PREFIX];
+
+  for (const prefix of prefixes) {
+    if (!value.startsWith(prefix)) continue;
+    const numPart = value.slice(prefix.length);
+    if (!/^\d+$/.test(numPart)) continue;
+    const seq = parseInt(numPart, 10);
+    return Number.isNaN(seq) ? null : seq;
+  }
+
+  return null;
+}
+
+/** Extract sequence from current registration IDs only (SGREG0110). */
+export function extractCurrentRegistrationOrderSequence(
+  orderNumber?: string,
+): number | null {
+  if (!orderNumber) return null;
+  const value = orderNumber.trim().toUpperCase();
+  if (!value.startsWith(REGISTRATION_ORDER_PREFIX)) return null;
+
+  const numPart = value.slice(REGISTRATION_ORDER_PREFIX.length);
+  if (!/^\d+$/.test(numPart)) return null;
+  const seq = parseInt(numPart, 10);
+  return Number.isNaN(seq) ? null : seq;
+}
+
+/** Extract the numeric sequence from legacy or previous shop order numbers. */
 export function extractShopOrderSequence(orderNumber?: string): number | null {
   if (!orderNumber) return null;
   const value = orderNumber.trim().toUpperCase();
 
-  if (value.startsWith('REG')) return null;
+  if (isRegistrationOrderNumber(value)) return null;
+
+  const current = extractCurrentShopOrderSequence(value);
+  if (current != null) return current;
 
   const withCountry = value.match(/^SG[A-Z]{3}-(\d+)$/);
   if (withCountry) return parseInt(withCountry[1], 10);
@@ -108,11 +189,20 @@ export function extractShopOrderSequence(orderNumber?: string): number | null {
 }
 
 export function isMigratableShopOrderNumber(orderNumber?: string): boolean {
+  if (!orderNumber) return false;
+  const value = orderNumber.trim().toUpperCase();
+  // Already on the new fixed-prefix format — skip migration.
+  if (extractCurrentShopOrderSequence(value) != null) return false;
   return extractShopOrderSequence(orderNumber) != null;
 }
 
 export function isRegistrationOrderNumber(orderNumber?: string): boolean {
-  return !!orderNumber?.trim().toUpperCase().startsWith('REG');
+  if (!orderNumber) return false;
+  const value = orderNumber.trim().toUpperCase();
+  return (
+    value.startsWith(REGISTRATION_ORDER_PREFIX) ||
+    /^REG\d+$/.test(value)
+  );
 }
 
 export function getNextShopOrderSequence(
@@ -130,7 +220,15 @@ export function getNextShopOrderSequence(
   return maxNum + 1;
 }
 
-/** Next sequence for order request (0, 1, 2…) or buy/checkout (7, 8, 9…). */
+function nextSequenceFromMax(maxNum: number, start: number): number {
+  if (maxNum < start) return start;
+  return maxNum + ORDER_SEQUENCE_STEP;
+}
+
+/**
+ * Next sequence for request (SGPAKR*) or purchase (SGUSAP*).
+ * Only current-format IDs count, so the series resets to 0110.
+ */
 export function getNextShopOrderSequenceForFlow(
   orders: Array<{ orderNumber?: string; orderFlow?: ShopOrderFlow }>,
   flow: ShopOrderFlow,
@@ -140,25 +238,44 @@ export function getNextShopOrderSequenceForFlow(
       ? SHOP_ORDER_REQUEST_START
       : SHOP_ORDER_PURCHASE_START;
 
-  let maxNum = start - 1;
+  let maxNum = start - ORDER_SEQUENCE_STEP;
 
   for (const order of orders) {
     if (order.orderFlow !== flow) continue;
 
-    const seq = extractShopOrderSequence(order.orderNumber);
+    const seq = extractCurrentShopOrderSequence(order.orderNumber, flow);
     if (seq == null) continue;
     if (seq > maxNum) maxNum = seq;
   }
 
-  if (maxNum < start) return start;
-  return maxNum + 1;
+  return nextSequenceFromMax(maxNum, start);
 }
 
+/** Next registration sequence (SGREG*). Legacy REG* IDs are ignored for reset. */
+export function getNextRegistrationOrderSequence(
+  orderNumbers: Array<string | undefined>,
+): number {
+  let maxNum = REGISTRATION_ORDER_START - ORDER_SEQUENCE_STEP;
+
+  for (const orderNumber of orderNumbers) {
+    const seq = extractCurrentRegistrationOrderSequence(orderNumber);
+    if (seq == null) continue;
+    if (seq > maxNum) maxNum = seq;
+  }
+
+  return nextSequenceFromMax(maxNum, REGISTRATION_ORDER_START);
+}
+
+/**
+ * Migrate a legacy shop order number onto the new fixed-prefix format.
+ * Defaults to the request series when flow is unknown.
+ */
 export function buildMigratedShopOrderNumber(
   orderNumber: string,
-  country?: string,
+  _country?: string,
+  flow: ShopOrderFlow = 'request',
 ): string | null {
   const sequence = extractShopOrderSequence(orderNumber);
   if (sequence == null) return null;
-  return formatShopOrderNumber(resolveOrderCountryCode(country), sequence);
+  return formatShopOrderNumber(flow, sequence);
 }

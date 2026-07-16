@@ -5,9 +5,11 @@ export function isRegistrationOrder(order: {
   items?: { product?: string }[];
   orderNumber?: string;
 }): boolean {
+  const orderNumber = order.orderNumber?.trim().toUpperCase() || '';
   return (
     order.items?.some((item) => item.product === 'registration_fee') ||
-    !!order.orderNumber?.startsWith('REG')
+    orderNumber.startsWith('SGREG') ||
+    /^REG\d+$/.test(orderNumber)
   );
 }
 
@@ -24,7 +26,8 @@ export function registrationOrderExclusionFilter() {
   return {
     $nor: [
       { items: { $elemMatch: { product: 'registration_fee' } } },
-      { orderNumber: { $regex: '^REG' } },
+      { orderNumber: { $regex: '^SGREG\\d+$', $options: 'i' } },
+      { orderNumber: { $regex: '^REG\\d+$', $options: 'i' } },
     ],
   };
 }

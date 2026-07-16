@@ -1,9 +1,15 @@
 import {
   buildMigratedShopOrderNumber,
+  extractCurrentRegistrationOrderSequence,
+  extractCurrentShopOrderSequence,
   extractShopOrderSequence,
+  formatRegistrationOrderNumber,
   formatShopOrderNumber,
+  getNextRegistrationOrderSequence,
   getNextShopOrderSequence,
   getNextShopOrderSequenceForFlow,
+  ORDER_SEQUENCE_START,
+  ORDER_SEQUENCE_STEP,
   resolveOrderCountryCode,
   SHOP_ORDER_PURCHASE_START,
   SHOP_ORDER_REQUEST_START,
@@ -24,15 +30,30 @@ describe('order-number', () => {
       1773557663563,
     );
     expect(extractShopOrderSequence('REG000012')).toBeNull();
+    expect(extractShopOrderSequence('SGREG0110')).toBeNull();
   });
 
-  it('formats new shop order numbers with 7-digit sequence', () => {
-    expect(formatShopOrderNumber('USA', 0)).toBe('SGUSA-0000000');
-    expect(formatShopOrderNumber('USA', 7)).toBe('SGUSA-0000007');
-    expect(formatShopOrderNumber('USA', 254752)).toBe('SGUSA-0254752');
-    expect(formatShopOrderNumber('PAK', 1776784934722)).toBe(
-      'SGPAK-1776784934722',
+  it('formats shop and registration IDs with 4-digit sequence starting at 0110', () => {
+    expect(formatShopOrderNumber('request', ORDER_SEQUENCE_START)).toBe(
+      'SGPAKR0110',
     );
+    expect(formatShopOrderNumber('purchase', ORDER_SEQUENCE_START)).toBe(
+      'SGUSAP0110',
+    );
+    expect(formatRegistrationOrderNumber(ORDER_SEQUENCE_START)).toBe(
+      'SGREG0110',
+    );
+    expect(
+      formatShopOrderNumber('request', ORDER_SEQUENCE_START + ORDER_SEQUENCE_STEP),
+    ).toBe('SGPAKR0117');
+  });
+
+  it('extracts sequences from the current fixed-prefix formats', () => {
+    expect(extractCurrentShopOrderSequence('SGPAKR0110', 'request')).toBe(110);
+    expect(extractCurrentShopOrderSequence('SGUSAP0117', 'purchase')).toBe(117);
+    expect(extractCurrentShopOrderSequence('SGUSA-0000007', 'purchase')).toBeNull();
+    expect(extractCurrentRegistrationOrderSequence('SGREG0110')).toBe(110);
+    expect(extractCurrentRegistrationOrderSequence('REG000110')).toBeNull();
   });
 
   it('computes next sequence from mixed legacy numbers', () => {
@@ -41,45 +62,62 @@ describe('order-number', () => {
     ).toBe(254776);
   });
 
-  it('starts order request numbers at 0', () => {
+  it('starts order request numbers at 0110 and increments by 7', () => {
     expect(getNextShopOrderSequenceForFlow([], 'request')).toBe(
       SHOP_ORDER_REQUEST_START,
     );
     expect(
       getNextShopOrderSequenceForFlow(
-        [{ orderNumber: 'SGUSA-0000000', orderFlow: 'request' }],
+        [{ orderNumber: 'SGPAKR0110', orderFlow: 'request' }],
         'request',
       ),
-    ).toBe(1);
+    ).toBe(117);
   });
 
-  it('starts purchase numbers at 7', () => {
+  it('starts purchase numbers at 0110 and increments by 7', () => {
     expect(getNextShopOrderSequenceForFlow([], 'purchase')).toBe(
       SHOP_ORDER_PURCHASE_START,
     );
     expect(
       getNextShopOrderSequenceForFlow(
-        [{ orderNumber: 'SGUSA-0000007', orderFlow: 'purchase' }],
+        [{ orderNumber: 'SGUSAP0110', orderFlow: 'purchase' }],
         'purchase',
       ),
-    ).toBe(8);
+    ).toBe(117);
   });
 
   it('keeps request and purchase counters separate', () => {
     const orders = [
-      { orderNumber: 'SGUSA-0000002', orderFlow: 'request' as const },
-      { orderNumber: 'SGUSA-0000007', orderFlow: 'purchase' as const },
+      { orderNumber: 'SGPAKR0110', orderFlow: 'request' as const },
+      { orderNumber: 'SGUSAP0110', orderFlow: 'purchase' as const },
     ];
-    expect(getNextShopOrderSequenceForFlow(orders, 'request')).toBe(3);
-    expect(getNextShopOrderSequenceForFlow(orders, 'purchase')).toBe(8);
+    expect(getNextShopOrderSequenceForFlow(orders, 'request')).toBe(117);
+    expect(getNextShopOrderSequenceForFlow(orders, 'purchase')).toBe(117);
   });
 
-  it('migrates legacy order numbers with country', () => {
+  it('ignores legacy shop IDs when computing the reset series', () => {
+    const orders = [
+      { orderNumber: 'SGPAK-0000999', orderFlow: 'request' as const },
+      { orderNumber: 'SGUSA-0000500', orderFlow: 'purchase' as const },
+    ];
+    expect(getNextShopOrderSequenceForFlow(orders, 'request')).toBe(110);
+    expect(getNextShopOrderSequenceForFlow(orders, 'purchase')).toBe(110);
+  });
+
+  it('starts registration numbers at 0110 and increments by 7', () => {
+    expect(getNextRegistrationOrderSequence([])).toBe(110);
+    expect(getNextRegistrationOrderSequence(['SGREG0110'])).toBe(117);
+    expect(getNextRegistrationOrderSequence(['REG000999', 'SGREG0117'])).toBe(
+      124,
+    );
+  });
+
+  it('migrates legacy order numbers onto the request series by default', () => {
     expect(buildMigratedShopOrderNumber('REQ-254752', 'Pakistan')).toBe(
-      'SGPAK-0254752',
+      'SGPAKR254752',
     );
-    expect(buildMigratedShopOrderNumber('SG000043', 'United States')).toBe(
-      'SGUSA-0000043',
-    );
+    expect(
+      buildMigratedShopOrderNumber('SG000043', 'United States', 'purchase'),
+    ).toBe('SGUSAP0043');
   });
 });

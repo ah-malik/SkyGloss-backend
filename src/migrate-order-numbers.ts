@@ -1,5 +1,6 @@
 /**
- * Migrate shop order numbers to SG{COUNTRY}-{sequence} format.
+ * Migrate legacy shop order numbers to the current fixed-prefix format
+ * (SGPAKR#### for request / SGUSAP#### for purchase).
  *
  * Run: npm run migrate-order-numbers
  */
@@ -9,6 +10,7 @@ import {
   buildMigratedShopOrderNumber,
   isMigratableShopOrderNumber,
   isRegistrationOrderNumber,
+  type ShopOrderFlow,
 } from './common/order-number';
 
 dotenv.config();
@@ -22,10 +24,9 @@ async function bootstrap() {
   await mongoose.connect(uri);
 
   const orders = mongoose.connection.collection('orders');
-  const users = mongoose.connection.collection('users');
 
   const allOrders = await orders
-    .find({}, { projection: { orderNumber: 1, shippingAddress: 1, user: 1 } })
+    .find({}, { projection: { orderNumber: 1, orderFlow: 1 } })
     .toArray();
 
   let scanned = 0;
@@ -46,15 +47,10 @@ async function bootstrap() {
       continue;
     }
 
-    const user = order.user
-      ? await users.findOne({ _id: order.user }, { projection: { country: 1 } })
-      : null;
+    const flow: ShopOrderFlow =
+      order.orderFlow === 'purchase' ? 'purchase' : 'request';
 
-    const country =
-      (order.shippingAddress as { country?: string } | undefined)?.country ||
-      (user?.country as string | undefined);
-
-    const nextNumber = buildMigratedShopOrderNumber(current, country);
+    const nextNumber = buildMigratedShopOrderNumber(current, undefined, flow);
     if (!nextNumber || nextNumber === current) {
       skipped += 1;
       continue;
