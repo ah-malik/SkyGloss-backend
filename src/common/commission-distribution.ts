@@ -23,7 +23,7 @@ export const TOTAL_FIRST_ORDER_COMMISSION_RATE = 0.1;
 export const DEFAULT_COMMISSION_RATES_PERCENT = {
   master_partner: 20,
   regional_partner: 0,
-  sub_promoter: 0,
+  // sub_promoter: 0, // removed — Sub-Promoter role migrated to Promoter
 } as const;
 
 /** Only Representatives (master_partner) earn commissions under the earning-type model. */
@@ -310,6 +310,7 @@ function isMainPromoterRole(role?: string): boolean {
   return role === UserRole.REGIONAL_PARTNER || role === 'regional_partner';
 }
 
+/** @deprecated Sub-Promoter role removed — kept for legacy unmigrated shop parents. */
 function isSubPromoterRole(role?: string): boolean {
   return role === UserRole.SUB_PROMOTER || role === 'sub_promoter';
 }

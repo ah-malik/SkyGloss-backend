@@ -24,6 +24,7 @@ import { NotificationType } from '../notifications/entities/notification.entity'
 import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
 import { UserDocument, UserRole, UserStatus } from '../users/entities/user.entity';
+import { normalizePartnerCode } from '../common/partner-code';
 import { ProductGroup, ProductGroupDocument } from '../product-groups/entities/product-group.entity';
 import { RegistrationFeesService } from '../registration-fees/registration-fees.service';
 import { calculateShippingFee, getShippingRegion, SHIPPING_FEE_AMOUNT } from '../common/shipping-config';
@@ -365,8 +366,12 @@ export class OrdersService implements OnModuleInit {
 
     const type = additionalMetadata.type || 'partner_registration';
     const country = additionalMetadata.country || '';
-    const success_path = type === 'shop_registration' ? '/login/shop?payment_success=true' : '/login/partner?payment_success=true';
-    const cancel_path = type === 'shop_registration' ? '/register/shop?payment_canceled=true' : '/register/partner?payment_canceled=true';
+    const success_path =
+      additionalMetadata.successPath ||
+      (type === 'shop_registration' ? '/login/shop?payment_success=true' : '/login/partner?payment_success=true');
+    const cancel_path =
+      additionalMetadata.cancelPath ||
+      (type === 'shop_registration' ? '/register/shop?payment_canceled=true' : '/register/partner?payment_canceled=true');
 
     // PRICING LOGIC
     let currency = 'usd';
@@ -622,7 +627,7 @@ export class OrdersService implements OnModuleInit {
       UserRole.DISTRIBUTOR,
       UserRole.MASTER_PARTNER,
       UserRole.REGIONAL_PARTNER,
-      UserRole.SUB_PROMOTER,
+      // UserRole.SUB_PROMOTER, // removed
     ];
     if (networkRoles.includes(viewer.role as UserRole)) {
       if (shouldHideShopRegistrationFromViewer(order as any, viewer)) {
@@ -1459,11 +1464,13 @@ export class OrdersService implements OnModuleInit {
 
   async getNetworkOrders(viewer: UserDocument): Promise<Order[]> {
     if (
-      viewer.role === UserRole.MASTER_PARTNER &&
+      (viewer.role === UserRole.MASTER_PARTNER ||
+        viewer.role === UserRole.REGIONAL_PARTNER) &&
       viewer.partnerCode?.trim()
     ) {
-      await this.repairPartnerDevelopmentCommissionsForRep(
+      await this.repairPartnerDevelopmentCommissionsForNetworkParent(
         viewer.partnerCode.trim(),
+        viewer.role,
       );
       await this.repairInflatedShopIntroSplitsForRep(viewer.partnerCode.trim());
     }
@@ -1654,18 +1661,33 @@ export class OrdersService implements OnModuleInit {
     let shopUser = await this.usersService.findOne(shopUserId);
     if (!shopUser || shopUser.role !== UserRole.CERTIFIED_SHOP) return;
 
-    if (!shopUser.shopIntroductionRepresentativeCode) {
-      shopUser = await this.usersService.assignShopEarningRepresentatives(shopUser);
-    } else if (
-      shopUser.partnerDevelopmentEligible !== true ||
-      !shopUser.partnerDevelopmentRepresentativeCode
-    ) {
-      // Re-evaluate FO eligibility (fixes shops blocked by the old default=false bug).
-      shopUser = await this.usersService.assignShopEarningRepresentatives(shopUser);
+    // Promoter Network FO first (same stamp shape as Rep FO: SI=P2, PD=P1).
+    // Must run before Rep re-assignment so we don't keep an upstream-Rep SI
+    // when the shop sits under an Add-to-Network linked Promoter.
+    shopUser = await this.usersService.assignShopPromoterNetworkEarnings(shopUser);
+
+    const promoterFoReady =
+      shopUser.partnerDevelopmentPromoterEligible === true &&
+      normalizePartnerCode(shopUser.shopIntroductionRepresentativeCode) ===
+        normalizePartnerCode(shopUser.referredByPartnerCode);
+
+    if (!promoterFoReady) {
+      if (!shopUser.shopIntroductionRepresentativeCode) {
+        shopUser = await this.usersService.assignShopEarningRepresentatives(shopUser);
+      } else if (
+        shopUser.partnerDevelopmentEligible !== true ||
+        !shopUser.partnerDevelopmentRepresentativeCode
+      ) {
+        // Re-evaluate Rep FO eligibility (fixes shops blocked by old default=false bug).
+        shopUser = await this.usersService.assignShopEarningRepresentatives(shopUser);
+      }
+      shopUser = await this.usersService.ensureShopPartnerDevelopmentAssignment(
+        shopUser,
+      );
+      // Re-apply promoter FO in case Rep assign ran first on a linked-promoter shop.
+      shopUser = await this.usersService.assignShopPromoterNetworkEarnings(shopUser);
     }
-    shopUser = await this.usersService.ensureShopPartnerDevelopmentAssignment(
-      shopUser,
-    );
+
     // Admin may have edited Child/Parent FO % after shop assignment — use live rates
     // until Partner Development is locked on first paid/fulfilled order.
     shopUser = await this.usersService.refreshShopFirstOrderRatesIfUnpaid(
@@ -1686,6 +1708,27 @@ export class OrdersService implements OnModuleInit {
       shopUser.partnerDevelopmentCommissionPaid === true;
 
     if (order.commissions && order.commissions.length > 0) {
+      // If FO stamps now point at a different SI recipient (e.g. Promoter FO
+      // fixed after an earlier Rep-only commission write), rebuild from scratch.
+      const expectedSi = normalizePartnerCode(
+        shopUser.shopIntroductionRepresentativeCode,
+      );
+      const existingSiLine = order.commissions.find(
+        (entry) => entry.earningType === 'Shop Introduction',
+      );
+      const actualSi = normalizePartnerCode(existingSiLine?.recipientPartnerCode);
+      const siMismatch =
+        !partnerDevelopmentAlreadyPaid &&
+        !!expectedSi &&
+        !!actualSi &&
+        actualSi !== expectedSi;
+
+      if (siMismatch) {
+        order.commissions = [];
+        order.markModified('commissions');
+        await order.save();
+        // Fall through to fresh commission build below.
+      } else {
       const hasPartnerDevelopment = order.commissions.some(
         (entry) => entry.earningType === 'Partner Development',
       );
@@ -1754,6 +1797,11 @@ export class OrdersService implements OnModuleInit {
             await this.usersService.markPartnerDevelopmentCommissionPaid(
               shopUserId,
             );
+            if (shopUser.partnerDevelopmentPromoterEligible === true) {
+              await this.usersService.markPartnerDevelopmentPromoterCommissionPaid(
+                shopUserId,
+              );
+            }
           }
         }
       } else if (
@@ -1800,6 +1848,7 @@ export class OrdersService implements OnModuleInit {
         await order.save();
       }
       return;
+      } // end else (no SI mismatch)
     }
 
     const monetary = resolveCommissionOrderAmounts(order);
@@ -1824,6 +1873,9 @@ export class OrdersService implements OnModuleInit {
       shopIntroUser?.customCommissionRate,
     );
 
+    // Promoter Network FO uses the SAME stamps as Rep FO
+    // (SI = child Promoter, PD = parent Promoter, eligible = true).
+    // assignShopPromoterNetworkEarnings runs above so stamps are ready.
     const entries = calculateRepresentativeCommissionEntries({
       shopId: shopUserId,
       assignments: {
@@ -1871,6 +1923,12 @@ export class OrdersService implements OnModuleInit {
       await this.usersService.markPartnerDevelopmentCommissionPaid(
         shopUserId,
       );
+      // Keep promoter mirror flag in sync when FO recipients are Promoters
+      if (shopUser.partnerDevelopmentPromoterEligible === true) {
+        await this.usersService.markPartnerDevelopmentPromoterCommissionPaid(
+          shopUserId,
+        );
+      }
     }
 
     if (entries.length > 0) {
@@ -1880,14 +1938,21 @@ export class OrdersService implements OnModuleInit {
     }
   }
 
-  /** Orders where `viewer` (a Representative) is a commission recipient. */
+  /** Orders where `viewer` (Representative or Promoter) is a commission recipient. */
   async getCommissionOrders(viewer: UserDocument): Promise<Order[]> {
     const partnerCode = viewer.partnerCode?.trim();
-    if (!partnerCode || viewer.role !== UserRole.MASTER_PARTNER) {
+    if (
+      !partnerCode ||
+      (viewer.role !== UserRole.MASTER_PARTNER &&
+        viewer.role !== UserRole.REGIONAL_PARTNER)
+    ) {
       return [];
     }
 
-    await this.repairPartnerDevelopmentCommissionsForRep(partnerCode);
+    await this.repairPartnerDevelopmentCommissionsForNetworkParent(
+      partnerCode,
+      viewer.role,
+    );
     await this.repairInflatedShopIntroSplitsForRep(partnerCode);
 
     // Case-insensitive partner code match (legacy rows may differ in casing).
@@ -1908,35 +1973,45 @@ export class OrdersService implements OnModuleInit {
 
     return orders.map((order) => {
       const plain = order.toObject();
-      // Keep the full commission split on these orders so Rep viewers can see
-      // sibling First Order lines (e.g. Shop Intro 5% + Partner Dev 5%).
-      // Totals aggregation still scopes amounts to the intended recipient in the UI.
+      // Keep the full commission split so viewers can see sibling First Order lines
+      // (e.g. Shop Intro 5% + Partner Dev 5%).
       plain.commissions = plain.commissions || [];
       return plain;
     });
   }
 
   /**
-   * Repair: for each shop that still owes `repCode` a Partner Development
-   * commission (as PD parent), OR shops introduced by `repCode` that still
-   * need the first-order 5%+5% split — pay / split on that shop's earliest
+   * Repair: for each shop that still owes `parentCode` a Partner Development
+   * commission (as PD parent), OR shops introduced by `parentCode` that still
+   * need the first-order split — pay / split on that shop's earliest
    * successful (non-registration) order.
+   * Works for both Representative and Promoter FO parents (shared stamp fields).
    */
-  private async repairPartnerDevelopmentCommissionsForRep(
-    repCode: string,
+  private async repairPartnerDevelopmentCommissionsForNetworkParent(
+    parentCode: string,
+    parentRole: UserRole,
   ): Promise<void> {
-    await this.usersService.ensurePartnerDevelopmentNetworkForRepresentative(
-      repCode,
-    );
+    if (parentRole === UserRole.MASTER_PARTNER) {
+      await this.usersService.ensurePartnerDevelopmentNetworkForRepresentative(
+        parentCode,
+      );
+    } else if (parentRole === UserRole.REGIONAL_PARTNER) {
+      await this.usersService.ensurePartnerDevelopmentNetworkForPromoter(
+        parentCode,
+      );
+    } else {
+      return;
+    }
 
     const pendingShops =
-      await this.usersService.findShopsPendingPartnerDevelopment(repCode);
+      await this.usersService.findShopsPendingPartnerDevelopment(parentCode);
 
     const shopIds = new Set(pendingShops.map((shop) => String(shop._id)));
 
-    // Also include shops introduced by this Rep that still need PD split
-    // (covers Rep2 loading commissions and triggering parent PD repair).
-    const introShops = await this.usersService.findShopsByIntroductionRep(repCode);
+    // Also include shops introduced by this parent that still need PD split
+    // (covers child loading commissions and triggering parent PD repair).
+    const introShops =
+      await this.usersService.findShopsByIntroductionRep(parentCode);
     for (const shop of introShops) {
       if (shop.partnerDevelopmentCommissionPaid === true) continue;
       shopIds.add(String(shop._id));
@@ -2193,8 +2268,18 @@ export class OrdersService implements OnModuleInit {
       return;
     }
 
-    const updatedShop =
-      await this.usersService.ensureShopPartnerDevelopmentAssignment(shopUser);
+    // Prefer Promoter FO stamps (same order as applyOrderCommissions).
+    let updatedShop =
+      await this.usersService.assignShopPromoterNetworkEarnings(shopUser);
+    if (
+      updatedShop.partnerDevelopmentEligible !== true ||
+      !updatedShop.partnerDevelopmentRepresentativeCode
+    ) {
+      updatedShop =
+        await this.usersService.ensureShopPartnerDevelopmentAssignment(
+          updatedShop,
+        );
+    }
     if (
       updatedShop.partnerDevelopmentEligible !== true ||
       !updatedShop.partnerDevelopmentRepresentativeCode
@@ -2236,11 +2321,16 @@ export class OrdersService implements OnModuleInit {
     order.markModified('commissions');
     await order.save();
     await this.usersService.markPartnerDevelopmentCommissionPaid(shopUserId);
+    if (updatedShop.partnerDevelopmentPromoterEligible === true) {
+      await this.usersService.markPartnerDevelopmentPromoterCommissionPaid(
+        shopUserId,
+      );
+    }
   }
 
   /**
-   * Scan commission orders for this Rep and shrink any FO Shop Intro still at
-   * 10% when Partner Development is already present on the same order.
+   * Scan commission orders for this Rep/Promoter and shrink any FO Shop Intro
+   * still inflated when Partner Development is already present on the same order.
    */
   private async repairInflatedShopIntroSplitsForRep(
     repCode: string,

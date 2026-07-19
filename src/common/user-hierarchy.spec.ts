@@ -8,17 +8,18 @@ import {
 describe('user-hierarchy visibility', () => {
   it('defines strict descendant roles', () => {
     expect(isStrictDescendantRole('partner', 'certified_shop')).toBe(true);
-    expect(isStrictDescendantRole('regional_partner', 'sub_promoter')).toBe(true);
+    expect(isStrictDescendantRole('regional_partner', 'certified_shop')).toBe(true);
     expect(isStrictDescendantRole('regional_partner', 'regional_partner')).toBe(false);
+    // Sub-Promoter removed from hierarchy — same-level / unknown roles are not descendants
+    expect(isStrictDescendantRole('regional_partner', 'sub_promoter')).toBe(false);
     expect(isStrictDescendantRole('sub_promoter', 'regional_partner')).toBe(false);
   });
 
   it('limits order placer visibility to child roles', () => {
-    expect(canViewerSeeOrderPlacerRole('regional_partner', 'sub_promoter')).toBe(true);
     expect(canViewerSeeOrderPlacerRole('regional_partner', 'certified_shop')).toBe(true);
     expect(canViewerSeeOrderPlacerRole('regional_partner', 'regional_partner')).toBe(false);
-    expect(canViewerSeeOrderPlacerRole('sub_promoter', 'certified_shop')).toBe(true);
-    expect(canViewerSeeOrderPlacerRole('sub_promoter', 'sub_promoter')).toBe(false);
+    expect(canViewerSeeOrderPlacerRole('master_partner', 'regional_partner')).toBe(true);
+    expect(canViewerSeeOrderPlacerRole('master_partner', 'certified_shop')).toBe(true);
   });
 
   it('allows own commission but hides parent commission', () => {
@@ -40,10 +41,10 @@ describe('user-hierarchy visibility', () => {
     ).toBe(true);
     expect(
       canViewerSeeCommissionRecipient(
+        'master_partner',
         'regional_partner',
-        'sub_promoter',
-        'SUB01',
         'PROM01',
+        'REP01',
       ),
     ).toBe(true);
   });
@@ -51,6 +52,6 @@ describe('user-hierarchy visibility', () => {
   it('only includes viewer orders for hub', () => {
     expect(shouldIncludeViewerInNetworkOrders('partner')).toBe(true);
     expect(shouldIncludeViewerInNetworkOrders('regional_partner')).toBe(false);
-    expect(shouldIncludeViewerInNetworkOrders('sub_promoter')).toBe(false);
+    expect(shouldIncludeViewerInNetworkOrders('master_partner')).toBe(false);
   });
 });

@@ -78,7 +78,7 @@ export class UsersController {
   @Roles(
     UserRole.MASTER_PARTNER,
     UserRole.REGIONAL_PARTNER,
-    UserRole.SUB_PROMOTER,
+    // UserRole.SUB_PROMOTER, // removed — migrated to Promoter
     UserRole.DISTRIBUTOR,
     UserRole.PARTNER,
   )
@@ -177,6 +177,15 @@ export class UsersController {
     return this.usersService.linkRepresentativeToViewer(query, user);
   }
 
+  // Promoter linking is admin-only via POST users/admin/network/add-member.
+  // Self-service search/add endpoints intentionally disabled.
+  // @Get('network/search-promoter')
+  // @Roles(UserRole.REGIONAL_PARTNER)
+  // searchPromoter(...) { ... }
+  // @Post('network/add-promoter')
+  // @Roles(UserRole.REGIONAL_PARTNER)
+  // addPromoter(...) { ... }
+
   @Get('partners-list')
   @Roles(UserRole.ADMIN, UserRole.MASTER_PARTNER)
   async getPartnersList() {
@@ -217,6 +226,7 @@ export class UsersController {
       'password',
       'hasSeenWelcomePopup',
       'profileImage',
+      'preferredLanguage',
     ];
 
     const updatePayload: any = {};
@@ -246,7 +256,7 @@ export class UsersController {
   @Roles(
     UserRole.MASTER_PARTNER,
     UserRole.REGIONAL_PARTNER,
-    UserRole.SUB_PROMOTER,
+    // UserRole.SUB_PROMOTER, // removed
     UserRole.DISTRIBUTOR,
     UserRole.PARTNER,
   )

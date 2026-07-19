@@ -7,6 +7,7 @@ export enum UserRole {
   ADMIN = 'admin',
   MASTER_PARTNER = 'master_partner',
   REGIONAL_PARTNER = 'regional_partner',
+  /** @deprecated Sub-Promoter role removed — migrated to REGIONAL_PARTNER (Promoter Network). Kept for legacy DB reads only. */
   SUB_PROMOTER = 'sub_promoter',
   DISTRIBUTOR = 'distributor',
   PARTNER = 'partner',
@@ -142,6 +143,60 @@ export class User {
   operationalPromoterCodes?: string[];
 
   /**
+   * Structured operational Promoter links (keeps codes array in sync).
+   * First Order rates apply only to shops created after linkedAt — same model as Representatives.
+   */
+  @Prop({
+    type: [
+      {
+        partnerCode: { type: String, required: true },
+        linkedAt: { type: Date, required: true },
+        /** Child Promoter Shop Introduction % on eligible shops' first order (default 10). */
+        firstOrderShopIntroductionRate: { type: Number, default: 10 },
+        /** Parent Promoter Partner Development % on eligible shops' first order (default 5). */
+        firstOrderPartnerDevelopmentRate: { type: Number, default: 5 },
+      },
+    ],
+    default: [],
+  })
+  operationalPromoterLinks?: Array<{
+    partnerCode: string;
+    linkedAt: Date;
+    firstOrderShopIntroductionRate?: number;
+    firstOrderPartnerDevelopmentRate?: number;
+  }>;
+
+  /**
+   * Promoter who invited/added this Promoter (Partner Development parent), OR —
+   * when set on a shop — the Partner Development Promoter for Promoter-Network FO.
+   */
+  @Prop({ sparse: true })
+  partnerDevelopmentPromoterCode?: string;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
+  partnerDevelopmentPromoterId?: MongooseSchema.Types.ObjectId;
+
+  /** Shop Introduction Promoter — assigned for Promoter-Network FO shops. */
+  @Prop({ sparse: true })
+  shopIntroductionPromoterCode?: string;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
+  shopIntroductionPromoterId?: MongooseSchema.Types.ObjectId;
+
+  /** True when shop joined child Promoter AFTER Promoter Add-to-Network link. */
+  @Prop()
+  partnerDevelopmentPromoterEligible?: boolean;
+
+  @Prop()
+  partnerDevelopmentPromoterRatePercent?: number;
+
+  @Prop()
+  shopIntroductionPromoterFirstOrderRatePercent?: number;
+
+  @Prop({ default: false })
+  partnerDevelopmentPromoterCommissionPaid?: boolean;
+
+  /**
    * Representative who invited/added this Representative (their Partner
    * Development Representative), OR — when set on a shop — the Partner
    * Development Representative for that shop (copied from the shop
@@ -241,6 +296,10 @@ export class User {
   @Prop()
   profileImage?: string;
 
+  /** UI language preference (Google Translate code, e.g. "es", "en"). */
+  @Prop()
+  preferredLanguage?: string;
+
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
   blockedBy?: MongooseSchema.Types.ObjectId;
 
@@ -250,7 +309,7 @@ export class User {
   @Prop({ unique: true, sparse: true })
   certificateNumber?: number;
 
-  /** Custom commission % for Representative / Promoter / Sub-Promoter. Omit for role default. */
+  /** Custom commission % for Representative / Promoter. Omit for role default. */
   @Prop({ min: 0, max: 100 })
   customCommissionRate?: number;
 }

@@ -105,6 +105,7 @@ export class AuthService {
         isPartnerPaid: user.isPartnerPaid,
         partnerCode: user.partnerCode,
         hasSeenWelcomePopup: user.hasSeenWelcomePopup,
+        preferredLanguage: user.preferredLanguage,
       },
     };
   }
@@ -154,6 +155,7 @@ export class AuthService {
               productGroup: user.productGroup,
               partnerCode: user.partnerCode,
               hasSeenWelcomePopup: user.hasSeenWelcomePopup,
+              preferredLanguage: user.preferredLanguage,
             },
           };
         }
@@ -182,6 +184,7 @@ export class AuthService {
           productGroup: user.productGroup,
           partnerCode: user.partnerCode,
           hasSeenWelcomePopup: user.hasSeenWelcomePopup,
+          preferredLanguage: user.preferredLanguage,
         },
       };
     } catch (err: any) {
@@ -317,7 +320,13 @@ export class AuthService {
     const partner = await (this.usersService as any).userModel.findOne({
       partnerCode: partnerId,
       role: {
-        $in: [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.SUB_PROMOTER, UserRole.DISTRIBUTOR, UserRole.PARTNER],
+        $in: [
+          UserRole.MASTER_PARTNER,
+          UserRole.REGIONAL_PARTNER,
+          // UserRole.SUB_PROMOTER, // removed — migrated to Promoter
+          UserRole.DISTRIBUTOR,
+          UserRole.PARTNER,
+        ],
       },
       status: 'active',
     });
@@ -358,13 +367,15 @@ export class AuthService {
       console.error('[AuthService] Failed to resolve product group by country:', err);
     }
 
-    // Force role and status for a new shop registration
+    // Force role and status for a new shop registration.
+    // Payment is no longer part of the registration form — unpaid shops can log in
+    // with Fusion product/course locked until they pay from the dashboard.
     const shopDto = {
       ...createUserDto,
       referredByPartnerCode: partnerId,
       couponCode: appliedCouponCode,
       role: UserRole.CERTIFIED_SHOP,
-      status: isFullyCovered ? UserStatus.ACTIVE : UserStatus.PENDING,
+      status: UserStatus.ACTIVE,
       isPartnerPaid: isFullyCovered ? true : false,
       isSelfRegistered: true,
       productGroup: resolvedProductGroup,
@@ -430,52 +441,16 @@ export class AuthService {
         console.error('Failed to create admin notification for new shop', err);
       }
 
-      // Create Stripe Checkout Session (unless bypassed by coupon)
-      if (!isFullyCovered) {
-        const checkoutMetadata: Record<string, unknown> = {
-          type: 'shop_registration',
-          referredByPartnerCode: user.referredByPartnerCode,
-          country: user.country,
-        };
-
-        if (registrationCoupon) {
-          checkoutMetadata.couponCode = registrationCoupon.code;
-          checkoutMetadata.registrationDiscount = registrationCoupon.discountAmount;
-          checkoutMetadata.finalAmount = registrationCoupon.totalAfterDiscount;
-        }
-
-        const stripeSession = await this.ordersService.createDistributorFeeCheckoutSession(
-          user._id.toString(),
-          user.email || '',
-          checkoutMetadata,
-        );
-
-        // Store session ID for manual verification fallback
-        await this.usersService.update(user._id.toString(), { stripeSessionId: (stripeSession as any).id }, { role: UserRole.ADMIN } as any);
-
-        return {
-          message: 'Registration successful. Redirecting to payment...',
-          stripeUrl: stripeSession.url,
-          user: {
-            id: user._id,
-            email: user.email,
-            role: user.role,
-            status: user.status,
-            hasSeenWelcomePopup: user.hasSeenWelcomePopup,
-          }
-        };
-      }
-
       return {
-        message: registrationCoupon
+        message: isFullyCovered
           ? 'Registration successful with coupon applied! You can now log in.'
-          : 'Registration successful via coupon! You can now log in.',
+          : 'Registration successful! You can now log in.',
         user: {
           id: user._id,
           email: user.email,
           role: user.role,
           status: user.status,
-          isPaid: true,
+          isPaid: isFullyCovered,
           hasSeenWelcomePopup: user.hasSeenWelcomePopup,
         }
       };
@@ -563,6 +538,7 @@ export class AuthService {
         isPartnerPaid: user.isPartnerPaid,
         partnerCode: user.partnerCode,
         hasSeenWelcomePopup: user.hasSeenWelcomePopup,
+        preferredLanguage: user.preferredLanguage,
       },
     };
   }

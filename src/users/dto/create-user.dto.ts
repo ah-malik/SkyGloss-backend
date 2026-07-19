@@ -163,10 +163,31 @@ export class CreateUserDto {
   @IsOptional()
   profileImage?: string;
 
-  /** Commission % override for Representative, Promoter, or Sub-Promoter. */
+  /** UI language preference (e.g. "es", "en"). */
+  @IsString()
+  @IsOptional()
+  preferredLanguage?: string;
+
+  /** Commission % override for Representative or Promoter. */
   @IsNumber()
   @Min(0)
   @Max(100)
   @IsOptional()
   customCommissionRate?: number | null;
+
+  /**
+   * First Order rates when creating a Rep/Promoter under another Rep/Promoter
+   * (same model as Admin Add to Network).
+   */
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  @IsOptional()
+  firstOrderShopIntroductionRate?: number;
+
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  @IsOptional()
+  firstOrderPartnerDevelopmentRate?: number;
 }

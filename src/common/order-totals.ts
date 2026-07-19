@@ -18,7 +18,7 @@ const PARTNER_NETWORK_ROLES = new Set<UserRole>([
   UserRole.DISTRIBUTOR,
   UserRole.MASTER_PARTNER,
   UserRole.REGIONAL_PARTNER,
-  UserRole.SUB_PROMOTER,
+  // UserRole.SUB_PROMOTER, // removed
 ]);
 
 /** Mongo filter to exclude shop registration orders from partner revenue stats. */

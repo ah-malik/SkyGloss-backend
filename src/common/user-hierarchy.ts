@@ -8,7 +8,7 @@ export const NETWORK_HIERARCHY_ORDER = [
   UserRole.DISTRIBUTOR,
   UserRole.MASTER_PARTNER,
   UserRole.REGIONAL_PARTNER,
-  UserRole.SUB_PROMOTER,
+  // UserRole.SUB_PROMOTER, // removed — Sub-Promoters migrated to Promoters
   UserRole.CERTIFIED_SHOP,
 ] as const;
 
@@ -52,8 +52,8 @@ export function canViewerSeeCommissionRecipient(
   recipientPartnerCode?: string,
   viewerPartnerCode?: string,
 ): boolean {
-  const normalizedRecipientCode = recipientPartnerCode?.trim();
-  const normalizedViewerCode = viewerPartnerCode?.trim();
+  const normalizedRecipientCode = recipientPartnerCode?.trim().toUpperCase();
+  const normalizedViewerCode = viewerPartnerCode?.trim().toUpperCase();
   if (
     normalizedViewerCode &&
     normalizedRecipientCode &&
@@ -101,20 +101,30 @@ export function filterCommissionsForViewerWithSplitContext<T extends CommissionL
     viewerPartnerCode,
   );
 
-  const normalizedViewerCode = viewerPartnerCode?.trim();
-  if (viewerRole !== UserRole.MASTER_PARTNER || !normalizedViewerCode) {
+  const normalizedViewerCode = viewerPartnerCode?.trim().toUpperCase();
+  // Rep Network + Promoter Network FO split transparency
+  if (
+    (viewerRole !== UserRole.MASTER_PARTNER &&
+      viewerRole !== UserRole.REGIONAL_PARTNER) ||
+    !normalizedViewerCode
+  ) {
     return base;
   }
 
   const viewerIsRecipient = commissions.some(
-    (entry) => entry.recipientPartnerCode?.trim() === normalizedViewerCode,
+    (entry) =>
+      entry.recipientPartnerCode?.trim().toUpperCase() === normalizedViewerCode,
   );
   if (!viewerIsRecipient) return base;
 
+  const siblingRole =
+    viewerRole === UserRole.REGIONAL_PARTNER
+      ? UserRole.REGIONAL_PARTNER
+      : UserRole.MASTER_PARTNER;
   const relatedRepLines = commissions.filter((entry) => {
-    const code = entry.recipientPartnerCode?.trim();
+    const code = entry.recipientPartnerCode?.trim().toUpperCase();
     if (!code || code === normalizedViewerCode) return false;
-    return entry.recipientRole === UserRole.MASTER_PARTNER;
+    return entry.recipientRole === siblingRole;
   });
 
   if (relatedRepLines.length === 0) return base;
@@ -122,13 +132,13 @@ export function filterCommissionsForViewerWithSplitContext<T extends CommissionL
   const seen = new Set(
     base.map(
       (entry) =>
-        `${entry.recipientPartnerCode?.trim() || ''}:${entry.recipientRole || ''}:${(entry as any).amount ?? ''}:${(entry as any).earningType || ''}`,
+        `${entry.recipientPartnerCode?.trim().toUpperCase() || ''}:${entry.recipientRole || ''}:${(entry as any).amount ?? ''}:${(entry as any).earningType || ''}`,
     ),
   );
 
   const merged = [...base];
   relatedRepLines.forEach((entry) => {
-    const key = `${entry.recipientPartnerCode?.trim() || ''}:${entry.recipientRole || ''}:${(entry as any).amount ?? ''}:${(entry as any).earningType || ''}`;
+    const key = `${entry.recipientPartnerCode?.trim().toUpperCase() || ''}:${entry.recipientRole || ''}:${(entry as any).amount ?? ''}:${(entry as any).earningType || ''}`;
     if (seen.has(key)) return;
     seen.add(key);
     merged.push(entry);
@@ -140,15 +150,26 @@ export function filterCommissionsForViewerWithSplitContext<T extends CommissionL
 /** Roles that must be linked to a parent network user via referredByPartnerCode. */
 export const HIERARCHY_PARENT_ROLES: Partial<Record<UserRole, UserRole[]>> = {
   [UserRole.DISTRIBUTOR]: [UserRole.PARTNER],
-  [UserRole.MASTER_PARTNER]: [UserRole.DISTRIBUTOR, UserRole.PARTNER, UserRole.MASTER_PARTNER],
-  [UserRole.REGIONAL_PARTNER]: [UserRole.MASTER_PARTNER],
-  [UserRole.SUB_PROMOTER]: [UserRole.REGIONAL_PARTNER],
+  // Representative → Representative / Distributor / Hub (never Promoter)
+  [UserRole.MASTER_PARTNER]: [
+    UserRole.MASTER_PARTNER,
+    UserRole.DISTRIBUTOR,
+    UserRole.PARTNER,
+  ],
+  // Promoter → Promoter / Representative / Distributor / Hub
+  [UserRole.REGIONAL_PARTNER]: [
+    UserRole.REGIONAL_PARTNER,
+    UserRole.MASTER_PARTNER,
+    UserRole.DISTRIBUTOR,
+    UserRole.PARTNER,
+  ],
+  // [UserRole.SUB_PROMOTER]: [UserRole.REGIONAL_PARTNER], // removed — use Promoter Network operational links
   [UserRole.CERTIFIED_SHOP]: [
     UserRole.PARTNER,
     UserRole.DISTRIBUTOR,
     UserRole.MASTER_PARTNER,
     UserRole.REGIONAL_PARTNER,
-    UserRole.SUB_PROMOTER,
+    // UserRole.SUB_PROMOTER, // removed
   ],
 };
 
@@ -166,11 +187,10 @@ export function getParentLinkLabel(childRole?: string): string {
     case UserRole.DISTRIBUTOR:
       return 'Assigned Hub';
     case UserRole.MASTER_PARTNER:
-      return 'Assigned Distributor / Representative';
     case UserRole.REGIONAL_PARTNER:
-      return 'Assigned Representative';
-    case UserRole.SUB_PROMOTER:
-      return 'Assigned Main Promoter';
+      return 'Add Network';
+    // case UserRole.SUB_PROMOTER:
+    //   return 'Assigned Main Promoter';
     case UserRole.CERTIFIED_SHOP:
       return 'Assigned Network User';
     default:
@@ -183,7 +203,7 @@ export const NETWORK_TRAVERSAL_ROLES = [
   UserRole.DISTRIBUTOR,
   UserRole.MASTER_PARTNER,
   UserRole.REGIONAL_PARTNER,
-  UserRole.SUB_PROMOTER,
+  // UserRole.SUB_PROMOTER, // removed
 ] as const;
 
 export function canTraverseNetwork(role?: string): boolean {

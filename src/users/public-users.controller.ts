@@ -23,7 +23,7 @@ export class PublicUsersController {
     if (!partnerCode || !PARTNER_CODE_REGEX.test(partnerCode)) {
       return {
         valid: false,
-        message: `Hub, Distributor, Representative, Promoter, or Sub-Promoter ID must be ${PARTNER_CODE_MIN_LENGTH}-${PARTNER_CODE_MAX_LENGTH} alphanumeric characters`,
+        message: `Hub, Distributor, Representative, or Promoter ID must be ${PARTNER_CODE_MIN_LENGTH}-${PARTNER_CODE_MAX_LENGTH} alphanumeric characters`,
       };
     }
 
@@ -34,7 +34,7 @@ export class PublicUsersController {
           $in: [
             UserRole.MASTER_PARTNER,
             UserRole.REGIONAL_PARTNER,
-            UserRole.SUB_PROMOTER,
+            // UserRole.SUB_PROMOTER, // removed
             UserRole.DISTRIBUTOR,
             UserRole.PARTNER,
           ],
@@ -79,7 +79,7 @@ export class PublicUsersController {
             $in: [
               UserRole.MASTER_PARTNER,
               UserRole.REGIONAL_PARTNER,
-              UserRole.SUB_PROMOTER,
+              // UserRole.SUB_PROMOTER, // removed
               UserRole.DISTRIBUTOR,
             ],
           },

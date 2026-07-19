@@ -29,7 +29,7 @@ export class OrdersController {
     UserRole.CERTIFIED_SHOP,
     UserRole.PARTNER,
     UserRole.REGIONAL_PARTNER,
-    UserRole.SUB_PROMOTER,
+    // UserRole.SUB_PROMOTER, // removed
     UserRole.MASTER_PARTNER,
     UserRole.DISTRIBUTOR,
   )
@@ -54,7 +54,9 @@ export class OrdersController {
       {
         type: 'shop_registration',
         referredByPartnerCode: user.referredByPartnerCode,
-        country: user.country
+        country: user.country,
+        successPath: '/dashboard/shop?payment_success=true',
+        cancelPath: '/dashboard/shop?payment_canceled=true',
       }
     );
     return { url: session.url };
@@ -68,7 +70,7 @@ export class OrdersController {
     UserRole.REGIONAL_PARTNER,
     UserRole.MASTER_PARTNER,
     UserRole.DISTRIBUTOR,
-    UserRole.SUB_PROMOTER,
+    // UserRole.SUB_PROMOTER, // removed
   )
   getMyOrders(@GetUser('_id') userId: string) {
     return this.ordersService.getMyOrders(userId);
@@ -81,7 +83,7 @@ export class OrdersController {
     UserRole.REGIONAL_PARTNER,
     UserRole.MASTER_PARTNER,
     UserRole.DISTRIBUTOR,
-    UserRole.SUB_PROMOTER,
+    // UserRole.SUB_PROMOTER, // removed
   )
   async getNetworkOrders(@GetUser() user: any) {
     try {
@@ -99,7 +101,7 @@ export class OrdersController {
     UserRole.REGIONAL_PARTNER,
     UserRole.MASTER_PARTNER,
     UserRole.DISTRIBUTOR,
-    UserRole.SUB_PROMOTER,
+    // UserRole.SUB_PROMOTER, // removed
   )
   getNetworkSalesStats(@GetUser() user: UserDocument) {
     return this.ordersService.getNetworkSalesStats(user);
@@ -107,7 +109,7 @@ export class OrdersController {
 
   @Get('commission-orders')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.MASTER_PARTNER)
+  @Roles(UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER)
   async getCommissionOrders(@GetUser() user: UserDocument) {
     return this.ordersService.getCommissionOrders(user);
   }
@@ -121,7 +123,7 @@ export class OrdersController {
     UserRole.MASTER_PARTNER,
     UserRole.DISTRIBUTOR,
     UserRole.ADMIN,
-    UserRole.SUB_PROMOTER,
+    // UserRole.SUB_PROMOTER, // removed
   )
   getOrderById(@Param('id') id: string, @GetUser() user: UserDocument) {
     return this.ordersService.getOrderById(id, user);
@@ -135,7 +137,7 @@ export class OrdersController {
     UserRole.REGIONAL_PARTNER,
     UserRole.MASTER_PARTNER,
     UserRole.DISTRIBUTOR,
-    UserRole.SUB_PROMOTER,
+    // UserRole.SUB_PROMOTER, // removed
   )
   payForOrder(
     @Param('id') id: string,
@@ -153,7 +155,7 @@ export class OrdersController {
     UserRole.REGIONAL_PARTNER,
     UserRole.MASTER_PARTNER,
     UserRole.DISTRIBUTOR,
-    UserRole.SUB_PROMOTER,
+    // UserRole.SUB_PROMOTER, // removed
   )
   verifyPayment(@Param('orderId') orderId: string) {
     return this.ordersService.verifyPayment(orderId);
@@ -270,7 +272,7 @@ export class OrdersController {
     UserRole.MASTER_PARTNER,
     UserRole.DISTRIBUTOR,
     UserRole.REGIONAL_PARTNER,
-    UserRole.SUB_PROMOTER,
+    // UserRole.SUB_PROMOTER, // removed
     UserRole.PARTNER,
     UserRole.CERTIFIED_SHOP,
   )
