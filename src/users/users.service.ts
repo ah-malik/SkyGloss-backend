@@ -367,10 +367,10 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
-   * When admin creates a Rep under another Rep (or Promoter under Promoter)
-   * via Add Network, also create the operational FO link — same model as
-   * Add to Network page. Skips the "already in network" guard because
-   * referredBy already places the child in the parent's hierarchy.
+   * When admin creates/edits a Rep under another Rep (or Promoter under Promoter)
+   * via Add Network, upsert the operational FO link — same model as
+   * Add to Network page. Updates rates if the link already exists and syncs
+   * unpaid FO-eligible shops.
    */
   private async ensureOperationalFoLinkOnCreate(
     child: UserDocument,
@@ -413,10 +413,31 @@ export class UsersService implements OnModuleInit {
     if (isRepUnderRep) {
       await this.ensureOperationalRepresentativeLinksMigrated(parent);
       const refreshed = await this.findOne(parent._id.toString());
+      const existingLinks = [...(refreshed?.operationalRepresentativeLinks || [])];
+      const linkIndex = existingLinks.findIndex(
+        (entry) => normalizePartnerCode(entry.partnerCode) === childCode,
+      );
       const alreadyLinked = (refreshed?.operationalRepresentativeCodes || [])
         .map((c) => normalizePartnerCode(c))
         .includes(childCode);
-      if (!alreadyLinked) {
+
+      if (linkIndex >= 0) {
+        const previous = existingLinks[linkIndex] as any;
+        existingLinks[linkIndex] = {
+          ...previous,
+          partnerCode: childCode,
+          linkedAt: previous.linkedAt || linkedAt,
+          firstOrderShopIntroductionRate: rates.shopIntroductionRate,
+          firstOrderPartnerDevelopmentRate: rates.partnerDevelopmentRate,
+        };
+        const repUpdate: Record<string, unknown> = {
+          $set: { operationalRepresentativeLinks: existingLinks },
+        };
+        if (!alreadyLinked) {
+          repUpdate.$addToSet = { operationalRepresentativeCodes: childCode };
+        }
+        await this.userModel.findByIdAndUpdate(parent._id, repUpdate);
+      } else {
         await this.userModel.findByIdAndUpdate(parent._id, {
           $addToSet: { operationalRepresentativeCodes: childCode },
           $push: {
@@ -429,20 +450,44 @@ export class UsersService implements OnModuleInit {
           },
         });
       }
+
       if (!normalizePartnerCode(child.partnerDevelopmentRepresentativeCode)) {
         await this.userModel.findByIdAndUpdate(child._id, {
           partnerDevelopmentRepresentativeCode: parentCode,
         });
       }
+
+      await this.syncFirstOrderRatesToEligibleShops(childCode, rates);
       return;
     }
 
     await this.ensureOperationalPromoterLinksMigrated(parent);
     const refreshed = await this.findOne(parent._id.toString());
+    const existingLinks = [...(refreshed?.operationalPromoterLinks || [])];
+    const linkIndex = existingLinks.findIndex(
+      (entry) => normalizePartnerCode(entry.partnerCode) === childCode,
+    );
     const alreadyLinked = (refreshed?.operationalPromoterCodes || [])
       .map((c) => normalizePartnerCode(c))
       .includes(childCode);
-    if (!alreadyLinked) {
+
+    if (linkIndex >= 0) {
+      const previous = existingLinks[linkIndex] as any;
+      existingLinks[linkIndex] = {
+        ...previous,
+        partnerCode: childCode,
+        linkedAt: previous.linkedAt || linkedAt,
+        firstOrderShopIntroductionRate: rates.shopIntroductionRate,
+        firstOrderPartnerDevelopmentRate: rates.partnerDevelopmentRate,
+      };
+      const promoterUpdate: Record<string, unknown> = {
+        $set: { operationalPromoterLinks: existingLinks },
+      };
+      if (!alreadyLinked) {
+        promoterUpdate.$addToSet = { operationalPromoterCodes: childCode };
+      }
+      await this.userModel.findByIdAndUpdate(parent._id, promoterUpdate);
+    } else {
       await this.userModel.findByIdAndUpdate(parent._id, {
         $addToSet: { operationalPromoterCodes: childCode },
         $push: {
@@ -455,12 +500,15 @@ export class UsersService implements OnModuleInit {
         },
       });
     }
+
     if (!normalizePartnerCode(child.partnerDevelopmentPromoterCode)) {
       await this.userModel.findByIdAndUpdate(child._id, {
         partnerDevelopmentPromoterCode: parentCode,
         partnerDevelopmentPromoterId: parent._id,
       });
     }
+
+    await this.syncPromoterFirstOrderRatesToEligibleShops(childCode, rates);
   }
 
   /** Assign Shop Introduction / Partner Development / Operational Support reps (one-time, immutable per earning type). */
@@ -774,16 +822,15 @@ export class UsersService implements OnModuleInit {
     if (shop.role !== UserRole.CERTIFIED_SHOP) return shop;
     if (shop.partnerDevelopmentCommissionPaid === true) return shop;
 
-    const siCode = normalizePartnerCode(shop.shopIntroductionRepresentativeCode);
-    const siUser = siCode ? await this.findByPartnerCode(siCode) : null;
-    const isNetworkFoStamp =
+    // Only clear Promoter-Network FO stamps here.
+    // Representative FO stamps (SI/PD on master_partner) must NOT be wiped when
+    // assignShopPromoterNetworkEarnings runs on a Rep-referred shop.
+    const isPromoterFoStamp =
       shop.partnerDevelopmentPromoterEligible === true ||
       !!normalizePartnerCode(shop.shopIntroductionPromoterCode) ||
-      (shop.partnerDevelopmentEligible === true &&
-        (siUser?.role === UserRole.REGIONAL_PARTNER ||
-          siUser?.role === UserRole.MASTER_PARTNER));
+      !!normalizePartnerCode(shop.partnerDevelopmentPromoterCode);
 
-    if (!isNetworkFoStamp) return shop;
+    if (!isPromoterFoStamp) return shop;
 
     const updated = await this.userModel
       .findByIdAndUpdate(
@@ -824,13 +871,14 @@ export class UsersService implements OnModuleInit {
 
     const childCode = normalizePartnerCode(shop.referredByPartnerCode);
     if (!childCode) {
+      // No certifier — only drop Promoter FO mirrors if present.
       return this.clearUnpaidFirstOrderNetworkStamps(shop);
     }
 
     const childPromoter = await this.findByPartnerCode(childCode);
     if (!childPromoter || childPromoter.role !== UserRole.REGIONAL_PARTNER) {
-      // Shop is no longer under a Promoter — drop stale unpaid FO stamps.
-      return this.clearUnpaidFirstOrderNetworkStamps(shop);
+      // Shop sits under Rep / Distributor / Hub — do NOT touch Rep FO stamps.
+      return shop;
     }
 
     // Live operational link is source of truth (handles unlink → re-link).
@@ -1526,6 +1574,13 @@ export class UsersService implements OnModuleInit {
     }
 
     const updatePayload: any = { ...updateUserDto };
+    const firstOrderShopIntroductionRate =
+      updateUserDto.firstOrderShopIntroductionRate;
+    const firstOrderPartnerDevelopmentRate =
+      updateUserDto.firstOrderPartnerDevelopmentRate;
+    delete updatePayload.firstOrderShopIntroductionRate;
+    delete updatePayload.firstOrderPartnerDevelopmentRate;
+
     const targetUserForHierarchy = await this.userModel.findById(id);
     if (!targetUserForHierarchy) {
       throw new BadRequestException('User not found');
@@ -1690,7 +1745,20 @@ export class UsersService implements OnModuleInit {
       .findByIdAndUpdate(id, updatePayload, { new: true })
       .exec();
 
-
+    if (
+      updatedUser &&
+      (updatedUser.role === UserRole.MASTER_PARTNER ||
+        updatedUser.role === UserRole.REGIONAL_PARTNER) &&
+      (firstOrderShopIntroductionRate !== undefined ||
+        firstOrderPartnerDevelopmentRate !== undefined ||
+        hierarchyFieldsTouched)
+    ) {
+      await this.ensureOperationalFoLinkOnCreate(
+        updatedUser,
+        firstOrderShopIntroductionRate,
+        firstOrderPartnerDevelopmentRate,
+      );
+    }
 
     return updatedUser;
   }

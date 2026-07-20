@@ -1480,12 +1480,17 @@ export class OrdersService implements OnModuleInit {
       return [];
     }
 
-    // Backfill pending commissions on PENDING shop orders so the orders table
-    // can show "Pending" amounts (cards still exclude these from totals).
+    // Backfill missing commissions on shop orders so FO lines appear after fixes.
+    const missingCommissionStatuses = [
+      OrderStatus.PENDING,
+      OrderStatus.PAID,
+      OrderStatus.SHIPPED,
+      OrderStatus.DELIVERED,
+    ];
     const pendingMissing = await this.orderModel
       .find({
         user: { $in: userIds },
-        status: OrderStatus.PENDING,
+        status: { $in: missingCommissionStatuses },
         ...registrationOrderExclusionFilter(),
         $or: [
           { commissions: { $exists: false } },
@@ -1493,14 +1498,14 @@ export class OrdersService implements OnModuleInit {
           { commissions: null },
         ],
       } as any)
-      .select('_id')
+      .select('_id status')
       .limit(50)
       .lean();
 
     for (const row of pendingMissing) {
       await this.applyOrderCommissions(
         String(row._id),
-        OrderStatus.PENDING,
+        (row as any).status || OrderStatus.PENDING,
       );
     }
 
@@ -2241,7 +2246,13 @@ export class OrdersService implements OnModuleInit {
     );
 
     const order = await this.orderModel.findById(orderId);
-    if (!order?.commissions?.length) return;
+    if (!order) return;
+
+    // Empty commissions (e.g. wiped by a prior bug) — rebuild full FO split.
+    if (!order.commissions?.length) {
+      await this.applyOrderCommissions(orderId, order.status as OrderStatus);
+      return;
+    }
 
     const hasPartnerDevelopment = order.commissions.some(
       (entry) => entry.earningType === 'Partner Development',
