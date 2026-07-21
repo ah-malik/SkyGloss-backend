@@ -19,6 +19,7 @@
     "migrate-sub-promoters-to-promoters": "ts-node --transpile-only src/migrate-sub-promoters-to-promoters.ts",
     "recalculate-order-commissions": "ts-node --transpile-only src/recalculate-order-commissions.ts",
     "migrate-order-numbers": "ts-node --transpile-only src/migrate-order-numbers.ts",
+    "repair-order-number-countries": "ts-node --transpile-only src/repair-order-number-countries.ts",
     "repair-order-fx": "ts-node --transpile-only src/repair-order-fx.ts",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",

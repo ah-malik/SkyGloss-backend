@@ -1,17 +1,23 @@
 /**
  * Shop / registration order IDs:
- * - Order request (non-USA / unpaid): SGPAKR0110, SGPAKR0117, …
- * - Paid / checkout:                   SGUSAP0110, SGUSAP0117, …
- * - Registration:                      SGREG0110,  SGREG0117, …
+ * - Order request:  SG{CCC}R0110  (e.g. SGPAKR0110, SGNEDR0117, SGENGR0124)
+ * - Paid / purchase: SG{CCC}P0110 (e.g. SGUSAP0110, SGFRAP0117)
+ * - Registration:   SGREG0110, SGREG0117, …
  *
+ * {CCC} is a 3-letter country code (Pakistan → PAK, Netherlands → NED, …).
  * Numeric part starts at 0110 and increases by 7 on every new entry.
+ * Request and purchase sequences are global across countries (per flow).
  */
 
 export const SHOP_ORDER_LEGACY_REQ_BASE = 254700;
 
 export type ShopOrderFlow = 'request' | 'purchase';
 
-/** Fixed prefixes for each ID family. */
+/** Flow letter after the country code: R = request, P = purchase. */
+export const SHOP_ORDER_REQUEST_FLOW_LETTER = 'R';
+export const SHOP_ORDER_PURCHASE_FLOW_LETTER = 'P';
+
+/** @deprecated Fixed prefixes kept for older imports / docs. Prefer getShopOrderPrefix. */
 export const SHOP_ORDER_REQUEST_PREFIX = 'SGPAKR';
 export const SHOP_ORDER_PURCHASE_PREFIX = 'SGUSAP';
 export const REGISTRATION_ORDER_PREFIX = 'SGREG';
@@ -49,7 +55,8 @@ const ORDER_COUNTRY_CODES: Record<string, string> = {
   france: 'FRA',
   italy: 'ITA',
   spain: 'ESP',
-  netherlands: 'NLD',
+  netherlands: 'NED',
+  holland: 'NED',
   belgium: 'BEL',
   switzerland: 'CHE',
   austria: 'AUT',
@@ -100,22 +107,38 @@ export function resolveOrderCountryCode(country?: string): string {
   return 'GLB';
 }
 
-export function getShopOrderPrefix(flow: ShopOrderFlow): string {
+export function getShopOrderFlowLetter(flow: ShopOrderFlow): string {
   return flow === 'request'
-    ? SHOP_ORDER_REQUEST_PREFIX
-    : SHOP_ORDER_PURCHASE_PREFIX;
+    ? SHOP_ORDER_REQUEST_FLOW_LETTER
+    : SHOP_ORDER_PURCHASE_FLOW_LETTER;
+}
+
+/** Prefix for a shop order: SG + country (3) + R|P (e.g. SGNEDR, SGUSAP). */
+export function getShopOrderPrefix(
+  flow: ShopOrderFlow,
+  country?: string,
+): string {
+  const countryCode = resolveOrderCountryCode(country);
+  return `SG${countryCode}${getShopOrderFlowLetter(flow)}`;
+}
+
+/** Regex matching any current-format shop order for a flow (any country). */
+export function getShopOrderNumberRegex(flow: ShopOrderFlow): RegExp {
+  const letter = getShopOrderFlowLetter(flow);
+  return new RegExp(`^SG[A-Z]{3}${letter}\\d+$`, 'i');
 }
 
 function padOrderSequence(sequence: number): string {
   return String(sequence).padStart(ORDER_SEQUENCE_DIGITS, '0');
 }
 
-/** Format shop order ID: SGPAKR0110 (request) or SGUSAP0110 (purchase). */
+/** Format shop order ID: SGNEDR0110 (request) or SGUSAP0110 (purchase). */
 export function formatShopOrderNumber(
   flow: ShopOrderFlow,
   sequence: number,
+  country?: string,
 ): string {
-  return `${getShopOrderPrefix(flow)}${padOrderSequence(sequence)}`;
+  return `${getShopOrderPrefix(flow, country)}${padOrderSequence(sequence)}`;
 }
 
 /** Format registration ID: SGREG0110. */
@@ -124,8 +147,8 @@ export function formatRegistrationOrderNumber(sequence: number): string {
 }
 
 /**
- * Extract sequence from the current shop ID formats only
- * (SGPAKR0110 / SGUSAP0110). Legacy formats are ignored so counters can reset.
+ * Extract sequence from current shop ID formats only
+ * (SG{CCC}R0110 / SG{CCC}P0110). Legacy formats are ignored so counters can reset.
  */
 export function extractCurrentShopOrderSequence(
   orderNumber?: string,
@@ -134,15 +157,14 @@ export function extractCurrentShopOrderSequence(
   if (!orderNumber) return null;
   const value = orderNumber.trim().toUpperCase();
 
-  const prefixes = flow
-    ? [getShopOrderPrefix(flow)]
-    : [SHOP_ORDER_REQUEST_PREFIX, SHOP_ORDER_PURCHASE_PREFIX];
+  const letters = flow
+    ? [getShopOrderFlowLetter(flow)]
+    : [SHOP_ORDER_REQUEST_FLOW_LETTER, SHOP_ORDER_PURCHASE_FLOW_LETTER];
 
-  for (const prefix of prefixes) {
-    if (!value.startsWith(prefix)) continue;
-    const numPart = value.slice(prefix.length);
-    if (!/^\d+$/.test(numPart)) continue;
-    const seq = parseInt(numPart, 10);
+  for (const letter of letters) {
+    const match = value.match(new RegExp(`^SG[A-Z]{3}${letter}(\\d+)$`));
+    if (!match) continue;
+    const seq = parseInt(match[1], 10);
     return Number.isNaN(seq) ? null : seq;
   }
 
@@ -191,7 +213,7 @@ export function extractShopOrderSequence(orderNumber?: string): number | null {
 export function isMigratableShopOrderNumber(orderNumber?: string): boolean {
   if (!orderNumber) return false;
   const value = orderNumber.trim().toUpperCase();
-  // Already on the new fixed-prefix format — skip migration.
+  // Already on the current country+flow format — skip migration.
   if (extractCurrentShopOrderSequence(value) != null) return false;
   return extractShopOrderSequence(orderNumber) != null;
 }
@@ -226,7 +248,8 @@ function nextSequenceFromMax(maxNum: number, start: number): number {
 }
 
 /**
- * Next sequence for request (SGPAKR*) or purchase (SGUSAP*).
+ * Next sequence for request (SG*R*) or purchase (SG*P*).
+ * Sequences are shared across countries within the same flow.
  * Only current-format IDs count, so the series resets to 0110.
  */
 export function getNextShopOrderSequenceForFlow(
@@ -267,15 +290,35 @@ export function getNextRegistrationOrderSequence(
 }
 
 /**
- * Migrate a legacy shop order number onto the new fixed-prefix format.
+ * Migrate a legacy shop order number onto the country+flow format.
  * Defaults to the request series when flow is unknown.
  */
 export function buildMigratedShopOrderNumber(
   orderNumber: string,
-  _country?: string,
+  country?: string,
   flow: ShopOrderFlow = 'request',
 ): string | null {
   const sequence = extractShopOrderSequence(orderNumber);
   if (sequence == null) return null;
-  return formatShopOrderNumber(flow, sequence);
+  return formatShopOrderNumber(flow, sequence, country);
+}
+
+/**
+ * Rebuild an existing current-format shop ID with the correct country code,
+ * keeping the same sequence and flow letter (R/P).
+ * Returns null when the number is not current-format or already matches.
+ */
+export function rebuildShopOrderNumberCountry(
+  orderNumber: string,
+  country?: string,
+  flow: ShopOrderFlow = 'request',
+): string | null {
+  const sequence = extractCurrentShopOrderSequence(orderNumber, flow);
+  if (sequence == null) return null;
+
+  const next = formatShopOrderNumber(flow, sequence, country);
+  if (next.toUpperCase() === orderNumber.trim().toUpperCase()) {
+    return null;
+  }
+  return next;
 }

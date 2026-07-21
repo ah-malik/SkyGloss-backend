@@ -1,6 +1,6 @@
 /**
- * Migrate legacy shop order numbers to the current fixed-prefix format
- * (SGPAKR#### for request / SGUSAP#### for purchase).
+ * Migrate legacy shop order numbers to the current country+flow format
+ * (SG{CCC}R#### for request / SG{CCC}P#### for purchase).
  *
  * Run: npm run migrate-order-numbers
  */

@@ -70,7 +70,7 @@ import {
   formatShopOrderNumber,
   getNextRegistrationOrderSequence,
   getNextShopOrderSequenceForFlow,
-  getShopOrderPrefix,
+  getShopOrderNumberRegex,
   type ShopOrderFlow,
 } from '../common/order-number';
 import { normalizeCurrencyCode } from '../common/currency-codes';
@@ -2829,21 +2829,20 @@ export class OrdersService implements OnModuleInit {
   }
 
   private async generateShopOrderNumber(
-    _country: string,
+    country: string,
     flow: ShopOrderFlow,
   ): Promise<string> {
     const nextSequence = await this.getNextShopOrderSequence(flow);
-    return formatShopOrderNumber(flow, nextSequence);
+    return formatShopOrderNumber(flow, nextSequence, country);
   }
 
   private async getNextShopOrderSequence(
     flow: ShopOrderFlow,
   ): Promise<number> {
-    const prefix = getShopOrderPrefix(flow);
     const matchingOrders = await this.orderModel
       .find({
         orderFlow: flow,
-        orderNumber: { $regex: new RegExp(`^${prefix}\\d+$`, 'i') },
+        orderNumber: { $regex: getShopOrderNumberRegex(flow) },
       })
       .select('orderNumber orderFlow')
       .lean()
