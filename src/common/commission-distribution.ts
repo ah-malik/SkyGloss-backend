@@ -15,26 +15,34 @@ export const EARNING_TYPES = [
 export type EarningType = (typeof EARNING_TYPES)[number];
 
 export const SHOP_INTRODUCTION_FIRST_ORDER_RATE = 0.05;
-export const PARTNER_DEVELOPMENT_FIRST_ORDER_RATE = 0.05;
+export const PARTNER_DEVELOPMENT_FIRST_ORDER_RATE = 0.1;
 export const SHOP_INTRODUCTION_SUBSEQUENT_RATE = 0.1;
-export const TOTAL_FIRST_ORDER_COMMISSION_RATE = 0.1;
+export const TOTAL_FIRST_ORDER_COMMISSION_RATE = 0.15;
 
-/** Default Rep Shop Introduction % when Add-to-Network FO split does not apply. */
+/** Default Shop Introduction % when FO network split does not apply. */
 export const DEFAULT_COMMISSION_RATES_PERCENT = {
   master_partner: 20,
-  regional_partner: 0,
+  regional_partner: 10,
   // sub_promoter: 0, // removed — Sub-Promoter role migrated to Promoter
 } as const;
 
-/** Only Representatives (master_partner) earn commissions under the earning-type model. */
+/** Representatives and Promoters earn Shop Introduction under the earning-type model. */
 export function isCommissionEligibleRole(role?: string): boolean {
   if (!role) return false;
-  return role === UserRole.MASTER_PARTNER || role === 'master_partner';
+  return (
+    role === UserRole.MASTER_PARTNER ||
+    role === 'master_partner' ||
+    role === UserRole.REGIONAL_PARTNER ||
+    role === 'regional_partner'
+  );
 }
 
 export function getDefaultCommissionRatePercent(role?: string): number {
   if (role === UserRole.MASTER_PARTNER || role === 'master_partner') {
     return DEFAULT_COMMISSION_RATES_PERCENT.master_partner;
+  }
+  if (role === UserRole.REGIONAL_PARTNER || role === 'regional_partner') {
+    return DEFAULT_COMMISSION_RATES_PERCENT.regional_partner;
   }
   return 0;
 }
@@ -100,16 +108,16 @@ export interface ShopEarningAssignments {
   partnerDevelopmentCommissionPaid?: boolean;
   /** Only shops created after Add-to-Network get FO Partner Development. */
   partnerDevelopmentEligible?: boolean;
-  /** Frozen PD % for this shop (parent cut from Child FO pool on first order). */
+  /** Frozen PD % for this shop (absolute Parent FO on first order). */
   partnerDevelopmentRatePercent?: number;
-  /** Frozen Child FO pool % (first-order total + subsequent rate for FO shops). */
+  /** Frozen Child FO % (first-order SI + subsequent SI for FO shops). */
   shopIntroductionFirstOrderRatePercent?: number;
 }
 
-/** Default FO Shop Introduction % for linked child Rep (REP2). */
-export const DEFAULT_FIRST_ORDER_SHOP_INTRODUCTION_PERCENT = 10;
-/** Default FO Partner Development % for parent Rep (REP1). */
-export const DEFAULT_FIRST_ORDER_PARTNER_DEVELOPMENT_PERCENT = 5;
+/** Default FO Child Shop Introduction % (absolute). */
+export const DEFAULT_FIRST_ORDER_SHOP_INTRODUCTION_PERCENT = 5;
+/** Default FO Parent Partner Development % (absolute). */
+export const DEFAULT_FIRST_ORDER_PARTNER_DEVELOPMENT_PERCENT = 10;
 
 /** Clamp a commission % to 0–100. */
 export function clampCommissionPercent(
@@ -123,7 +131,7 @@ export function clampCommissionPercent(
   return Math.round(n * 100) / 100;
 }
 
-/** Clamp admin FO Partner Development % (default 5). */
+/** Clamp admin FO Partner Development % (default 10). */
 export function normalizePartnerDevelopmentRatePercent(
   value?: number | null,
 ): number {
@@ -133,7 +141,7 @@ export function normalizePartnerDevelopmentRatePercent(
   );
 }
 
-/** Clamp admin FO Shop Introduction % for linked child Rep (default 10). */
+/** Clamp admin FO Shop Introduction % for linked child (default 5). */
 export function normalizeShopIntroductionFirstOrderRatePercent(
   value?: number | null,
 ): number {
@@ -144,12 +152,11 @@ export function normalizeShopIntroductionFirstOrderRatePercent(
 }
 
 /**
- * Normalize both FO rates. Parent (PD) must never exceed child (Shop Intro) rate.
- * Throws if parent > child (caller should map to BadRequestException).
+ * Normalize both FO rates (absolute percentages).
  *
- * Semantics: Child FO % is the total pool. Parent FO % is taken from that pool
- * on the first order only; child keeps the remainder. Subsequent orders pay the
- * full Child FO % to the child only.
+ * Semantics: Child FO % is Shop Introduction paid to the child.
+ * Parent FO % is Partner Development paid to the parent on first order only.
+ * Both are independent (not a pool split). Subsequent orders pay Child FO % only.
  */
 export function normalizeFirstOrderCommissionRates(params?: {
   shopIntroductionRate?: number | null;
@@ -158,53 +165,41 @@ export function normalizeFirstOrderCommissionRates(params?: {
   shopIntroductionRate: number;
   partnerDevelopmentRate: number;
 } {
-  const shopIntroductionRate = normalizeShopIntroductionFirstOrderRatePercent(
-    params?.shopIntroductionRate,
-  );
-  const partnerDevelopmentRate = normalizePartnerDevelopmentRatePercent(
-    params?.partnerDevelopmentRate,
-  );
-
-  if (partnerDevelopmentRate > shopIntroductionRate) {
-    throw new Error(
-      `Parent First Order Commission (${partnerDevelopmentRate}%) cannot exceed child Representative First Order Commission (${shopIntroductionRate}%).`,
-    );
-  }
-
-  return { shopIntroductionRate, partnerDevelopmentRate };
+  return {
+    shopIntroductionRate: normalizeShopIntroductionFirstOrderRatePercent(
+      params?.shopIntroductionRate,
+    ),
+    partnerDevelopmentRate: normalizePartnerDevelopmentRatePercent(
+      params?.partnerDevelopmentRate,
+    ),
+  };
 }
 
 /**
- * Split Child FO pool into parent cut + child remainder for a first order.
- * Example: child 15%, parent 7% → parent 7%, child keeps 8%.
+ * Resolve absolute FO rates for a first-order split.
+ * Example: child 5%, parent 10% → child SI 5%, parent PD 10% (total 15%).
  */
 export function resolveFirstOrderPoolSplit(params?: {
   shopIntroductionRate?: number | null;
   partnerDevelopmentRate?: number | null;
 }): {
-  /** Total Child FO pool (also used as subsequent-order rate for FO shops). */
+  /** Child FO % (first-order SI + subsequent-order SI). */
   childPoolPercent: number;
-  /** Parent share taken from the pool on first order only. */
+  /** Parent FO % on first order only. */
   parentPercent: number;
-  /** Child keeps this on first order (pool − parent). */
+  /** Child SI on first order (absolute — same as child pool). */
   childKeepPercent: number;
 } {
   const childPoolPercent = normalizeShopIntroductionFirstOrderRatePercent(
     params?.shopIntroductionRate,
   );
-  let parentPercent = normalizePartnerDevelopmentRatePercent(
+  const parentPercent = normalizePartnerDevelopmentRatePercent(
     params?.partnerDevelopmentRate,
   );
-  if (parentPercent > childPoolPercent) {
-    parentPercent = childPoolPercent;
-  }
   return {
     childPoolPercent,
     parentPercent,
-    childKeepPercent: clampCommissionPercent(
-      childPoolPercent - parentPercent,
-      0,
-    ),
+    childKeepPercent: childPoolPercent,
   };
 }
 
@@ -456,7 +451,12 @@ export async function resolveShopEarningAssignments(
 
   if (!result.shopIntroductionRepresentativeCode) {
     const chain = await resolveShopCommissionChain(shop, lookup);
-    if (chain.represented) {
+    // Shop certified by a Promoter → Promoter earns Shop Introduction.
+    // Do NOT skip to the upstream Representative (that left Promoters at 0%).
+    if (chain.promoter) {
+      result.shopIntroductionRepresentativeId = chain.promoter._id;
+      result.shopIntroductionRepresentativeCode = chain.promoter.partnerCode;
+    } else if (chain.represented) {
       result.shopIntroductionRepresentativeId = chain.represented._id;
       result.shopIntroductionRepresentativeCode = chain.represented.partnerCode;
     }
@@ -591,7 +591,7 @@ export function calculateRepresentativeCommissionEntries(params: {
     return entries;
   }
 
-  // Child FO % is the total pool for FO-eligible shops (first + subsequent).
+  // Child/Parent FO % are absolute (not a pool split).
   const split = resolveFirstOrderPoolSplit({
     shopIntroductionRate: assignments.shopIntroductionFirstOrderRatePercent,
     partnerDevelopmentRate: assignments.partnerDevelopmentRatePercent,
@@ -605,7 +605,7 @@ export function calculateRepresentativeCommissionEntries(params: {
       partnerDev._id !== shopIntro._id;
 
     if (canPayPartnerDev) {
-      // First order: parent takes their cut from the child pool; child keeps remainder.
+      // First order: child SI % + parent PD % (both absolute).
       entries.push(
         buildCommissionEntry(
           shopIntro,
@@ -623,7 +623,7 @@ export function calculateRepresentativeCommissionEntries(params: {
         ),
       );
     } else {
-      // FO-eligible but PD not payable → full child pool to child only.
+      // FO-eligible but PD not payable → child FO % only.
       entries.push(
         buildCommissionEntry(
           shopIntro,
@@ -635,7 +635,7 @@ export function calculateRepresentativeCommissionEntries(params: {
       );
     }
   } else {
-    // After first order: full Child FO % to child only (never hardcoded 10%).
+    // After first order: Child FO % to child only.
     entries.push(
       buildCommissionEntry(
         shopIntro,

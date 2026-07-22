@@ -124,9 +124,9 @@ export class User {
         partnerCode: { type: String, required: true },
         linkedAt: { type: Date, required: true },
         /** REP2 Shop Introduction % on eligible shops' first order (default 10). */
-        firstOrderShopIntroductionRate: { type: Number, default: 10 },
-        /** Parent (REP1) Partner Development % on eligible shops' first order (default 5). */
-        firstOrderPartnerDevelopmentRate: { type: Number, default: 5 },
+        firstOrderShopIntroductionRate: { type: Number, default: 5 },
+        /** Parent (REP1) Partner Development % on eligible shops' first order (default 10). */
+        firstOrderPartnerDevelopmentRate: { type: Number, default: 10 },
       },
     ],
     default: [],
@@ -152,9 +152,9 @@ export class User {
         partnerCode: { type: String, required: true },
         linkedAt: { type: Date, required: true },
         /** Child Promoter Shop Introduction % on eligible shops' first order (default 10). */
-        firstOrderShopIntroductionRate: { type: Number, default: 10 },
-        /** Parent Promoter Partner Development % on eligible shops' first order (default 5). */
-        firstOrderPartnerDevelopmentRate: { type: Number, default: 5 },
+        firstOrderShopIntroductionRate: { type: Number, default: 5 },
+        /** Parent Partner Development % on eligible shops' first order (default 10). */
+        firstOrderPartnerDevelopmentRate: { type: Number, default: 10 },
       },
     ],
     default: [],

@@ -517,6 +517,9 @@ export class UsersService implements OnModuleInit {
   ): Promise<UserDocument> {
     if (shop.role !== UserRole.CERTIFIED_SHOP) return shop;
 
+    // Do not rewrite locked FO payouts.
+    const foLocked = shop.partnerDevelopmentCommissionPaid === true;
+
     const assignments = await resolveShopEarningAssignments(
       shop,
       (code) => this.findByPartnerCode(code),
@@ -531,11 +534,24 @@ export class UsersService implements OnModuleInit {
 
     const updatePayload: Record<string, unknown> = {};
 
-    const shopIntroCode =
-      shop.shopIntroductionRepresentativeCode ||
-      assignments.shopIntroductionRepresentativeCode;
-
+    // If shop is under a Promoter but SI was wrongly stamped to upstream Rep,
+    // re-point SI to the Promoter (unless FO already paid).
+    const referredCode = normalizePartnerCode(shop.referredByPartnerCode);
+    const referredUser = referredCode
+      ? await this.findByPartnerCode(referredCode)
+      : null;
+    const currentSi = normalizePartnerCode(
+      shop.shopIntroductionRepresentativeCode,
+    );
     if (
+      !foLocked &&
+      referredUser?.role === UserRole.REGIONAL_PARTNER &&
+      referredCode &&
+      currentSi !== referredCode
+    ) {
+      updatePayload.shopIntroductionRepresentativeCode = referredCode;
+      updatePayload.shopIntroductionRepresentativeId = referredUser._id;
+    } else if (
       !shop.shopIntroductionRepresentativeCode &&
       assignments.shopIntroductionRepresentativeCode
     ) {
@@ -545,8 +561,44 @@ export class UsersService implements OnModuleInit {
         assignments.shopIntroductionRepresentativeCode;
     }
 
-    // Partner Development only for shops that joined AFTER Add-to-Network.
-    if (!shop.partnerDevelopmentRepresentativeCode) {
+    const shopIntroCode =
+      (updatePayload.shopIntroductionRepresentativeCode as string) ||
+      shop.shopIntroductionRepresentativeCode ||
+      assignments.shopIntroductionRepresentativeCode;
+
+    // Scenario 2: R4 → P1 → Shop — Promoter SI + upstream Rep PD (absolute FO defaults).
+    // Skip when Promoter FO (P1→P2) already stamped eligible with promoter PD.
+    if (
+      !foLocked &&
+      referredUser?.role === UserRole.REGIONAL_PARTNER &&
+      shop.partnerDevelopmentPromoterEligible !== true
+    ) {
+      const repParentCode = normalizePartnerCode(
+        referredUser.referredByPartnerCode,
+      );
+      const repParent = repParentCode
+        ? await this.findByPartnerCode(repParentCode)
+        : null;
+      if (repParent?.role === UserRole.MASTER_PARTNER && repParentCode) {
+        const rates = normalizeFirstOrderCommissionRates();
+        updatePayload.shopIntroductionRepresentativeCode = referredCode;
+        updatePayload.shopIntroductionRepresentativeId = referredUser._id;
+        updatePayload.partnerDevelopmentRepresentativeCode = repParentCode;
+        updatePayload.partnerDevelopmentRepresentativeId = repParent._id;
+        updatePayload.partnerDevelopmentEligible = true;
+        updatePayload.partnerDevelopmentRatePercent = rates.partnerDevelopmentRate;
+        updatePayload.shopIntroductionFirstOrderRatePercent =
+          rates.shopIntroductionRate;
+      }
+    }
+
+    // Partner Development only for shops that joined AFTER Add-to-Network (Rep FO).
+    if (
+      !updatePayload.partnerDevelopmentRepresentativeCode &&
+      !shop.partnerDevelopmentRepresentativeCode &&
+      !foLocked &&
+      referredUser?.role !== UserRole.REGIONAL_PARTNER
+    ) {
       let pdCode = normalizePartnerCode(
         assignments.partnerDevelopmentRepresentativeCode,
       );
@@ -635,12 +687,9 @@ export class UsersService implements OnModuleInit {
         normalizeShopIntroductionFirstOrderRatePercent(
           shop.shopIntroductionFirstOrderRatePercent,
         );
-      let ratePercent = normalizePartnerDevelopmentRatePercent(
+      const ratePercent = normalizePartnerDevelopmentRatePercent(
         shop.partnerDevelopmentRatePercent,
       );
-      if (ratePercent > shopIntroductionRatePercent) {
-        ratePercent = shopIntroductionRatePercent;
-      }
       return {
         eligible: true,
         ratePercent,
@@ -690,17 +739,14 @@ export class UsersService implements OnModuleInit {
           partnerDevelopmentRate: link.firstOrderPartnerDevelopmentRate,
         });
       } catch {
-        const shopIntroductionRate =
-          normalizeShopIntroductionFirstOrderRatePercent(
+        return {
+          shopIntroductionRate: normalizeShopIntroductionFirstOrderRatePercent(
             link.firstOrderShopIntroductionRate,
-          );
-        let partnerDevelopmentRate = normalizePartnerDevelopmentRatePercent(
-          link.firstOrderPartnerDevelopmentRate,
-        );
-        if (partnerDevelopmentRate > shopIntroductionRate) {
-          partnerDevelopmentRate = shopIntroductionRate;
-        }
-        return { shopIntroductionRate, partnerDevelopmentRate };
+          ),
+          partnerDevelopmentRate: normalizePartnerDevelopmentRatePercent(
+            link.firstOrderPartnerDevelopmentRate,
+          ),
+        };
       }
     })();
 
@@ -741,8 +787,8 @@ export class UsersService implements OnModuleInit {
     const additions = missing.map((partnerCode) => ({
       partnerCode,
       linkedAt: legacyLinkedAt,
-      firstOrderShopIntroductionRate: 10,
-      firstOrderPartnerDevelopmentRate: 5,
+      firstOrderShopIntroductionRate: 5,
+      firstOrderPartnerDevelopmentRate: 10,
     }));
 
     const updated = await this.userModel
@@ -783,8 +829,8 @@ export class UsersService implements OnModuleInit {
     const additions = missing.map((partnerCode) => ({
       partnerCode,
       linkedAt: legacyLinkedAt,
-      firstOrderShopIntroductionRate: 10,
-      firstOrderPartnerDevelopmentRate: 5,
+      firstOrderShopIntroductionRate: 5,
+      firstOrderPartnerDevelopmentRate: 10,
     }));
 
     const updated = await this.userModel
@@ -940,9 +986,6 @@ export class UsersService implements OnModuleInit {
           link.firstOrderPartnerDevelopmentRate,
         ),
       };
-      if (rates.partnerDevelopmentRate > rates.shopIntroductionRate) {
-        rates.partnerDevelopmentRate = rates.shopIntroductionRate;
-      }
     }
 
     const shopCreatedAt = (shop as any).createdAt
@@ -1271,17 +1314,15 @@ export class UsersService implements OnModuleInit {
               partnerDevelopmentRate: link.firstOrderPartnerDevelopmentRate,
             });
           } catch {
-            const shopIntroductionRate =
-              normalizeShopIntroductionFirstOrderRatePercent(
-                link.firstOrderShopIntroductionRate,
-              );
-            let partnerDevelopmentRate = normalizePartnerDevelopmentRatePercent(
-              link.firstOrderPartnerDevelopmentRate,
-            );
-            if (partnerDevelopmentRate > shopIntroductionRate) {
-              partnerDevelopmentRate = shopIntroductionRate;
-            }
-            return { shopIntroductionRate, partnerDevelopmentRate };
+            return {
+              shopIntroductionRate:
+                normalizeShopIntroductionFirstOrderRatePercent(
+                  link.firstOrderShopIntroductionRate,
+                ),
+              partnerDevelopmentRate: normalizePartnerDevelopmentRatePercent(
+                link.firstOrderPartnerDevelopmentRate,
+              ),
+            };
           }
         }
       }
@@ -1311,17 +1352,14 @@ export class UsersService implements OnModuleInit {
         partnerDevelopmentRate: link.firstOrderPartnerDevelopmentRate,
       });
     } catch {
-      const shopIntroductionRate =
-        normalizeShopIntroductionFirstOrderRatePercent(
+      return {
+        shopIntroductionRate: normalizeShopIntroductionFirstOrderRatePercent(
           link.firstOrderShopIntroductionRate,
-        );
-      let partnerDevelopmentRate = normalizePartnerDevelopmentRatePercent(
-        link.firstOrderPartnerDevelopmentRate,
-      );
-      if (partnerDevelopmentRate > shopIntroductionRate) {
-        partnerDevelopmentRate = shopIntroductionRate;
-      }
-      return { shopIntroductionRate, partnerDevelopmentRate };
+        ),
+        partnerDevelopmentRate: normalizePartnerDevelopmentRatePercent(
+          link.firstOrderPartnerDevelopmentRate,
+        ),
+      };
     }
   }
 
@@ -2088,14 +2126,54 @@ export class UsersService implements OnModuleInit {
     }
 
     if (viewer.role === UserRole.MASTER_PARTNER) {
+      // Direct network only: keep direct Promoters + their direct shops,
+      // but exclude shops under Promoters that are operationally linked
+      // under those direct Promoters (Scenario 3: R4 must not see P2 shops).
+      const directPromoterCodes = new Set(
+        promoters
+          .filter(
+            (p) =>
+              normalizePartnerCode(p.referredByPartnerCode) ===
+              normalizePartnerCode(partnerCode),
+          )
+          .map((p) => normalizePartnerCode(p.partnerCode))
+          .filter(Boolean),
+      );
+
+      const excludedCertifierCodes = new Set<string>();
+      for (const directCode of directPromoterCodes) {
+        const directPromoter = await this.findByPartnerCode(directCode);
+        if (!directPromoter) continue;
+        for (const linkedCode of directPromoter.operationalPromoterCodes || []) {
+          const code = normalizePartnerCode(linkedCode);
+          if (code) excludedCertifierCodes.add(code);
+        }
+      }
+
+      const visibleShops =
+        excludedCertifierCodes.size === 0
+          ? shops
+          : shops.filter((shop) => {
+              const certifier = normalizePartnerCode(shop.referredByPartnerCode);
+              return !certifier || !excludedCertifierCodes.has(certifier);
+            });
+
+      const visiblePromoters =
+        excludedCertifierCodes.size === 0
+          ? promoters
+          : promoters.filter((p) => {
+              const code = normalizePartnerCode(p.partnerCode);
+              return !code || !excludedCertifierCodes.has(code);
+            });
+
       return {
-        shops,
-        promoters,
+        shops: visibleShops,
+        promoters: visiblePromoters,
         subPromoters,
         distributors: [],
         representatives,
         represented: representatives,
-        partners: [...representatives, ...promoters],
+        partners: [...representatives, ...visiblePromoters],
         viewerRole: viewer.role,
       };
     }
@@ -2466,17 +2544,13 @@ export class UsersService implements OnModuleInit {
       firstOrderShopIntroductionRate?: number;
       firstOrderPartnerDevelopmentRate?: number;
     }) => {
-      let rates = {
-        shopIntroductionRate: 10,
-        partnerDevelopmentRate: 5,
-      };
       try {
-        rates = normalizeFirstOrderCommissionRates({
+        return normalizeFirstOrderCommissionRates({
           shopIntroductionRate: link?.firstOrderShopIntroductionRate,
           partnerDevelopmentRate: link?.firstOrderPartnerDevelopmentRate,
         });
       } catch {
-        rates = {
+        return {
           shopIntroductionRate: normalizeShopIntroductionFirstOrderRatePercent(
             link?.firstOrderShopIntroductionRate,
           ),
@@ -2484,11 +2558,7 @@ export class UsersService implements OnModuleInit {
             link?.firstOrderPartnerDevelopmentRate,
           ),
         };
-        if (rates.partnerDevelopmentRate > rates.shopIntroductionRate) {
-          rates.partnerDevelopmentRate = rates.shopIntroductionRate;
-        }
       }
-      return rates;
     };
 
     const linkedRepresentativesRaw = repCodes.length

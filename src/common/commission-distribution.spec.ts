@@ -47,14 +47,14 @@ describe('calculateRepresentativeCommissionEntries', () => {
     convertedUsdAmount: usd,
   });
 
-  it('first order: parent cut from child FO pool; child keeps remainder', () => {
+  it('first order: absolute Child FO % + Parent FO %', () => {
     const entries = calculateRepresentativeCommissionEntries({
       shopId: 'shop1',
       assignments: {
         partnerDevelopmentCommissionPaid: false,
         partnerDevelopmentEligible: true,
-        partnerDevelopmentRatePercent: 5,
-        shopIntroductionFirstOrderRatePercent: 10,
+        partnerDevelopmentRatePercent: 10,
+        shopIntroductionFirstOrderRatePercent: 5,
       },
       recipients: { shopIntroduction: rep2, partnerDevelopment: rep1 },
       monetary: monetary(100),
@@ -71,15 +71,15 @@ describe('calculateRepresentativeCommissionEntries', () => {
     expect(entries[1]).toMatchObject({
       recipientPartnerCode: 'REP0001',
       earningType: 'Partner Development',
-      percentage: 5,
-      amount: 5,
+      percentage: 10,
+      amount: 10,
     });
 
     const total = entries.reduce((sum, e) => sum + e.percentage, 0);
-    expect(total).toBe(10);
+    expect(total).toBe(15);
   });
 
-  it('rejects paying parent more than child by clamping PD to child FO rate', () => {
+  it('allows Parent FO % greater than Child FO % (absolute rates)', () => {
     const entries = calculateRepresentativeCommissionEntries({
       shopId: 'shop1',
       assignments: {
@@ -94,12 +94,12 @@ describe('calculateRepresentativeCommissionEntries', () => {
     });
 
     expect(entries.find((e) => e.earningType === 'Partner Development')).toMatchObject({
-      percentage: 10,
-      amount: 10,
+      percentage: 12,
+      amount: 12,
     });
     expect(entries.find((e) => e.earningType === 'Shop Introduction')).toMatchObject({
-      percentage: 0,
-      amount: 0,
+      percentage: 10,
+      amount: 10,
     });
   });
 
@@ -141,7 +141,7 @@ describe('calculateRepresentativeCommissionEntries', () => {
     });
   });
 
-  it('supports admin-configured First Order pool split (15% child / 7% parent → 8% + 7%)', () => {
+  it('supports admin-configured absolute FO rates (15% child / 7% parent → 15% + 7%)', () => {
     const entries = calculateRepresentativeCommissionEntries({
       shopId: 'shop-new',
       assignments: {
@@ -161,12 +161,12 @@ describe('calculateRepresentativeCommissionEntries', () => {
       amount: 7,
     });
     expect(entries.find((e) => e.earningType === 'Shop Introduction')).toMatchObject({
-      percentage: 8,
-      amount: 8,
+      percentage: 15,
+      amount: 15,
     });
     expect(
       entries.reduce((sum, e) => sum + e.percentage, 0),
-    ).toBe(15);
+    ).toBe(22);
   });
 
   it('second shop first order still pays Partner Development (per-shop, not once per child Rep)', () => {
@@ -195,8 +195,8 @@ describe('calculateRepresentativeCommissionEntries', () => {
     });
     expect(entries.find((e) => e.earningType === 'Shop Introduction')).toMatchObject({
       recipientPartnerCode: 'REP0002',
-      percentage: 5,
-      amount: 10,
+      percentage: 10,
+      amount: 20,
     });
   });
 
@@ -313,8 +313,8 @@ describe('calculateRepresentativeCommissionEntries', () => {
       shopId: 'shop1',
       assignments: {
         partnerDevelopmentEligible: true,
-        partnerDevelopmentRatePercent: 5,
-        shopIntroductionFirstOrderRatePercent: 10,
+        partnerDevelopmentRatePercent: 10,
+        shopIntroductionFirstOrderRatePercent: 5,
       },
       recipients: { shopIntroduction: rep2, partnerDevelopment: rep1 },
       monetary: {
@@ -326,8 +326,8 @@ describe('calculateRepresentativeCommissionEntries', () => {
       isFirstSuccessfulOrder: true,
     });
 
-    expect(entries[0].amount).toBe(5.4); // child keeps 5% of FO pool
-    expect(entries[1].amount).toBe(5.4); // parent cut 5%
+    expect(entries[0].amount).toBe(5.4); // child absolute 5%
+    expect(entries[1].amount).toBe(10.8); // parent absolute 10%
   });
 });
 
@@ -477,16 +477,30 @@ describe('resolveShopEarningAssignments', () => {
     expect(result.shopIntroductionRepresentativeCode).toBe('REP0002');
   });
 
-  it('backfills only the missing Partner Development assignment when Shop Introduction already exists', async () => {
+  it('assigns Shop Introduction to the direct Promoter (not upstream Rep)', async () => {
+    const promoter = {
+      _id: { toString: () => 'prom1' },
+      partnerCode: 'PROM01',
+      role: 'regional_partner',
+      referredByPartnerCode: 'REP01',
+    };
+    const rep = {
+      _id: { toString: () => 'rep1' },
+      partnerCode: 'REP01',
+      role: 'master_partner',
+    };
+    const promoterLookup = async (code: string) => {
+      if (code === 'PROM01') return promoter;
+      if (code === 'REP01') return rep;
+      return null;
+    };
+
     const result = await resolveShopEarningAssignments(
-      {
-        _id: { toString: () => 'shop1' },
-        shopIntroductionRepresentativeCode: 'REP0002',
-      },
-      lookup,
+      { _id: { toString: () => 'shop1' }, referredByPartnerCode: 'PROM01' },
+      promoterLookup,
     );
 
-    expect(result.partnerDevelopmentRepresentativeCode).toBe('REP0001');
+    expect(result.shopIntroductionRepresentativeCode).toBe('PROM01');
   });
 });
 
