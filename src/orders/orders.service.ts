@@ -355,17 +355,23 @@ export class OrdersService implements OnModuleInit {
   }
 
   async createDistributorFeeCheckoutSession(userId: string, email: string, additionalMetadata: any = {}) {
-    if (!this.stripe) {
-      throw new BadRequestException('Stripe is not configured on the server.');
-    }
-
-    let baseUrl = (this.configService.get<string>('FRONTEND_URL') || '').replace(/\/+$/, '');
-    if (process.env.NODE_ENV === 'production' || !baseUrl) {
-      baseUrl = 'https://portal.skygloss.com';
-    }
-
+    const user = await this.usersService.findOne(userId);
     const type = additionalMetadata.type || 'partner_registration';
-    const country = additionalMetadata.country || '';
+    const country =
+      additionalMetadata.country || user?.country || '';
+    const isUsaUser = this.isUsaCountry(country);
+    const stripeInstance = this.getStripeForUsaUser(isUsaUser);
+    const baseUrl = this.getFrontendBaseUrl();
+
+    const keyMode = ((isUsaUser
+      ? this.configService.get<string>('USA_STRIPE_SECRET_KEY')
+      : this.configService.get<string>('STRIPE_SECRET_KEY')) || '').startsWith('sk_live')
+      ? 'live'
+      : 'test';
+    console.log(
+      `[Stripe Registration] Using ${isUsaUser ? 'USA' : 'Global'} Stripe (${keyMode}) for country="${country}", frontend="${baseUrl}"`,
+    );
+
     const success_path =
       additionalMetadata.successPath ||
       (type === 'shop_registration' ? '/login/shop?payment_success=true' : '/login/partner?payment_success=true');
@@ -399,7 +405,6 @@ export class OrdersService implements OnModuleInit {
       tax_amount = 0;
     }
 
-    const user = await this.usersService.findOne(userId);
     const feeName = user
       ? getRegistrationFeeName(user.role)
       : type === 'shop_registration'
@@ -408,7 +413,7 @@ export class OrdersService implements OnModuleInit {
     const feeDescription = user
       ? getRegistrationFeeDescription(user.role)
       : type === 'shop_registration'
-        ? 'One-time fee to activate your SkyGloss Shop account.'
+        ? 'One-time fee to activate FUSION certification and online training courses'
         : 'One-time fee to activate your SkyGloss Hub account.';
 
     const line_items: Stripe.Checkout.SessionCreateParams.LineItem[] = [
@@ -438,14 +443,17 @@ export class OrdersService implements OnModuleInit {
       });
     }
 
+    const successJoiner = success_path.includes('?') ? '&' : '?';
+    const cancelJoiner = cancel_path.includes('?') ? '&' : '?';
+
     try {
-      const session = await this.stripe.checkout.sessions.create({
+      const session = await stripeInstance.checkout.sessions.create({
         payment_method_types: ['card'],
         allow_promotion_codes: true,
         line_items,
         mode: 'payment',
-        success_url: `${baseUrl}${success_path}&user_id=${userId}`,
-        cancel_url: `${baseUrl}${cancel_path}&user_id=${userId}`,
+        success_url: `${baseUrl}${success_path}${successJoiner}user_id=${userId}`,
+        cancel_url: `${baseUrl}${cancel_path}${cancelJoiner}user_id=${userId}`,
         client_reference_id: userId,
         customer_email: email,
         metadata: {
@@ -958,16 +966,52 @@ export class OrdersService implements OnModuleInit {
     return this.pdfService.generateOrderDetails(order);
   }
 
+  private async retrieveRegistrationCheckoutSession(
+    stripeSessionId: string,
+    country?: string,
+  ): Promise<Stripe.Checkout.Session> {
+    const isUsaUser = this.isUsaCountry(country || '');
+    const primary = this.getStripeForUsaUser(isUsaUser);
+    try {
+      return await primary.checkout.sessions.retrieve(stripeSessionId);
+    } catch (primaryError) {
+      // Fallback: session may have been created on the other Stripe account
+      // before country routing was added for registration fees.
+      const fallback =
+        isUsaUser && this.stripe
+          ? this.stripe
+          : !isUsaUser && this.usaStripe
+            ? this.usaStripe
+            : null;
+      if (!fallback || fallback === primary) {
+        throw primaryError;
+      }
+      return await fallback.checkout.sessions.retrieve(stripeSessionId);
+    }
+  }
+
   async verifyRegistrationPayment(userId: string): Promise<any> {
     const user = await this.usersService.findOne(userId);
     if (!user) throw new NotFoundException('User not found');
-    if (user.isPartnerPaid) return { status: 'already_paid', user };
+    if (user.isPartnerPaid) {
+      return {
+        status: 'already_paid',
+        user: {
+          ...(user.toObject?.() ?? user),
+          _id: user._id?.toString?.() ?? user._id,
+          isPartnerPaid: true,
+        },
+      };
+    }
 
     if (!user.stripeSessionId) {
       throw new BadRequestException('No registration payment session found for this user.');
     }
 
-    const session = await this.stripe.checkout.sessions.retrieve(user.stripeSessionId);
+    const session = await this.retrieveRegistrationCheckoutSession(
+      user.stripeSessionId,
+      user.country,
+    );
 
     if (session.payment_status === 'paid') {
       console.log(`[Manual Verify] Payment confirmed for user ${userId}. Activating...`);
@@ -1035,7 +1079,14 @@ export class OrdersService implements OnModuleInit {
           }
         }
 
-        return { status: 'success', user: updatedUser };
+        return {
+          status: 'success',
+          user: {
+            ...(updatedUser.toObject?.() ?? updatedUser),
+            _id: updatedUser._id?.toString?.() ?? updatedUser._id,
+            isPartnerPaid: true,
+          },
+        };
       }
     }
 
@@ -2708,7 +2759,7 @@ export class OrdersService implements OnModuleInit {
       baseUrl =
         process.env.NODE_ENV === 'production'
           ? 'https://portal.skygloss.com'
-          : 'http://localhost:3000';
+          : 'http://localhost:5173';
     }
     return baseUrl;
   }

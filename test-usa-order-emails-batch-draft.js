@@ -174,7 +174,7 @@ function wrapEmail(title, bodyRows, draftNote) {
           <tr>
             <td bgcolor="${BRAND_BLUE}" style="padding:36px; background-color:${BRAND_BLUE}; color:#ffffff; font-family: Arial, Helvetica, sans-serif; font-size:15px; line-height:1.65;">
               <p style="margin:0 0 14px 0; color:#ffffff;">Thank you for choosing SkyGloss.</p>
-              <p style="margin:0; color:#ffffff;">Best regards,<br>The SkyGloss Team</p>
+              <p style="margin:0; color:#ffffff;">Best Regards,<br>The SkyGloss Team</p>
             </td>
           </tr>
           ${footerBlocks()}
@@ -286,9 +286,9 @@ function buildUsaShippedHtml() {
   const body = [
     copyBlock([
       `Hello ${sampleCustomer.name},`,
-      `<strong style="font-weight:bold; color:#000000;">Your U.S. order is on its way.</strong>`,
-      `Great news&mdash;your SkyGloss order has shipped within the United States and is heading to you.`,
-      `You can track your package using the carrier details below. Domestic delivery times may vary by carrier and destination.`,
+      `<strong style="font-weight:bold; color:#000000;">Your order is on its way.</strong>`,
+      `Great News! Your SkyGloss order has shipped and is heading your way.`,
+      `You can track your package using the carrier details below. Delivery times may vary by carrier and destination.`,
     ]),
     detailsCard(
       'Tracking Details',
@@ -320,10 +320,10 @@ function buildUsaCancellationHtml() {
   const body = [
     copyBlock([
       `Hello ${sampleCustomer.name},`,
-      `<strong style="font-weight:bold; color:#000000;">Your U.S. order has been cancelled.</strong>`,
+      `<strong style="font-weight:bold; color:#000000;">Your order has been cancelled.</strong>`,
       `We're writing to confirm that order <strong style="font-weight:bold;">${orderNumber}</strong> has been cancelled and will not be processed further.`,
       wasPaid
-        ? `The total amount has been refunded to your original U.S. payment method. Please allow a few business days for the funds to appear in your account.`
+        ? `If payment was collected, the total amount will be refunded to your original payment method. Please allow a few days for the funds to appear in your account.`
         : `No payment was received for this order. You can place a new order at any time from your SkyGloss Portal.`,
     ]),
     detailsCard(
@@ -363,8 +363,7 @@ function buildUsaPartnerOrderBeforePaymentHtml() {
     copyBlock([
       `Hello ${sampleCustomer.name},`,
       `<strong style="font-weight:bold; color:#000000;">Your order has been created and is awaiting payment.</strong>`,
-      `As a SkyGloss <strong style="font-weight:bold;">${role}</strong> in the United States, your order <strong style="font-weight:bold;">${orderNumber}</strong> is reserved pending checkout. Please complete payment to confirm and process this order.`,
-      `Until payment is received, this order will remain pending and will not ship.`,
+      `Don't forget to complete payment. We will prepare your order as soon as payment is made.`,
     ]),
     detailsCard(
       'Order Details',
@@ -377,7 +376,7 @@ function buildUsaPartnerOrderBeforePaymentHtml() {
     itemsSummarySection('Order Summary', sampleItems, '$', 'USD', shipping, 'Total Due'),
     shippingAddressBlock(sampleAddress),
     helpBlock(
-      `This template applies to USA Hub, Representative, Distributor, and Promoter orders before payment. Questions? Contact <a href="mailto:sales@skygloss.com" style="color:${BRAND_BLUE}; text-decoration:none;">sales@skygloss.com</a>.`,
+      `USA hub representative distributor and promoter orders before payment. Questions? Contact <a href="mailto:sales@skygloss.com" style="color:${BRAND_BLUE}; text-decoration:none;">sales@skygloss.com</a>.`,
     ),
   ].join('');
 
@@ -397,7 +396,7 @@ function buildUsaShopPaymentReminderHtml(dayNumber = 2) {
   const body = [
     copyBlock([
       `Hello ${sampleCustomer.name},`,
-      `<strong style="font-weight:bold; color:#000000;">Reminder: complete payment for your U.S. shop order.</strong>`,
+      `<strong style="font-weight:bold; color:#000000;">Reminder: Don't forget to complete payment for your order.</strong>`,
       `You started checkout for order <strong style="font-weight:bold;">${orderNumber}</strong>, but payment has not been completed yet.`,
       `We send one payment reminder per day for up to <strong style="font-weight:bold;">3 days</strong>. This is reminder <strong style="font-weight:bold;">${dayNumber} of 3</strong>.${
         daysRemaining > 0

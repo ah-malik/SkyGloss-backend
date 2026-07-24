@@ -92,7 +92,7 @@ export function getRegistrationFeeName(role?: string): string {
 
 export function getRegistrationFeeDescription(role?: string): string {
   if (role === UserRole.CERTIFIED_SHOP || role === 'certified_shop') {
-    return 'One-time fee to activate your SkyGloss Shop account.';
+    return 'One-time fee to activate FUSION certification and online training courses';
   }
   if (isPartnerNetworkRole(role)) {
     return `One-time fee to activate your SkyGloss ${formatRoleLabel(role)} account.`;

@@ -71,10 +71,10 @@ function buildDraftUsaShopRegistrationHtml(details) {
                 <tr>
                   <td bgcolor="#ffffff" style="padding:36px 40px 8px 40px; background-color:#ffffff; color:#000000; font-family: Arial, Helvetica, sans-serif; font-size:15px; line-height:1.7; text-align:left;">
                     <p style="margin:0 0 18px 0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;">Hello ${details.name},</p>
-                    <p style="margin:0 0 18px 0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;"><strong style="font-weight:bold; color:#000000;">Welcome to SkyGloss</strong>, and thank you for registering your shop in the United States.</p>
-                    <p style="margin:0 0 18px 0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;">We're excited you've decided to join us.</p>
-                    <p style="margin:0 0 18px 0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;">Your shop account has been successfully created. To activate full access to the SkyGloss Portal&mdash;including training, product ordering, certification, and resources&mdash;please complete your registration payment.</p>
-                    <p style="margin:0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;">Whether you're here to expand your services, strengthen your skills, or explore a different approach to paint restoration, we're committed to helping your U.S. shop succeed every step of the way.</p>
+                    <p style="margin:0 0 18px 0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;"><strong style="font-weight:bold; color:#000000;">Welcome to SkyGloss, thank you for registering.</p>
+                    <p style="margin:0 0 18px 0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;">We're excited to show you around!</p>
+                    <p style="margin:0 0 18px 0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;">Your account has been successfully created. To activate full access to the SkyGloss Portal&mdash;including training, product ordering, certification, and resources&mdash;please complete your registration payment.</p>
+                    <p style="margin:0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;">Whether you're here to expand your services, strengthen your skills, or explore a different approach to paint restoration, we are committed to helping you every setps of the way</p>
                   </td>
                 </tr>
 
@@ -150,8 +150,8 @@ function buildDraftUsaShopRegistrationHtml(details) {
                 <tr>
                   <td bgcolor="#000000" style="padding:20px 40px 44px 40px; background-color:#000000; font-family: Arial, Helvetica, sans-serif; font-size:15px; line-height:1.65; color:#ffffff; text-align:left;">
 
-                    <p style="margin:0 0 8px 0; font-weight:bold; font-size:15px; line-height:1.5; color:#ffffff;">1. Complete Your Payment</p>
-                    <p style="margin:0 0 22px 0; font-weight:normal; font-size:15px; line-height:1.65; color:#ffffff;">As a U.S. shop, your registration is activated once payment is complete. Secure checkout is available through the SkyGloss Portal.</p>
+                    <p style="margin:0 0 8px 0; font-weight:bold; font-size:15px; line-height:1.5; color:#ffffff;">1. Get SkyGloss Certified</p>
+                    <p style="margin:0 0 22px 0; font-weight:normal; font-size:15px; line-height:1.65; color:#ffffff;">Get SkyGloss Certified with FUSION by completing the payment and starting the courses.</p>
 
                     <!-- CTA – wide pill button, centered -->
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 32px 0;">
@@ -170,14 +170,14 @@ function buildDraftUsaShopRegistrationHtml(details) {
                       </tr>
                     </tbody></table>
 
-                    <p style="margin:0 0 8px 0; font-weight:bold; font-size:15px; line-height:1.5; color:#ffffff;">2. Access Your Portal</p>
-                    <p style="margin:0 0 28px 0; font-weight:normal; font-size:15px; line-height:1.65; color:#ffffff;">After payment, log in to your SkyGloss Portal to access your dashboard, online training, product information, ordering, resources, and account settings.</p>
+                    <p style="margin:0 0 8px 0; font-weight:bold; font-size:15px; line-height:1.5; color:#ffffff;">2. Check out the Portal</p>
+                    <p style="margin:0 0 28px 0; font-weight:normal; font-size:15px; line-height:1.65; color:#ffffff;">SkyGloss is continuing to build a robust portal to have access to everything you need all in one place. From training courses to certification to marketing resources. Take a look around!</p>
 
                     <p style="margin:0 0 8px 0; font-weight:bold; font-size:15px; line-height:1.5; color:#ffffff;">3. Complete Your Online Training</p>
                     <p style="margin:0 0 28px 0; font-weight:normal; font-size:15px; line-height:1.65; color:#ffffff;">Complete the online certification courses at your own pace. Each lesson is designed to help you understand the SkyGloss process and prepare you for hands-on certification.</p>
 
                     <p style="margin:0 0 8px 0; font-weight:bold; font-size:15px; line-height:1.5; color:#ffffff;">4. Complete Your Certification</p>
-                    <p style="margin:0; font-weight:normal; font-size:15px; line-height:1.65; color:#ffffff;">Once you've completed your online training, submit a request for final certification. Our U.S. team will guide you through the remaining steps&mdash;including hands-on certification support based out of <strong style="font-weight:bold; color:#ffffff;">Phoenix, AZ</strong>&mdash;to become officially <strong style="font-weight:bold; color:#ffffff;">SkyGloss Certified.</strong></p>
+                    <p style="margin:0; font-weight:normal; font-size:15px; line-height:1.65; color:#ffffff;">Once you completed your online training, submit a request for final certification. This is where your local representative will work out the details to make sure that you're fully certified.</p>
 
                   </td>
                 </tr>
@@ -206,7 +206,7 @@ function buildDraftUsaShopRegistrationHtml(details) {
                 Your success is important to us.
               </p>
               <p style="margin:0 0 14px 0; color:#111111; font-size:15px; line-height:1.65; text-align:left;">
-                Whether you have questions about payment, training, products, certification, or implementing SkyGloss in your U.S. shop, our team is here to support you.
+                Whether you have questions about payment, training, products, certification, or implementing SkyGloss in your shop, our team is here to support you.
               </p>
               <p style="margin:0 0 14px 0; color:#111111; font-size:15px; line-height:1.65; text-align:left;">
                 Don't hesitate to reach out at any point along the way. We're committed to providing the guidance, resources, and support you need to get the most from your SkyGloss experience.
@@ -221,7 +221,7 @@ function buildDraftUsaShopRegistrationHtml(details) {
           <tr>
             <td bgcolor="${BRAND_BLUE}" style="padding:36px; background-color:${BRAND_BLUE}; color:#ffffff; font-family: Arial, Helvetica, sans-serif; font-size:15px; line-height:1.65;">
               <p style="margin:0 0 14px 0; color:#ffffff;">Thank you again for choosing SkyGloss.</p>
-              <p style="margin:0 0 14px 0; color:#ffffff;">We appreciate the opportunity to be part of your business and look forward to supporting you throughout payment, certification, and beyond.</p>
+              <p style="margin:0 0 14px 0; color:#ffffff;">We appreciate the opportunity to be part of your business and look forward to Supporting you throughout the on boarding process and certification. </p>
               <p style="margin:0 0 14px 0; color:#ffffff;">We're excited to be part of your journey.</p>
               <p style="margin:0; color:#ffffff;">Best regards,</p>
             </td>
