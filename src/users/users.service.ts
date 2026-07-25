@@ -7,7 +7,12 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import axios from 'axios';
 import { ProductGroup, ProductGroupDocument } from '../product-groups/entities/product-group.entity';
-import { getNetworkIdLabel, HUB_ID_LABEL } from '../common/role-labels';
+import {
+  getNetworkIdLabel,
+  HUB_ID_LABEL,
+  isPartnerNetworkRole,
+  PARTNER_NETWORK_ROLES,
+} from '../common/role-labels';
 import {
   normalizePartnerCode,
   validatePartnerCode,
@@ -57,7 +62,11 @@ export class UsersService implements OnModuleInit {
   async onModuleInit() {
     // One-time cleanup to remove null emails that cause duplicate key errors with sparse index
     try {
-      // Sync indexes to ensure unique: true, sparse: true is correctly applied
+      // Drop legacy global unique email index so the same email can exist once
+      // per portal (shop vs partner). Compound unique is email + role.
+      await this.migrateEmailIndexes();
+
+      // Sync indexes to ensure schema indexes (incl. email+role) are applied
       await this.userModel.syncIndexes();
       console.log('[UsersService] Indexes synchronized.');
 
@@ -222,12 +231,10 @@ export class UsersService implements OnModuleInit {
     }
 
     if (createUserDto.email) {
-      const existingUser = await this.userModel.findOne({
-        email: createUserDto.email,
-      });
-      if (existingUser) {
-        throw new BadRequestException('User already exists (email)');
-      }
+      await this.assertEmailAvailableForRole(
+        createUserDto.email,
+        createUserDto.role as UserRole,
+      );
     }
 
     if (createUserDto.username) {
@@ -331,8 +338,30 @@ export class UsersService implements OnModuleInit {
       }
     }
 
-    const createdUser = new this.userModel(userData);
-    const savedUser = await createdUser.save();
+    let savedUser: UserDocument;
+    try {
+      const createdUser = new this.userModel(userData);
+      savedUser = await createdUser.save();
+    } catch (err: any) {
+      if (err?.code === 11000) {
+        const key = Object.keys(err.keyPattern || err.keyValue || {})[0] || '';
+        if (key === 'email' || key.includes('email')) {
+          throw new BadRequestException(
+            'An account with this email already exists for this portal. Use a different email, or create the other portal role only if one does not already exist.',
+          );
+        }
+        if (key === 'partnerCode') {
+          throw new BadRequestException(
+            `${getNetworkIdLabel(userData.role)} already exists — choose a unique ID`,
+          );
+        }
+        if (key === 'username') {
+          throw new BadRequestException('User already exists (username)');
+        }
+        throw new BadRequestException('Duplicate value — please use a unique email or ID');
+      }
+      throw err;
+    }
 
     if (savedUser.role === UserRole.CERTIFIED_SHOP) {
       // Promoter Network FO first (identical stamp model to Rep FO).
@@ -1503,6 +1532,129 @@ export class UsersService implements OnModuleInit {
       .exec();
   }
 
+  /** Find a user by email/username whose role is in the given set (portal-scoped login). */
+  async findByUsernameOrEmailForRoles(
+    identifier: string,
+    roles: UserRole[],
+  ): Promise<UserDocument | null> {
+    if (!roles.length) return null;
+    return this.userModel
+      .findOne({
+        role: { $in: roles },
+        $or: [{ email: identifier }, { username: identifier }],
+      })
+      .exec();
+  }
+
+  async findByEmailForRoles(
+    email: string,
+    roles: UserRole[],
+  ): Promise<UserDocument | null> {
+    if (!roles.length) return null;
+    return this.userModel.findOne({ email, role: { $in: roles } }).exec();
+  }
+
+  /**
+   * Email may be reused across portals (shop vs partner network), but not
+   * within the same portal group (e.g. two partner roles, or two shops).
+   */
+  async assertEmailAvailableForRole(
+    email: string,
+    role: UserRole,
+    excludeUserId?: string,
+  ): Promise<void> {
+    const conflictingRoles = this.getEmailConflictRoles(role);
+    const query: Record<string, unknown> = {
+      email,
+      role: { $in: conflictingRoles },
+    };
+    if (excludeUserId) {
+      query._id = { $ne: excludeUserId };
+    }
+    const existing = await this.userModel.findOne(query).exec();
+    if (!existing) return;
+
+    if (role === UserRole.CERTIFIED_SHOP) {
+      throw new BadRequestException(
+        'A shop account with this email already exists',
+      );
+    }
+    if (isPartnerNetworkRole(role)) {
+      throw new BadRequestException(
+        'A partner network account with this email already exists',
+      );
+    }
+    throw new BadRequestException('User already exists (email)');
+  }
+
+  private getEmailConflictRoles(role: UserRole): UserRole[] {
+    if (role === UserRole.CERTIFIED_SHOP) {
+      return [UserRole.CERTIFIED_SHOP];
+    }
+    if (isPartnerNetworkRole(role) || role === UserRole.SUB_PROMOTER) {
+      return [
+        ...PARTNER_NETWORK_ROLES,
+        UserRole.SUB_PROMOTER,
+      ] as UserRole[];
+    }
+    return [role];
+  }
+
+  /**
+   * Drop the old globally-unique email index so shop + partner can share an email.
+   * Ensures compound unique (email + role). Safe to re-run.
+   */
+  private async migrateEmailIndexes(): Promise<void> {
+    const collection = this.userModel.collection;
+    let indexes: Array<{ name?: string; key?: Record<string, unknown> }> = [];
+    try {
+      indexes = (await collection.indexes()) as typeof indexes;
+    } catch (err) {
+      this.logger.warn(
+        `[UsersService] Could not list indexes for email migration: ${err}`,
+      );
+      return;
+    }
+
+    for (const idx of indexes) {
+      if (!idx.name || idx.name === '_id_') continue;
+      const keys = Object.keys(idx.key || {});
+      // Legacy: unique on email alone (email_1) — blocks same email across portals
+      const isLegacyEmailOnly =
+        keys.length === 1 &&
+        keys[0] === 'email' &&
+        idx.name !== 'email_1_role_1';
+      if (isLegacyEmailOnly) {
+        try {
+          await collection.dropIndex(idx.name);
+          this.logger.log(
+            `Dropped legacy email index "${idx.name}" (email is now unique per role).`,
+          );
+        } catch (err: any) {
+          this.logger.warn(
+            `Could not drop index "${idx.name}": ${err?.message || err}`,
+          );
+        }
+      }
+    }
+
+    // Ensure compound unique exists even if syncIndexes is skipped/fails
+    try {
+      await collection.createIndex(
+        { email: 1, role: 1 },
+        { unique: true, sparse: true, name: 'email_1_role_1' },
+      );
+      this.logger.log('Ensured compound unique index email_1_role_1');
+    } catch (err: any) {
+      // Already exists with same options — fine
+      if (err?.code !== 85 && err?.code !== 86) {
+        this.logger.warn(
+          `Could not ensure email_1_role_1 index: ${err?.message || err}`,
+        );
+      }
+    }
+  }
+
   async findByAccessCode(accessCode: string): Promise<UserDocument | null> {
     return this.userModel.findOne({ accessCode }).exec();
   }
@@ -1702,6 +1854,17 @@ export class UsersService implements OnModuleInit {
     if (updatePayload.email === '') delete updatePayload.email;
     if (updatePayload.username === '') delete updatePayload.username;
 
+    if (
+      updatePayload.email &&
+      updatePayload.email !== targetUserForHierarchy.email
+    ) {
+      await this.assertEmailAvailableForRole(
+        updatePayload.email,
+        roleAfterUpdate,
+        id,
+      );
+    }
+
     if (updatePayload.password) {
       updatePayload.password = await bcrypt.hash(updatePayload.password, 10);
     }
@@ -1718,6 +1881,18 @@ export class UsersService implements OnModuleInit {
       } else {
         this.normalizeCustomCommissionRate(roleAfterUpdate, updatePayload);
       }
+    }
+
+    if (
+      updatePayload.role !== undefined &&
+      updatePayload.role !== targetUserForHierarchy.role &&
+      (updatePayload.email || targetUserForHierarchy.email)
+    ) {
+      await this.assertEmailAvailableForRole(
+        updatePayload.email || targetUserForHierarchy.email!,
+        updatePayload.role as UserRole,
+        id,
+      );
     }
 
     const hierarchyFieldsTouched =

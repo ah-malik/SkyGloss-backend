@@ -22,7 +22,12 @@ export enum UserStatus {
 
 @Schema({ timestamps: true })
 export class User {
-  @Prop({ unique: true, sparse: true })
+  /**
+   * Email is unique per role (compound index below), not globally.
+   * Same email may exist once as a shop and once as a partner-network role
+   * (different passwords / documents).
+   */
+  @Prop()
   email?: string;
 
   @Prop({ unique: true, sparse: true })
@@ -316,3 +321,14 @@ export class User {
 
 
 export const UserSchema = SchemaFactory.createForClass(User);
+
+// One email may map to multiple portal accounts (shop vs partner), but not
+// two users with the same email AND the same role.
+UserSchema.index(
+  { email: 1, role: 1 },
+  {
+    unique: true,
+    sparse: true,
+    name: 'email_1_role_1',
+  },
+);

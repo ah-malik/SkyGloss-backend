@@ -8,7 +8,7 @@ import * as bcrypt from 'bcrypt';
 import { UsersService } from '../users/users.service';
 import { AccessCodesService } from '../access-codes/access-codes.service';
 import { UserRole, UserStatus } from '../users/entities/user.entity';
-import { LoginDto } from './dto/login.dto';
+import { AuthPortal } from './dto/login.dto';
 import { LoginAccessCodeDto } from './dto/login-access-code.dto';
 import { CreateUserDto } from '../users/dto/create-user.dto';
 import { User, UserDocument } from '../users/entities/user.entity';
@@ -28,6 +28,7 @@ import {
   formatRoleLabel,
   NETWORK_REFERENCE_ID_LABEL,
   isPartnerNetworkRole,
+  PARTNER_NETWORK_ROLES,
 } from '../common/role-labels';
 import {
   GLOBAL_HUB_PARTNER_CODE,
@@ -54,13 +55,55 @@ export class AuthService {
     private registrationFeesService: RegistrationFeesService,
   ) { }
 
-  async validateUser(identifier: string, pass: string): Promise<any> {
-    console.log(`[Auth] Validating user: ${identifier}`);
-    const user = await this.usersService.findByUsernameOrEmail(identifier);
-    console.log(`[Auth] User found: ${!!user}`);
-    if (user && user.password && (await bcrypt.compare(pass, user.password))) {
+  private rolesForPortal(portal: AuthPortal): UserRole[] {
+    if (portal === 'shop') {
+      return [UserRole.CERTIFIED_SHOP];
+    }
+    // Admin signs in via the partner portal (no dedicated admin login page).
+    return [...PARTNER_NETWORK_ROLES, UserRole.ADMIN] as UserRole[];
+  }
+
+  private otherPortalRoles(portal: AuthPortal): UserRole[] {
+    return portal === 'shop'
+      ? ([...PARTNER_NETWORK_ROLES, UserRole.ADMIN] as UserRole[])
+      : [UserRole.CERTIFIED_SHOP];
+  }
+
+  async validateUser(
+    identifier: string,
+    pass: string,
+    portal: AuthPortal,
+  ): Promise<any> {
+    console.log(`[Auth] Validating user: ${identifier} (portal=${portal})`);
+    const portalRoles = this.rolesForPortal(portal);
+    const user = await this.usersService.findByUsernameOrEmailForRoles(
+      identifier,
+      portalRoles,
+    );
+    console.log(`[Auth] User found for portal: ${!!user}`);
+
+    if (!user) {
+      const otherUser = await this.usersService.findByUsernameOrEmailForRoles(
+        identifier,
+        this.otherPortalRoles(portal),
+      );
+      if (otherUser) {
+        // Use BadRequest (not 401) so the frontend login toast is shown instead of
+        // the global 401 interceptor redirecting to the landing page.
+        throw new BadRequestException(
+          portal === 'shop'
+            ? 'This account belongs to the Partner portal. Please sign in at Partner Login.'
+            : 'This account belongs to the Shop portal. Please sign in at Shop Login.',
+        );
+      }
+      return null;
+    }
+
+    if (user.password && (await bcrypt.compare(pass, user.password))) {
       if (user.status === UserStatus.BLOCKED) {
-        throw new UnauthorizedException('Your account has been blocked. Please contact your partner or support.');
+        throw new UnauthorizedException(
+          'Your account has been blocked. Please contact your partner or support.',
+        );
       }
       const { password, ...result } = user.toObject();
       return result;
@@ -462,8 +505,23 @@ export class AuthService {
   }
 
   async forgotPassword(forgotPasswordDto: ForgotPasswordDto) {
-    const user = await this.usersService.findByEmail(forgotPasswordDto.email);
+    const portalRoles = this.rolesForPortal(forgotPasswordDto.portal);
+    const user = await this.usersService.findByEmailForRoles(
+      forgotPasswordDto.email,
+      portalRoles,
+    );
     if (!user) {
+      const otherUser = await this.usersService.findByEmailForRoles(
+        forgotPasswordDto.email,
+        this.otherPortalRoles(forgotPasswordDto.portal),
+      );
+      if (otherUser) {
+        throw new BadRequestException(
+          forgotPasswordDto.portal === 'shop'
+            ? 'This email is registered on the Partner portal. Use Partner Login → Forgot Password.'
+            : 'This email is registered on the Shop portal. Use Shop Login → Forgot Password.',
+        );
+      }
       throw new BadRequestException('User with this email does not exist');
     }
 

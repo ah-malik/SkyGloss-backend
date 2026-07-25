@@ -34,6 +34,13 @@ export class HttpExceptionFilter implements ExceptionFilter {
           : message,
     };
 
+    if (!(exception instanceof HttpException)) {
+      console.error(
+        `[HttpExceptionFilter] Unhandled error on ${request.method} ${request.url}:`,
+        exception,
+      );
+    }
+
     response.status(status).json(errorResponse);
   }
 }
