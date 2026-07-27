@@ -20,6 +20,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { PdfModule } from './pdf/pdf.module';
 import { RegistrationFeesModule } from './registration-fees/registration-fees.module';
 import { CouponsModule } from './coupons/coupons.module';
+import { EmailSettingsModule } from './email-settings/email-settings.module';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { CouponsModule } from './coupons/coupons.module';
     PdfModule,
     RegistrationFeesModule,
     CouponsModule,
+    EmailSettingsModule,
   ],
   controllers: [AppController],
   providers: [AppService, SeedService],

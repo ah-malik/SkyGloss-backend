@@ -1,10 +1,27 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import { formatRoleLabel } from '../common/role-labels';
 import { isGlobalHubPartnerCode } from '../common/global-hub';
 import { UserRole } from '../users/entities/user.entity';
 import { formatOrderItemDisplayName, formatOrderItemTypeLabel } from '../common/order-type';
+import { EmailSettingsService } from '../email-settings/email-settings.service';
+import { UsersService } from '../users/users.service';
+import {
+  buildLatestOrderCancelledHtml,
+  buildLatestOrderPaidHtml,
+  buildLatestOrderShippedHtml,
+} from './templates/latest-order-emails';
+import {
+  buildLatestWelcomeRegistrationHtml,
+  buildLatestRegistrationPaymentConfirmedHtml,
+} from './templates/latest-registration-emails';
+import { buildLatestPendingPaymentHtml } from './templates/latest-pending-payment-emails';
+import {
+  FooterContact,
+  resolveShopFooterContact,
+} from './templates/latest-shared';
+
 @Injectable()
 export class MailService {
   private transporter: nodemailer.Transporter;
@@ -12,7 +29,12 @@ export class MailService {
   private certifiedTransporter: nodemailer.Transporter;
   private readonly logger = new Logger(MailService.name);
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+    private emailSettingsService: EmailSettingsService,
+    @Inject(forwardRef(() => UsersService))
+    private usersService: UsersService,
+  ) {
     // Default Transporter (Support/General)
     this.transporter = nodemailer.createTransport({
       service: 'gmail',
@@ -114,6 +136,31 @@ export class MailService {
                     ✉️ certified@skygloss.com`;
   }
 
+  private async resolveLatestFooterContact(user: any): Promise<FooterContact> {
+    try {
+      if (user?.role === UserRole.CERTIFIED_SHOP && user) {
+        const rep = await this.usersService.getLocalRepresentativeForShop(user);
+        return resolveShopFooterContact(user, rep);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Failed to resolve shop representative for email footer: ${(error as Error)?.message}`,
+      );
+    }
+    return resolveShopFooterContact(user, null);
+  }
+
+  private async useLatestTemplates(): Promise<boolean> {
+    try {
+      return await this.emailSettingsService.isLatestActive();
+    } catch (error) {
+      this.logger.warn(
+        `Failed to read email template setting, using legacy: ${(error as Error)?.message}`,
+      );
+      return false;
+    }
+  }
+
   async sendPasswordResetEmail(to: string, token: string) {
     const resetLink = `https://portal.skygloss.com/reset-password?token=${token}`;
 
@@ -165,38 +212,54 @@ export class MailService {
   ) {
     const loginLink = this.getPortalLoginLink(userDetails?.role);
     const isActivated = Boolean(invoiceBuffer);
-    const portalButton = isActivated ? this.buildPortalAccessButton(loginLink) : '';
-    const contactFooter = this.buildShopContactFooter(userDetails, partnerContact);
     const recipients = isActivated
       ? Array.from(new Set([to, 'certified@skygloss.com'].filter(Boolean)))
       : [to, 'certified@skygloss.com'];
     const bcc = isActivated ? 'it@skygloss.com' : undefined;
+
+    if (await this.useLatestTemplates()) {
+      const footerContact = await this.resolveLatestFooterContact(userDetails);
+      const mailOptions: any = {
+        from: `"SkyGloss Sales" <certified@skygloss.com>`,
+        to: recipients.join(', '),
+        ...(bcc ? { bcc } : {}),
+        subject: 'Welcome to SkyGloss - Registration Confirmation',
+        html: buildLatestWelcomeRegistrationHtml(userDetails, {
+          loginLink,
+          isActivated,
+          footerContact,
+        }),
+        attachments: invoiceBuffer
+          ? [
+              {
+                filename: `Invoice_${orderNumber || 'Registration'}.pdf`,
+                content: invoiceBuffer,
+              },
+            ]
+          : undefined,
+      };
+      try {
+        await this.certifiedTransporter.sendMail(mailOptions);
+        this.logger.log(
+          `Registration confirmation email (latest) sent via Certified to ${to}`,
+        );
+      } catch (error) {
+        this.logger.error(
+          `Failed to send registration confirmation email to ${to}`,
+          error.stack,
+        );
+      }
+      return;
+    }
+
+    const portalButton = isActivated ? this.buildPortalAccessButton(loginLink) : '';
+    const contactFooter = this.buildShopContactFooter(userDetails, partnerContact);
 
     const mailOptions: any = {
       from: `"SkyGloss Sales" <certified@skygloss.com>`,
       to: recipients.join(', '),
       ...(bcc ? { bcc } : {}),
       subject: 'Welcome to SkyGloss - Registration Confirmation',
-      // html: `
-      //   <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-      //     <h2 style="color: #0EA0DC; text-align: center;">Registration Confirmation</h2> 
-      //     <p>Hello ${userDetails.firstName},</p>
-      //     <p>Thank you for registering your account with SkyGloss.</p>
-      //     <ul>
-      //       <li><strong>Name:</strong> ${userDetails.firstName} ${userDetails.lastName}</li>
-      //       <li><strong>Email:</strong> ${userDetails.email}</li>
-      //       <li><strong>Location:</strong> ${userDetails.city}, ${userDetails.country}</li>
-      //       <li><strong>Address:</strong> ${userDetails.address}</li>
-      //       <li><strong>Phone:</strong> ${userDetails.phoneNumber}</li>
-      //     </ul>
-      //     <p>Thank you so much. Your payment has been successfully processed. You may now access the SkyGloss Portal.</p>
-      //     <div style="text-align: center; margin: 30px 0;">
-      //       <a href="${loginLink}" style="background-color: #0EA0DC; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold;">Login to Portal</a>
-      //     </div>
-      //     <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
-      //     <p style="font-size: 12px; color: #999; text-align: center;">&copy; ${new Date().getFullYear()} SkyGloss, Inc. All Rights Reserved.</p>
-      //   </div>
-      // `,
       html: `
         <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
@@ -517,13 +580,48 @@ export class MailService {
     } | null,
   ) {
     const loginLink = this.getPortalLoginLink(userDetails?.role);
+    const recipients = Array.from(new Set([to, 'sales@skygloss.com'].filter(Boolean)));
+
+    if (await this.useLatestTemplates()) {
+      const footerContact = await this.resolveLatestFooterContact(userDetails);
+      const mailOptions: any = {
+        from: `"SkyGloss Sales" <sales@skygloss.com>`,
+        to: recipients.join(', '),
+        bcc: 'it@skygloss.com',
+        subject: 'SkyGloss - Payment & Activation Confirmed',
+        html: buildLatestRegistrationPaymentConfirmedHtml(userDetails, {
+          loginLink,
+          footerContact,
+        }),
+        attachments: invoiceBuffer
+          ? [
+              {
+                filename: `Invoice_${orderNumber || 'Registration'}.pdf`,
+                content: invoiceBuffer,
+              },
+            ]
+          : undefined,
+      };
+      try {
+        await this.salesTransporter.sendMail(mailOptions);
+        this.logger.log(
+          `Payment confirmation email (latest) sent to ${to}`,
+        );
+      } catch (error) {
+        this.logger.error(
+          `Failed to send payment confirmation email to ${to}`,
+          error.stack,
+        );
+      }
+      return;
+    }
+
     const portalButton = this.buildPortalAccessButton(loginLink);
     const contactFooter = this.buildShopContactFooter(userDetails, partnerContact);
     const showCertificationLocation =
       userDetails?.role !== UserRole.CERTIFIED_SHOP ||
       !partnerContact?.partnerCode ||
       isGlobalHubPartnerCode(partnerContact.partnerCode);
-    const recipients = Array.from(new Set([to, 'sales@skygloss.com'].filter(Boolean)));
 
     const mailOptions: any = {
       from: `"SkyGloss Sales" <sales@skygloss.com>`,
@@ -969,6 +1067,28 @@ export class MailService {
   }
 
   async sendOrderPaidCustomerConfirmation(order: any, user: any) {
+    if (await this.useLatestTemplates()) {
+      const footerContact = await this.resolveLatestFooterContact(user);
+      const mailOptions = {
+        from: `"SkyGloss Portal" <sales@skygloss.com>`,
+        to: user.email,
+        subject: `Order Confirmation: ${order.orderNumber}`,
+        html: buildLatestOrderPaidHtml(order, user, footerContact),
+      };
+      try {
+        await this.salesTransporter.sendMail(mailOptions);
+        this.logger.log(
+          `Order paid confirmation (latest) sent to customer ${user.email} for ${order.orderNumber}`,
+        );
+      } catch (error) {
+        this.logger.error(
+          `Failed to send order paid confirmation to customer`,
+          error.stack,
+        );
+      }
+      return;
+    }
+
     const subtotal = order.items.reduce((sum: number, item: any) => sum + (item.price * item.quantity), 0);
     const tax = subtotal * 0.08;
 
@@ -1067,6 +1187,28 @@ export class MailService {
 
     if (!customerEmail) {
       this.logger.warn(`No customer email for shipped order ${order.orderNumber}`);
+      return;
+    }
+
+    if (await this.useLatestTemplates()) {
+      const footerContact = await this.resolveLatestFooterContact(user);
+      const mailOptions = {
+        from: `"SkyGloss Portal" <sales@skygloss.com>`,
+        to: customerEmail,
+        subject: `Your Order Has Shipped: ${order.orderNumber}`,
+        html: buildLatestOrderShippedHtml(order, user, {
+          trackingUrl,
+          footerContact,
+        }),
+      };
+      try {
+        await this.salesTransporter.sendMail(mailOptions);
+        this.logger.log(
+          `Order shipped notification (latest) sent to ${customerEmail} for ${order.orderNumber}`,
+        );
+      } catch (error) {
+        this.logger.error(`Failed to send order shipped notification`, error.stack);
+      }
       return;
     }
 
@@ -1480,6 +1622,29 @@ export class MailService {
       ? `Reminder: Complete payment for order ${order.orderNumber}`
       : `Complete your payment for order ${order.orderNumber}`;
 
+    if (await this.useLatestTemplates()) {
+      const footerContact = await this.resolveLatestFooterContact(user);
+      const mailOptions = {
+        from: `"SkyGloss Portal" <sales@skygloss.com>`,
+        to: user.email,
+        subject,
+        html: buildLatestPendingPaymentHtml(order, user, {
+          payUrl,
+          isFollowUp,
+          footerContact,
+        }),
+      };
+      try {
+        await this.salesTransporter.sendMail(mailOptions);
+        this.logger.log(
+          `Pending payment ${isFollowUp ? 'reminder' : 'notice'} (latest) sent to ${user.email} for ${order.orderNumber}`,
+        );
+      } catch (error) {
+        this.logger.error(`Failed to send pending payment reminder`, error.stack);
+      }
+      return;
+    }
+
     const intro = isFollowUp
       ? `This is a friendly reminder that your order (<strong>${order.orderNumber}</strong>) is still awaiting payment.`
       : `Your order (<strong>${order.orderNumber}</strong>) has been created and is awaiting payment.`;
@@ -1548,6 +1713,34 @@ export class MailService {
       options?.cancellationReason ||
       order.cancellationReason ||
       'Your order was cancelled.';
+
+    if (await this.useLatestTemplates()) {
+      const footerContact = await this.resolveLatestFooterContact(user);
+      const mailOptions = {
+        from: `"SkyGloss Portal" <sales@skygloss.com>`,
+        to: user.email,
+        subject: wasPaid
+          ? `Order Cancelled & Refunded: ${order.orderNumber}`
+          : `Order Cancelled: ${order.orderNumber}`,
+        html: buildLatestOrderCancelledHtml(order, user, {
+          wasPaid,
+          cancellationReason: reason,
+          footerContact,
+        }),
+      };
+      try {
+        await this.salesTransporter.sendMail(mailOptions);
+        this.logger.log(
+          `Order cancellation notification (latest) sent to ${user.email} for ${order.orderNumber}`,
+        );
+      } catch (error) {
+        this.logger.error(
+          `Failed to send order cancellation notification to customer`,
+          error.stack,
+        );
+      }
+      return;
+    }
 
     const mailOptions = {
       from: `"SkyGloss Portal" <sales@skygloss.com>`,

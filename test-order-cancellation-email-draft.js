@@ -10,6 +10,14 @@ const nodemailer = require('nodemailer');
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config({ path: './.env' });
+const {
+  resolveShopFooterContact,
+  buildRepresentativeFooterBlock,
+} = require('./email-draft-representative-footer');
+const {
+  loadShopAndRepresentative,
+  disconnect,
+} = require('./email-draft-resolve-representative');
 
 const ASSETS = {
   // Blue logo – header only (do NOT use black logo here)
@@ -80,11 +88,17 @@ function buildOrderItemsHtml(items, symbol) {
   return rows;
 }
 
-function buildDraftOrderCancellationHtml(order) {
+function buildDraftOrderCancellationHtml(order, footerContact) {
   const subtotal = order.items.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const shipping = Number(order.shipping) || 0;
   const total = subtotal + shipping;
   const { symbol, currency, customer, wasPaid } = order;
+  const representativeFooter = buildRepresentativeFooterBlock(
+    footerContact,
+    BRAND_BLUE,
+    ASSETS,
+    WIDTH,
+  );
 
   const refundCopy = wasPaid
     ? `The total amount for this order has been refunded to your original payment method. Please allow a few business days for the funds to appear in your account.`
@@ -228,39 +242,8 @@ function buildDraftOrderCancellationHtml(order) {
             </td>
           </tr>
 
-          <!-- 7. Footer: contact + car -->
-          <tr>
-            <td bgcolor="#000000" style="padding:0; background-color:#000000;">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-                <tbody><tr>
-                  <td width="40%" valign="middle" bgcolor="#000000" style="width:40%; padding:28px 22px; background-color:#000000; vertical-align:middle;">
-                    <p style="margin:0 0 4px 0; font-family: Arial, Helvetica, sans-serif; font-size:13px; font-weight:bold; color:#ffffff; letter-spacing:0.5px;">
-                      PAUL BILABE
-                    </p>
-                    <p style="margin:0 0 10px 0; font-family: Arial, Helvetica, sans-serif; font-size:12px; font-weight:bold; color:${BRAND_BLUE}; letter-spacing:0.5px;">
-                      MASTER TRAINER
-                    </p>
-                    <p style="margin:0 0 4px 0; font-family: Arial, Helvetica, sans-serif; font-size:12px; color:#ffffff;">
-                      +1 (602) 784-4113
-                    </p>
-                    <p style="margin:0; font-family: Arial, Helvetica, sans-serif; font-size:12px; color:#ffffff;">
-                      <a href="mailto:certified@skygloss.com" style="color:#ffffff; text-decoration:none;">certified@skygloss.com</a>
-                    </p>
-                  </td>
-                  <td width="60%" valign="middle" bgcolor="#000000" style="width:60%; padding:0; background-color:#000000; vertical-align:middle;">
-                    <img src="${ASSETS.footerWhiteCar}" alt="SkyGloss team" width="350" style="display:block; width:100%; max-width:368px; height:auto; border:0;">
-                  </td>
-                </tr>
-              </tbody></table>
-            </td>
-          </tr>
-
-          <!-- 8. Footer white logo -->
-          <tr>
-            <td bgcolor="#000000" style="padding:20px 0; background-color:#000000;">
-              <img src="${ASSETS.footerWhite}" alt="SKYGLOSS" width="${WIDTH}" style="display:block; width:100%; max-width:${WIDTH}px; height:auto; border:0; padding:0; margin:0;">
-            </td>
-          </tr>
+          <!-- 7–8. Footer: representative contact + car + white logo -->
+          ${representativeFooter}
 
         </tbody></table>
 
@@ -284,7 +267,19 @@ async function sendDraftOrderCancellationEmail() {
   const fromUser = 'sales@skygloss.com';
   const fromPass = 'wsux didm itaa zeds';
 
-  const html = buildDraftOrderCancellationHtml(sampleOrder);
+  let shopUser = null;
+  let localRepresentative = null;
+
+  try {
+    const resolved = await loadShopAndRepresentative(sampleOrder.customer.email);
+    shopUser = resolved.shop;
+    localRepresentative = resolved.representative;
+  } finally {
+    await disconnect().catch(() => {});
+  }
+
+  const footerContact = resolveShopFooterContact(shopUser, localRepresentative);
+  const html = buildDraftOrderCancellationHtml(sampleOrder, footerContact);
 
   const previewPath = path.join(__dirname, 'order-cancellation-email-draft-preview.html');
   fs.writeFileSync(previewPath, html, 'utf8');
@@ -314,6 +309,12 @@ async function sendDraftOrderCancellationEmail() {
   console.log('Draft order cancellation email sent to it@skygloss.com');
   console.log('From:', mailOptions.from);
   console.log('Subject:', mailOptions.subject);
+  console.log('Footer contact:', footerContact.name, `(${footerContact.title})`);
+  if (localRepresentative) {
+    console.log('Representative resolved:', localRepresentative.fullName, localRepresentative.partnerCode);
+  } else {
+    console.log('No shop representative found – using default Paul Bilabe footer.');
+  }
   console.log('SMTP response:', info.response);
   console.log('Live template in mail.service.ts was NOT changed.');
 }
