@@ -1,10 +1,13 @@
 import {
   calculateCommissionEntries,
+  calculateHierarchyCommissionEntries,
   calculateRepresentativeCommissionEntries,
+  normalizeFirstOrderCommissionRates,
   resolveCommissionOrderAmounts,
   resolvePartnerDevelopmentRepresentative,
   resolveShopCommissionChain,
   resolveShopEarningAssignments,
+  shouldUseFirstOrderNetworkCommission,
 } from './commission-distribution';
 
 describe('resolveCommissionOrderAmounts', () => {
@@ -331,6 +334,136 @@ describe('calculateRepresentativeCommissionEntries', () => {
   });
 });
 
+describe('REP → PROM → PROM → SHOP (Promoter FO + parent Rep OS)', () => {
+  const rep = { _id: 'rep1', partnerCode: 'REP0001', role: 'master_partner' };
+  const parentProm = {
+    _id: 'prom1',
+    partnerCode: 'PROM0001',
+    role: 'regional_partner',
+  };
+  const childProm = {
+    _id: 'prom2',
+    partnerCode: 'PROM0002',
+    role: 'regional_partner',
+  };
+  const monetary = (usd: number) => ({
+    orderAmount: usd,
+    orderCurrency: 'USD',
+    exchangeRateToUsd: 1,
+    convertedUsdAmount: usd,
+  });
+  const foAssignments = {
+    partnerDevelopmentCommissionPaid: false,
+    partnerDevelopmentEligible: true,
+    partnerDevelopmentRatePercent: 10,
+    shopIntroductionFirstOrderRatePercent: 5,
+  };
+
+  it('first order: child SI + parent PD + parent Rep OS (20%)', () => {
+    const entries = calculateRepresentativeCommissionEntries({
+      shopId: 'shop1',
+      assignments: foAssignments,
+      recipients: {
+        shopIntroduction: childProm,
+        partnerDevelopment: parentProm,
+        operationalSupport: rep,
+      },
+      monetary: monetary(100),
+      isFirstSuccessfulOrder: true,
+    });
+
+    expect(entries).toHaveLength(3);
+    expect(entries.find((e) => e.recipientPartnerCode === 'PROM0002')).toMatchObject({
+      earningType: 'Shop Introduction',
+      percentage: 5,
+      amount: 5,
+    });
+    expect(entries.find((e) => e.recipientPartnerCode === 'PROM0001')).toMatchObject({
+      earningType: 'Partner Development',
+      percentage: 10,
+      amount: 10,
+    });
+    expect(entries.find((e) => e.recipientPartnerCode === 'REP0001')).toMatchObject({
+      earningType: 'Operational Support',
+      percentage: 20,
+      amount: 20,
+    });
+  });
+
+  it('subsequent orders: child SI + parent Rep OS (20%), no parent PD', () => {
+    const entries = calculateRepresentativeCommissionEntries({
+      shopId: 'shop1',
+      assignments: {
+        ...foAssignments,
+        partnerDevelopmentCommissionPaid: true,
+      },
+      recipients: {
+        shopIntroduction: childProm,
+        partnerDevelopment: parentProm,
+        operationalSupport: rep,
+      },
+      monetary: monetary(100),
+      isFirstSuccessfulOrder: false,
+    });
+
+    expect(entries).toHaveLength(2);
+    expect(entries.find((e) => e.recipientPartnerCode === 'PROM0002')).toMatchObject({
+      earningType: 'Shop Introduction',
+      percentage: 5,
+      amount: 5,
+    });
+    expect(entries.find((e) => e.recipientPartnerCode === 'REP0001')).toMatchObject({
+      earningType: 'Operational Support',
+      percentage: 20,
+      amount: 20,
+    });
+    expect(
+      entries.find((e) => e.earningType === 'Partner Development'),
+    ).toBeUndefined();
+  });
+
+  it('does not add Operational Support when operationalSupport recipient is omitted', () => {
+    const entries = calculateRepresentativeCommissionEntries({
+      shopId: 'shop1',
+      assignments: foAssignments,
+      recipients: {
+        shopIntroduction: childProm,
+        partnerDevelopment: parentProm,
+      },
+      monetary: monetary(100),
+      isFirstSuccessfulOrder: true,
+    });
+
+    expect(entries).toHaveLength(2);
+    expect(
+      entries.find((e) => e.earningType === 'Operational Support'),
+    ).toBeUndefined();
+  });
+
+  it('respects custom Operational Support rate on parent Rep', () => {
+    const entries = calculateRepresentativeCommissionEntries({
+      shopId: 'shop1',
+      assignments: {
+        ...foAssignments,
+        partnerDevelopmentCommissionPaid: true,
+      },
+      recipients: {
+        shopIntroduction: childProm,
+        partnerDevelopment: parentProm,
+        operationalSupport: rep,
+      },
+      monetary: monetary(100),
+      isFirstSuccessfulOrder: false,
+      operationalSupportRatePercent: 25,
+    });
+
+    expect(entries.find((e) => e.earningType === 'Operational Support')).toMatchObject({
+      percentage: 25,
+      amount: 25,
+    });
+  });
+});
+
 describe('resolveShopCommissionChain', () => {
   const users = {
     PROM: {
@@ -534,5 +667,122 @@ describe('calculateCommissionEntries (deprecated legacy wrapper)', () => {
       subPromoter: null,
     });
     expect(entries).toHaveLength(0);
+  });
+});
+
+describe('calculateHierarchyCommissionEntries', () => {
+  const rep = {
+    _id: 'rep1',
+    partnerCode: 'R4R4',
+    role: 'master_partner',
+  };
+  const prom = {
+    _id: 'prom1',
+    partnerCode: 'P1P1',
+    role: 'regional_partner',
+  };
+  const monetary = {
+    orderAmount: 100,
+    orderCurrency: 'USD',
+    exchangeRateToUsd: 1,
+    convertedUsdAmount: 100,
+  };
+
+  it('Rep → Promoter → Shop pays Promoter 10% SI + Rep 20% OS on every order', () => {
+    const entries = calculateHierarchyCommissionEntries({
+      shopId: 'shop1',
+      chain: {
+        isDirectHub: false,
+        promoter: prom,
+        subPromoter: null,
+        represented: rep,
+      },
+      monetary,
+    });
+
+    expect(entries).toHaveLength(2);
+    expect(entries.find((e) => e.recipientPartnerCode === 'P1P1')).toMatchObject({
+      earningType: 'Shop Introduction',
+      percentage: 10,
+      amount: 10,
+    });
+    expect(entries.find((e) => e.recipientPartnerCode === 'R4R4')).toMatchObject({
+      earningType: 'Operational Support',
+      percentage: 20,
+      amount: 20,
+    });
+  });
+
+  it('Rep → Shop pays Rep 20% Shop Introduction only', () => {
+    const entries = calculateHierarchyCommissionEntries({
+      shopId: 'shop1',
+      chain: {
+        isDirectHub: false,
+        promoter: null,
+        subPromoter: null,
+        represented: rep,
+      },
+      monetary,
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      recipientPartnerCode: 'R4R4',
+      earningType: 'Shop Introduction',
+      percentage: 20,
+      amount: 20,
+    });
+  });
+});
+
+describe('shouldUseFirstOrderNetworkCommission', () => {
+  it('returns false for Rep → Promoter → Shop (Promoter is SI recipient)', () => {
+    expect(
+      shouldUseFirstOrderNetworkCommission({
+        partnerDevelopmentEligible: true,
+        shopIntroductionRole: 'regional_partner',
+      }),
+    ).toBe(false);
+  });
+
+  it('returns true for Rep Add-to-Network FO (Rep is SI recipient)', () => {
+    expect(
+      shouldUseFirstOrderNetworkCommission({
+        partnerDevelopmentEligible: true,
+        shopIntroductionRole: 'master_partner',
+      }),
+    ).toBe(true);
+  });
+});
+
+describe('normalizeFirstOrderCommissionRates', () => {
+  it('rejects parent FO above child FO when admin provides explicit rates', () => {
+    expect(() =>
+      normalizeFirstOrderCommissionRates({
+        shopIntroductionRate: 5,
+        partnerDevelopmentRate: 10,
+      }),
+    ).toThrow(
+      'Parent First Order Commission cannot exceed Child First Order Commission.',
+    );
+  });
+
+  it('allows parent FO equal to child FO', () => {
+    expect(
+      normalizeFirstOrderCommissionRates({
+        shopIntroductionRate: 10,
+        partnerDevelopmentRate: 10,
+      }),
+    ).toEqual({
+      shopIntroductionRate: 10,
+      partnerDevelopmentRate: 10,
+    });
+  });
+
+  it('does not validate implicit defaults when no explicit input is provided', () => {
+    expect(normalizeFirstOrderCommissionRates()).toEqual({
+      shopIntroductionRate: 5,
+      partnerDevelopmentRate: 10,
+    });
   });
 });

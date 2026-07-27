@@ -33,17 +33,11 @@ export class ProductsService {
     targetAudience?: string,
     user?: User,
   ): Promise<any[]> {
-    console.log(
-      '[ProductsService] findAll called. User:',
-      user ? `${(user as any)._id} (${user.username})` : 'Anonymous',
-    );
-
     let groupToUse: any = null;
 
     if (user) {
       // Priority 1: Explicitly assigned product group by Admin or Registration
       if (user.productGroup) {
-        console.log('[ProductsService] User has explicit productGroup:', user.productGroup);
         groupToUse = await this.productGroupModel
           .findById(user.productGroup)
           .populate('products.productId')
@@ -58,7 +52,6 @@ export class ProductsService {
           UserRole.PARTNER,
         ].includes(user.role)
       ) {
-        console.log(`[ProductsService] Resolving dynamic group for ${user.role} user by country: ${user.country}`);
         if (user.country) {
           groupToUse = await this.productGroupModel
             .findOne({
@@ -73,7 +66,6 @@ export class ProductsService {
         }
 
         if (!groupToUse) {
-          console.log(`[ProductsService] No group found for country ${user.country}, falling back to default group.`);
           groupToUse = await this.productGroupModel
             .findOne({ isDefault: true, isActive: true })
             .populate('products.productId')
@@ -84,10 +76,6 @@ export class ProductsService {
 
     // 1. If user has an applicable product group, STRICTLY restrict visibility and override prices
     if (groupToUse) {
-      console.log(
-        `[ProductsService] Filtering for group: ${groupToUse.name} (${groupToUse.products?.length} items)`,
-      );
-
       // Return only products in the group with group-specific prices
       return groupToUse.products
         .map((item) => {
@@ -111,7 +99,6 @@ export class ProductsService {
     }
 
     // 2. Fallback to standard fetching ONLY for users WITHOUT a product group or anonymous users
-    console.log('[ProductsService] Falling back to standard product fetching.');
     const filter: any = {};
     if (status) filter.status = status;
     if (targetAudience)

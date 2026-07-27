@@ -165,13 +165,30 @@ export function normalizeFirstOrderCommissionRates(params?: {
   shopIntroductionRate: number;
   partnerDevelopmentRate: number;
 } {
+  const shopIntroductionRate = normalizeShopIntroductionFirstOrderRatePercent(
+    params?.shopIntroductionRate,
+  );
+  const partnerDevelopmentRate = normalizePartnerDevelopmentRatePercent(
+    params?.partnerDevelopmentRate,
+  );
+
+  const hasExplicitInput =
+    params != null &&
+    (params.shopIntroductionRate != null ||
+      params.partnerDevelopmentRate != null);
+
+  if (
+    hasExplicitInput &&
+    partnerDevelopmentRate > shopIntroductionRate
+  ) {
+    throw new Error(
+      'Parent First Order Commission cannot exceed Child First Order Commission.',
+    );
+  }
+
   return {
-    shopIntroductionRate: normalizeShopIntroductionFirstOrderRatePercent(
-      params?.shopIntroductionRate,
-    ),
-    partnerDevelopmentRate: normalizePartnerDevelopmentRatePercent(
-      params?.partnerDevelopmentRate,
-    ),
+    shopIntroductionRate,
+    partnerDevelopmentRate,
   };
 }
 
@@ -469,13 +486,26 @@ export async function resolveShopEarningAssignments(
 
   if (!result.partnerDevelopmentRepresentativeCode) {
     const shopIntroRepUser = await lookup(shopIntroCode);
-    const partnerDevelopmentRep = shopIntroRepUser
-      ? await resolvePartnerDevelopmentRepresentative(shopIntroRepUser, lookup)
-      : null;
-    if (partnerDevelopmentRep) {
-      result.partnerDevelopmentRepresentativeId = partnerDevelopmentRep._id;
-      result.partnerDevelopmentRepresentativeCode =
-        partnerDevelopmentRep.partnerCode;
+    // Rep → Promoter → Shop: upstream Rep is Operational Support, not FO Partner Development.
+    if (shopIntroRepUser && isMainPromoterRole(shopIntroRepUser.role)) {
+      const upstreamRep = await resolveRepresentativeForPromoter(
+        shopIntroRepUser,
+        lookup,
+      );
+      if (upstreamRep && !result.operationalSupportRepresentativeCode) {
+        result.operationalSupportRepresentativeId = upstreamRep._id;
+        result.operationalSupportRepresentativeCode = upstreamRep.partnerCode;
+      }
+    } else if (shopIntroRepUser) {
+      const partnerDevelopmentRep = await resolvePartnerDevelopmentRepresentative(
+        shopIntroRepUser,
+        lookup,
+      );
+      if (partnerDevelopmentRep) {
+        result.partnerDevelopmentRepresentativeId = partnerDevelopmentRep._id;
+        result.partnerDevelopmentRepresentativeCode =
+          partnerDevelopmentRep.partnerCode;
+      }
     }
   }
 
@@ -543,11 +573,15 @@ export function calculateRepresentativeCommissionEntries(params: {
   recipients: {
     shopIntroduction?: CommissionRecipient | null;
     partnerDevelopment?: CommissionRecipient | null;
+    /** Parent Promoter's upstream Rep — REP → PRO → PRO → SHOP Operational Support. */
+    operationalSupport?: CommissionRecipient | null;
   };
   monetary: CommissionOrderAmounts;
   isFirstSuccessfulOrder: boolean;
   /** Admin/default Shop Intro % when FO network split does not apply. */
   defaultShopIntroductionRatePercent?: number;
+  /** Operational Support % for parent Promoter's Rep (default 20%). */
+  operationalSupportRatePercent?: number;
 }): CommissionEntry[] {
   const { shopId, assignments, recipients, monetary, isFirstSuccessfulOrder } =
     params;
@@ -647,7 +681,120 @@ export function calculateRepresentativeCommissionEntries(params: {
     );
   }
 
+  // REP → PRO → PRO → SHOP: parent Promoter's Rep earns Operational Support on every order.
+  const operationalSupport = params.recipients.operationalSupport;
+  if (operationalSupport && useNetworkFirstOrderSplit) {
+    const osPct =
+      params.operationalSupportRatePercent ??
+      DEFAULT_COMMISSION_RATES_PERCENT.master_partner;
+    entries.push(
+      buildCommissionEntry(
+        operationalSupport,
+        'Operational Support',
+        osPct,
+        usdBase * (osPct / 100),
+        context,
+      ),
+    );
+  }
+
   return entries;
+}
+
+/**
+ * True when commission should use Add-to-Network First Order split logic.
+ * Rep → Promoter → Shop is normal hierarchy (Promoter SI + Rep OS), not FO.
+ */
+export function shouldUseFirstOrderNetworkCommission(params: {
+  partnerDevelopmentEligible?: boolean;
+  partnerDevelopmentPromoterEligible?: boolean;
+  shopIntroductionRole?: string;
+}): boolean {
+  if (params.partnerDevelopmentPromoterEligible === true) return true;
+  if (params.partnerDevelopmentEligible !== true) return false;
+  return isRepresentativeRole(params.shopIntroductionRole);
+}
+
+/**
+ * Default hierarchy commission on every shop order (not First Order network split).
+ *
+ * Rep → Shop: Rep earns Shop Introduction (default 20%).
+ * Rep → Promoter → Shop: Promoter Shop Introduction (10%) + Rep Operational Support (20%).
+ */
+export function calculateHierarchyCommissionEntries(params: {
+  shopId: string;
+  chain: CommissionChain;
+  monetary: CommissionOrderAmounts;
+  promoterRatePercent?: number;
+  representativeRatePercent?: number;
+  subPromoterRatePercent?: number;
+}): CommissionEntry[] {
+  const { shopId, chain, monetary } = params;
+  const usdBase = monetary.convertedUsdAmount;
+  if (usdBase <= 0 || chain.isDirectHub) return [];
+
+  const context = {
+    shopId,
+    orderAmount: monetary.orderAmount,
+    originalCurrency: monetary.orderCurrency,
+    exchangeRate: monetary.exchangeRateToUsd,
+    convertedUsdAmount: monetary.convertedUsdAmount,
+  };
+
+  const repPct =
+    params.representativeRatePercent ??
+    DEFAULT_COMMISSION_RATES_PERCENT.master_partner;
+  const promPct =
+    params.promoterRatePercent ??
+    DEFAULT_COMMISSION_RATES_PERCENT.regional_partner;
+  const subPct = params.subPromoterRatePercent ?? 5;
+
+  if (chain.represented && !chain.promoter) {
+    return [
+      buildCommissionEntry(
+        chain.represented,
+        'Shop Introduction',
+        repPct,
+        usdBase * (repPct / 100),
+        context,
+      ),
+    ];
+  }
+
+  if (chain.promoter && chain.represented) {
+    const entries: CommissionEntry[] = [
+      buildCommissionEntry(
+        chain.represented,
+        'Operational Support',
+        repPct,
+        usdBase * (repPct / 100),
+        context,
+      ),
+      buildCommissionEntry(
+        chain.promoter,
+        'Shop Introduction',
+        promPct,
+        usdBase * (promPct / 100),
+        context,
+      ),
+    ];
+
+    if (chain.subPromoter) {
+      entries.push(
+        buildCommissionEntry(
+          chain.subPromoter,
+          'Shop Introduction',
+          subPct,
+          usdBase * (subPct / 100),
+          context,
+        ),
+      );
+    }
+
+    return entries;
+  }
+
+  return [];
 }
 
 /** @deprecated Use calculateRepresentativeCommissionEntries */

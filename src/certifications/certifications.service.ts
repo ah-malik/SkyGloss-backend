@@ -331,10 +331,13 @@ export class CertificationsService {
 
   async getCertificationStatusSummary() {
     // Only query certified_shop users
-    const shops = await this.userModel.find({ 
-      role: UserRole.CERTIFIED_SHOP
-    });
-    const requests = await this.certificationModel.find().sort({ createdAt: -1 });
+    const shops = await this.userModel
+      .find({ role: UserRole.CERTIFIED_SHOP })
+      .select(
+        'shopName companyName firstName lastName email country city referredByPartnerCode isTrainingComplete isCertified certificateNumber',
+      )
+      .lean();
+    const requests = await this.certificationModel.find().sort({ createdAt: -1 }).lean();
 
     // Backfill certificate numbers for certified users who don't have one
     const certifiedWithoutNumber = shops.filter(
@@ -348,16 +351,41 @@ export class CertificationsService {
         .exec();
       let nextNumber = lastUser?.certificateNumber ? lastUser.certificateNumber + 1 : 14943212;
 
-      for (const shop of certifiedWithoutNumber) {
-        await this.userModel.findByIdAndUpdate(shop._id, { certificateNumber: nextNumber });
-        shop.certificateNumber = nextNumber;
-        nextNumber++;
-      }
+      const bulkOps = certifiedWithoutNumber.map((shop) => {
+        const certificateNumber = nextNumber++;
+        (shop as any).certificateNumber = certificateNumber;
+        return {
+          updateOne: {
+            filter: { _id: shop._id },
+            update: { $set: { certificateNumber } },
+          },
+        };
+      });
+      await this.userModel.bulkWrite(bulkOps);
     }
 
-    const summary = await Promise.all(shops.map(async (shop) => {
-      // Find partner details
-      const partner = await this.userModel.findOne({ partnerCode: shop.referredByPartnerCode });
+    const partnerCodes = Array.from(
+      new Set(
+        shops
+          .map((s) => s.referredByPartnerCode)
+          .filter((code): code is string => Boolean(code?.trim()))
+          .map((code) => code.trim()),
+      ),
+    );
+    const partners = partnerCodes.length
+      ? await this.userModel
+          .find({ partnerCode: { $in: partnerCodes } })
+          .select('firstName lastName email partnerCode')
+          .lean()
+      : [];
+    const partnerByCode = new Map(
+      partners.map((p) => [String(p.partnerCode).trim(), p]),
+    );
+
+    const summary = shops.map((shop) => {
+      const partner = shop.referredByPartnerCode
+        ? partnerByCode.get(String(shop.referredByPartnerCode).trim())
+        : undefined;
 
       // Find relevant certification request
       const shopRequest = requests.find(r => 
@@ -398,7 +426,7 @@ export class CertificationsService {
         status,
         appliedDate: (shopRequest as any)?.createdAt,
       };
-    }));
+    });
 
     return summary;
   }
