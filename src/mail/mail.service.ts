@@ -18,6 +18,11 @@ import {
 } from './templates/latest-registration-emails';
 import { buildLatestPendingPaymentHtml } from './templates/latest-pending-payment-emails';
 import {
+  buildLatestOrderRequestCustomerHtml,
+  buildLatestNewOrderRequestSalesHtml,
+  buildLatestNewOrderPaidSalesHtml,
+} from './templates/latest-order-request-emails';
+import {
   FooterContact,
   resolveShopFooterContact,
 } from './templates/latest-shared';
@@ -833,6 +838,25 @@ export class MailService {
   }
 
   async sendNewOrderNotification(order: any, user: any) {
+    if (await this.useLatestTemplates()) {
+      const footerContact = await this.resolveLatestFooterContact(user);
+      const mailOptions = {
+        from: `"SkyGloss Portal" <sales@skygloss.com>`,
+        to: 'sales@skygloss.com',
+        subject: `NEW ORDER PAID: ${order.orderNumber} - ${user.firstName} ${user.lastName}`,
+        html: buildLatestNewOrderPaidSalesHtml(order, user, footerContact),
+      };
+      try {
+        await this.salesTransporter.sendMail(mailOptions);
+        this.logger.log(
+          `New order notification (latest) sent to sales@skygloss.com for ${order.orderNumber}`,
+        );
+      } catch (error) {
+        this.logger.error(`Failed to send new order notification`, error.stack);
+      }
+      return;
+    }
+
     const subtotal = order.items.reduce((sum: number, item: any) => sum + (item.price * item.quantity), 0);
     const tax = subtotal * 0.08; // 8% tax as calculated in OrdersService
 
@@ -913,6 +937,25 @@ export class MailService {
   }
 
   async sendNewOrderRequestNotification(order: any, user: any) {
+    if (await this.useLatestTemplates()) {
+      const footerContact = await this.resolveLatestFooterContact(user);
+      const mailOptions = {
+        from: `"SkyGloss Portal" <sales@skygloss.com>`,
+        to: 'sales@skygloss.com, it@skygloss.com',
+        subject: `NEW ORDER REQUEST: ${order.orderNumber} - ${user.firstName} ${user.lastName}`,
+        html: buildLatestNewOrderRequestSalesHtml(order, user, footerContact),
+      };
+      try {
+        await this.salesTransporter.sendMail(mailOptions);
+        this.logger.log(
+          `New order request notification (latest) sent to sales@skygloss.com for ${order.orderNumber}`,
+        );
+      } catch (error) {
+        this.logger.error(`Failed to send new order request notification`, error.stack);
+      }
+      return;
+    }
+
     const subtotal = order.items.reduce((sum: number, item: any) => sum + (item.price * item.quantity), 0);
     const tax = subtotal * 0.08;
 
@@ -993,6 +1036,28 @@ export class MailService {
   }
 
   async sendOrderRequestCustomerConfirmation(order: any, user: any) {
+    if (await this.useLatestTemplates()) {
+      const footerContact = await this.resolveLatestFooterContact(user);
+      const mailOptions = {
+        from: `"SkyGloss Portal" <sales@skygloss.com>`,
+        to: user.email,
+        subject: `Order Request Received: ${order.orderNumber}`,
+        html: buildLatestOrderRequestCustomerHtml(order, user, footerContact),
+      };
+      try {
+        await this.salesTransporter.sendMail(mailOptions);
+        this.logger.log(
+          `Order request confirmation (latest) sent to customer ${user.email} for ${order.orderNumber}`,
+        );
+      } catch (error) {
+        this.logger.error(
+          `Failed to send order request confirmation to customer`,
+          error.stack,
+        );
+      }
+      return;
+    }
+
     const subtotal = order.items.reduce((sum: number, item: any) => sum + (item.price * item.quantity), 0);
     const tax = subtotal * 0.08;
 
