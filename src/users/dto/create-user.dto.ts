@@ -11,9 +11,13 @@ import {
   Min,
   Max,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { UserRole, UserStatus } from '../entities/user.entity';
 
 export class CreateUserDto {
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim().toLowerCase() : value,
+  )
   @IsEmail()
   @IsOptional()
   email?: string;

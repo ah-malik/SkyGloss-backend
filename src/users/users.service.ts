@@ -37,6 +37,7 @@ import {
   isGlobalHubAccount,
   isGlobalHubPartnerCode,
 } from '../common/global-hub';
+import { emailEqualsQuery, normalizeEmail } from '../common/email';
 
 export interface NetworkUsersResult {
   shops: UserDocument[];
@@ -127,9 +128,28 @@ export class UsersService implements OnModuleInit {
           `[UsersService] Migrated ${migratedSubs} Sub-Promoter(s) to Promoter (regional_partner).`,
         );
       }
+
+      // Lowercase any emails still stored with capital letters
+      const lowercased = await this.migrateEmailsToLowercase();
+      if (lowercased > 0) {
+        console.log(
+          `[UsersService] Normalized ${lowercased} user email(s) to lowercase.`,
+        );
+      }
     } catch (err) {
       console.error('[UsersService] Database initialization failed:', err);
     }
+  }
+
+  /**
+   * One-time style backfill: store every user email in lowercase.
+   */
+  private async migrateEmailsToLowercase(): Promise<number> {
+    const result = await this.userModel.collection.updateMany(
+      { email: { $type: 'string' } },
+      [{ $set: { email: { $toLower: '$email' } } }],
+    );
+    return result.modifiedCount;
   }
 
   /**
@@ -231,6 +251,7 @@ export class UsersService implements OnModuleInit {
     }
 
     if (createUserDto.email) {
+      createUserDto.email = normalizeEmail(createUserDto.email);
       await this.assertEmailAvailableForRole(
         createUserDto.email,
         createUserDto.role as UserRole,
@@ -1705,15 +1726,21 @@ export class UsersService implements OnModuleInit {
   }
 
   async findByEmail(email: string): Promise<UserDocument | null> {
-    return this.userModel.findOne({ email }).exec();
+    return this.userModel
+      .findOne({ email: emailEqualsQuery(email) })
+      .exec();
   }
 
   async findByUsernameOrEmail(
     identifier: string,
   ): Promise<UserDocument | null> {
+    const trimmed = identifier.trim();
     return this.userModel
       .findOne({
-        $or: [{ email: identifier }, { username: identifier }],
+        $or: [
+          { email: emailEqualsQuery(trimmed) },
+          { username: trimmed },
+        ],
       })
       .exec();
   }
@@ -1724,10 +1751,14 @@ export class UsersService implements OnModuleInit {
     roles: UserRole[],
   ): Promise<UserDocument | null> {
     if (!roles.length) return null;
+    const trimmed = identifier.trim();
     return this.userModel
       .findOne({
         role: { $in: roles },
-        $or: [{ email: identifier }, { username: identifier }],
+        $or: [
+          { email: emailEqualsQuery(trimmed) },
+          { username: trimmed },
+        ],
       })
       .exec();
   }
@@ -1737,7 +1768,9 @@ export class UsersService implements OnModuleInit {
     roles: UserRole[],
   ): Promise<UserDocument | null> {
     if (!roles.length) return null;
-    return this.userModel.findOne({ email, role: { $in: roles } }).exec();
+    return this.userModel
+      .findOne({ email: emailEqualsQuery(email), role: { $in: roles } })
+      .exec();
   }
 
   /**
@@ -1751,7 +1784,7 @@ export class UsersService implements OnModuleInit {
   ): Promise<void> {
     const conflictingRoles = this.getEmailConflictRoles(role);
     const query: Record<string, unknown> = {
-      email,
+      email: emailEqualsQuery(email),
       role: { $in: conflictingRoles },
     };
     if (excludeUserId) {
@@ -2039,6 +2072,10 @@ export class UsersService implements OnModuleInit {
     // Clean up other unique fields if they are empty strings
     if (updatePayload.email === '') delete updatePayload.email;
     if (updatePayload.username === '') delete updatePayload.username;
+
+    if (updatePayload.email) {
+      updatePayload.email = normalizeEmail(updatePayload.email);
+    }
 
     if (
       updatePayload.email &&
