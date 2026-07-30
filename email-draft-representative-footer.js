@@ -1,16 +1,16 @@
 /**
  * Shared representative footer for draft email templates.
  * Mirrors mail.service.ts buildShopContactFooter + users getLocalRepresentativeForShop:
- * show the shop's assigned representative when available, otherwise Paul Bilabe.
+ * show the shop's assigned representative when available, otherwise SkyGloss Global / Certification Department.
  */
 
 const GLOBAL_HUB_PARTNER_CODES = new Set(['GLOBALHUB', 'GLOBAL77']);
 
 const DEFAULT_FOOTER_CONTACT = {
-  name: 'PAUL BILABE',
-  title: 'MASTER TRAINER',
-  phone: '+1 (602) 784-4113',
-  email: 'certified@skygloss.com',
+  name: 'SkyGloss Global',
+  title: 'Certification Department',
+  phone: '+1 602 784 4113',
+  email: 'Certified@skygloss.com',
 };
 
 function isGlobalHubPartnerCode(code) {
@@ -27,7 +27,7 @@ function formatRepresentativeName(representative) {
 
 /**
  * Resolve footer contact for a certified shop.
- * Returns Paul Bilabe defaults when no representative is assigned.
+ * Returns SkyGloss Global / Certification Department defaults when no representative is assigned.
  */
 function resolveShopFooterContact(shopUser, localRepresentative) {
   const isShopUser = shopUser?.role === 'certified_shop';

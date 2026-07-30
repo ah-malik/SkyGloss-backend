@@ -17,10 +17,10 @@ export const BRAND_BLUE = '#00AEEF';
 export const EMAIL_WIDTH = 600;
 
 export const DEFAULT_FOOTER_CONTACT = {
-  name: 'PAUL BILABE',
-  title: 'MASTER TRAINER',
-  phone: '+1 (602) 784-4113',
-  email: 'certified@skygloss.com',
+  name: 'SkyGloss Global',
+  title: 'Certification Department',
+  phone: '+1 602 784 4113',
+  email: 'Certified@skygloss.com',
 };
 
 export type FooterContact = {

@@ -1,11 +1,11 @@
 /**
- * DRAFT USA order emails – visual test only (batch).
+ * DRAFT USA order emails â€“ visual test only (batch).
  * Does NOT replace live templates in mail.service.ts.
  *
  * Includes:
  *  1. USA Order Shipped
  *  2. USA Order Cancellation
- *  3. USA Hub / Representative / Distributor / Promoter – order before payment
+ *  3. USA Hub / Representative / Distributor / Promoter â€“ order before payment
  *  4. USA Shop Order Payment Reminder (daily x3 days, then cart cleared)
  *
  * Run: node test-usa-order-emails-batch-draft.js
@@ -126,11 +126,11 @@ function footerBlocks() {
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                 <tbody><tr>
                   <td width="40%" valign="middle" bgcolor="#000000" style="width:40%; padding:28px 22px; background-color:#000000; vertical-align:middle;">
-                    <p style="margin:0 0 4px 0; font-family: Arial, Helvetica, sans-serif; font-size:13px; font-weight:bold; color:#ffffff; letter-spacing:0.5px;">PAUL BILABE</p>
-                    <p style="margin:0 0 10px 0; font-family: Arial, Helvetica, sans-serif; font-size:12px; font-weight:bold; color:${BRAND_BLUE}; letter-spacing:0.5px;">MASTER TRAINER</p>
-                    <p style="margin:0 0 4px 0; font-family: Arial, Helvetica, sans-serif; font-size:12px; color:#ffffff;">+1 (602) 784-4113</p>
+                    <p style="margin:0 0 4px 0; font-family: Arial, Helvetica, sans-serif; font-size:13px; font-weight:bold; color:#ffffff; letter-spacing:0.5px;">SkyGloss Global</p>
+                    <p style="margin:0 0 10px 0; font-family: Arial, Helvetica, sans-serif; font-size:12px; font-weight:bold; color:${BRAND_BLUE}; letter-spacing:0.5px;">Certification Department</p>
+                    <p style="margin:0 0 4px 0; font-family: Arial, Helvetica, sans-serif; font-size:12px; color:#ffffff;">+1 602 784 4113</p>
                     <p style="margin:0; font-family: Arial, Helvetica, sans-serif; font-size:12px; color:#ffffff;">
-                      <a href="mailto:certified@skygloss.com" style="color:#ffffff; text-decoration:none;">certified@skygloss.com</a>
+                      <a href="mailto:certified@skygloss.com" style="color:#ffffff; text-decoration:none;">Certified@skygloss.com</a>
                     </p>
                   </td>
                   <td width="60%" valign="middle" bgcolor="#000000" style="width:60%; padding:0; background-color:#000000; vertical-align:middle;">
@@ -277,7 +277,7 @@ function helpBlock(text) {
     </tr>`;
 }
 
-// ─── 1. USA Order Shipped ───────────────────────────────────────────
+// â”€â”€â”€ 1. USA Order Shipped â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function buildUsaShippedHtml() {
   const orderNumber = 'SGUSAP0117';
   const shipping = 25;
@@ -305,13 +305,13 @@ function buildUsaShippedHtml() {
   ].join('');
 
   return wrapEmail(
-    'USA Order Shipped – SkyGloss',
+    'USA Order Shipped â€“ SkyGloss',
     body,
-    'DRAFT TEMPLATE – for testing only. Not the live USA order shipped email.',
+    'DRAFT TEMPLATE â€“ for testing only. Not the live USA order shipped email.',
   );
 }
 
-// ─── 2. USA Order Cancellation ──────────────────────────────────────
+// â”€â”€â”€ 2. USA Order Cancellation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function buildUsaCancellationHtml() {
   const orderNumber = 'SGUSAP0117';
   const shipping = 25;
@@ -347,13 +347,13 @@ function buildUsaCancellationHtml() {
   ].join('');
 
   return wrapEmail(
-    'USA Order Cancelled – SkyGloss',
+    'USA Order Cancelled â€“ SkyGloss',
     body,
-    'DRAFT TEMPLATE – for testing only. Not the live USA order cancellation email.',
+    'DRAFT TEMPLATE â€“ for testing only. Not the live USA order cancellation email.',
   );
 }
 
-// ─── 3. USA Hub / Rep / Distributor / Promoter – order before payment ─
+// â”€â”€â”€ 3. USA Hub / Rep / Distributor / Promoter â€“ order before payment â”€
 function buildUsaPartnerOrderBeforePaymentHtml() {
   const orderNumber = 'SGUSAP0118';
   const shipping = 25;
@@ -381,13 +381,13 @@ function buildUsaPartnerOrderBeforePaymentHtml() {
   ].join('');
 
   return wrapEmail(
-    'USA Partner Order – Payment Required – SkyGloss',
+    'USA Partner Order â€“ Payment Required â€“ SkyGloss',
     body,
-    'DRAFT TEMPLATE – for testing only. Not the live USA partner order (before payment) email.',
+    'DRAFT TEMPLATE â€“ for testing only. Not the live USA partner order (before payment) email.',
   );
 }
 
-// ─── 4. USA Shop Order Payment Reminder ─────────────────────────────
+// â”€â”€â”€ 4. USA Shop Order Payment Reminder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function buildUsaShopPaymentReminderHtml(dayNumber = 2) {
   const orderNumber = 'SGUSAP0119';
   const shipping = 25;
@@ -419,9 +419,9 @@ function buildUsaShopPaymentReminderHtml(dayNumber = 2) {
   ].join('');
 
   return wrapEmail(
-    'USA Shop Order Payment Reminder – SkyGloss',
+    'USA Shop Order Payment Reminder â€“ SkyGloss',
     body,
-    'DRAFT TEMPLATE – for testing only. Not the live USA shop payment reminder email.',
+    'DRAFT TEMPLATE â€“ for testing only. Not the live USA shop payment reminder email.',
   );
 }
 
@@ -438,25 +438,25 @@ async function sendAll() {
   const emails = [
     {
       key: 'usa-order-shipped',
-      subject: `[DRAFT TEST] USA Order Shipped – SGUSAP0117 – ${stamp}`,
+      subject: `[DRAFT TEST] USA Order Shipped â€“ SGUSAP0117 â€“ ${stamp}`,
       html: buildUsaShippedHtml(),
       file: 'usa-order-shipped-email-draft-preview.html',
     },
     {
       key: 'usa-order-cancellation',
-      subject: `[DRAFT TEST] USA Order Cancelled & Refunded – SGUSAP0117 – ${stamp}`,
+      subject: `[DRAFT TEST] USA Order Cancelled & Refunded â€“ SGUSAP0117 â€“ ${stamp}`,
       html: buildUsaCancellationHtml(),
       file: 'usa-order-cancellation-email-draft-preview.html',
     },
     {
       key: 'usa-partner-order-before-payment',
-      subject: `[DRAFT TEST] USA Hub/Rep/Distributor/Promoter Order – Payment Required – ${stamp}`,
+      subject: `[DRAFT TEST] USA Hub/Rep/Distributor/Promoter Order â€“ Payment Required â€“ ${stamp}`,
       html: buildUsaPartnerOrderBeforePaymentHtml(),
       file: 'usa-partner-order-before-payment-email-draft-preview.html',
     },
     {
       key: 'usa-shop-payment-reminder',
-      subject: `[DRAFT TEST] USA Shop Order Payment Reminder (Day 2 of 3) – ${stamp}`,
+      subject: `[DRAFT TEST] USA Shop Order Payment Reminder (Day 2 of 3) â€“ ${stamp}`,
       html: buildUsaShopPaymentReminderHtml(2),
       file: 'usa-shop-payment-reminder-email-draft-preview.html',
     },
@@ -474,7 +474,7 @@ async function sendAll() {
       html: email.html,
     });
 
-    console.log(`Sent ${email.key} → it@skygloss.com`);
+    console.log(`Sent ${email.key} â†’ it@skygloss.com`);
     console.log('Subject:', email.subject);
     console.log('SMTP:', info.response);
     console.log('---');

@@ -1,5 +1,5 @@
 /**
- * DRAFT USA Shop Payment Completed Email – visual test only.
+ * DRAFT USA Shop Payment Completed Email â€“ visual test only.
  * Does NOT replace the live payment confirmation in mail.service.ts
  * (sendDistributorPaymentConfirmation).
  *
@@ -13,7 +13,7 @@ const path = require('path');
 require('dotenv').config({ path: './.env' });
 
 const ASSETS = {
-  // Blue logo – header only (do NOT use black logo here)
+  // Blue logo â€“ header only (do NOT use black logo here)
   blueLogoHeader:
     'https://res.cloudinary.com/dxhmopbei/image/upload/v1784290766/svnkjkigtjacvlsoiktt.png',
   footerWhite:
@@ -42,7 +42,7 @@ function buildDraftUsaShopPaymentCompletedHtml(user) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <title>Payment & Activation Confirmed – SkyGloss</title>
+  <title>Payment & Activation Confirmed â€“ SkyGloss</title>
   <!--[if mso]>
   <style type="text/css">
     body, table, td { font-family: Arial, Helvetica, sans-serif !important; }
@@ -56,7 +56,7 @@ function buildDraftUsaShopPaymentCompletedHtml(user) {
 
         <table role="presentation" width="${WIDTH}" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="width:${WIDTH}px; max-width:${WIDTH}px; margin:0 auto; background-color:#ffffff;">
 
-          <!-- 1. Header: blue logo – L/R padding 0 -->
+          <!-- 1. Header: blue logo â€“ L/R padding 0 -->
           <tbody><tr>
             <td bgcolor="#ffffff" style="padding:20px 0; background-color:#ffffff;">
               <img src="${ASSETS.blueLogoHeader}" alt="SKYGLOSS" width="${WIDTH}" style="display:block; width:100%; max-width:${WIDTH}px; height:auto; border:0; outline:none; text-decoration:none; padding:0; margin:0;">
@@ -178,16 +178,16 @@ function buildDraftUsaShopPaymentCompletedHtml(user) {
                 <tbody><tr>
                   <td width="40%" valign="middle" bgcolor="#000000" style="width:40%; padding:28px 22px; background-color:#000000; vertical-align:middle;">
                     <p style="margin:0 0 4px 0; font-family: Arial, Helvetica, sans-serif; font-size:13px; font-weight:bold; color:#ffffff; letter-spacing:0.5px;">
-                      PAUL BILABE
+                      SkyGloss Global
                     </p>
                     <p style="margin:0 0 10px 0; font-family: Arial, Helvetica, sans-serif; font-size:12px; font-weight:bold; color:${BRAND_BLUE}; letter-spacing:0.5px;">
-                      MASTER TRAINER
+                      Certification Department
                     </p>
                     <p style="margin:0 0 4px 0; font-family: Arial, Helvetica, sans-serif; font-size:12px; color:#ffffff;">
-                      +1 (602) 784-4113
+                      +1 602 784 4113
                     </p>
                     <p style="margin:0; font-family: Arial, Helvetica, sans-serif; font-size:12px; color:#ffffff;">
-                      <a href="mailto:certified@skygloss.com" style="color:#ffffff; text-decoration:none;">certified@skygloss.com</a>
+                      <a href="mailto:certified@skygloss.com" style="color:#ffffff; text-decoration:none;">Certified@skygloss.com</a>
                     </p>
                   </td>
                   <td width="60%" valign="middle" bgcolor="#000000" style="width:60%; padding:0; background-color:#000000; vertical-align:middle;">
@@ -210,7 +210,7 @@ function buildDraftUsaShopPaymentCompletedHtml(user) {
         <table role="presentation" width="${WIDTH}" cellpadding="0" cellspacing="0" border="0" style="width:${WIDTH}px; max-width:${WIDTH}px;">
           <tbody><tr>
             <td style="padding:16px 8px; font-family: Arial, Helvetica, sans-serif; font-size:11px; color:#888888; text-align:center;">
-              DRAFT TEMPLATE – for testing only. Not the live USA shop payment completed email.
+              DRAFT TEMPLATE â€“ for testing only. Not the live USA shop payment completed email.
             </td>
           </tr>
         </tbody></table>
@@ -223,7 +223,7 @@ function buildDraftUsaShopPaymentCompletedHtml(user) {
 }
 
 async function sendDraftUsaShopPaymentCompletedEmail() {
-  // Draft only – not wired to mail.service.ts.
+  // Draft only â€“ not wired to mail.service.ts.
   const fromUser = 'sales@skygloss.com';
   const fromPass = 'wsux didm itaa zeds';
 
@@ -246,7 +246,7 @@ async function sendDraftUsaShopPaymentCompletedEmail() {
   const mailOptions = {
     from: `"SkyGloss" <${fromUser}>`,
     to: 'it@skygloss.com',
-    subject: `[DRAFT TEST] USA Shop Payment & Activation Confirmed – ${stamp}`,
+    subject: `[DRAFT TEST] USA Shop Payment & Activation Confirmed â€“ ${stamp}`,
     html,
   };
 

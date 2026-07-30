@@ -1,5 +1,5 @@
 /**
- * DRAFT Welcome Email – visual test only.
+ * DRAFT Welcome Email â€“ visual test only.
  * Does NOT replace the live welcome template in mail.service.ts.
  *
  * Run: node test-welcome-email-draft.js
@@ -76,7 +76,7 @@ function buildDraftWelcomeHtml(details) {
                   </td>
                 </tr>
 
-                <!-- YOUR DETAILS – below welcome text (email-safe card) -->
+                <!-- YOUR DETAILS â€“ below welcome text (email-safe card) -->
                 <tr>
                   <td bgcolor="#ffffff" style="padding:22px 40px 28px 40px; background-color:#ffffff;">
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:separate;">
@@ -120,7 +120,7 @@ function buildDraftWelcomeHtml(details) {
           <!-- 2. Signature + Car image (above black section) -->
           <tr>
             <td bgcolor="#ffffff" style="padding:0; background-color:#ffffff;">
-              <img src="${ASSETS.signatureCar}" alt="Factory Forever – SkyGloss" width="${WIDTH}" style="display:block; width:100%; max-width:${WIDTH}px; height:auto; border:0;">
+              <img src="${ASSETS.signatureCar}" alt="Factory Forever â€“ SkyGloss" width="${WIDTH}" style="display:block; width:100%; max-width:${WIDTH}px; height:auto; border:0;">
             </td>
           </tr>
 
@@ -129,7 +129,7 @@ function buildDraftWelcomeHtml(details) {
             <td bgcolor="#000000" style="padding:0; background-color:#000000;">
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
 
-                <!-- GET STARTED – centered -->
+                <!-- GET STARTED â€“ centered -->
                 <tbody><tr>
                   <td align="center" bgcolor="#000000" style="padding:18px 28px 18px 28px; background-color:#000000; text-align:center;">
                     <p style="margin:0;font-family: Arial, Helvetica, sans-serif;font-size:44px;line-height:1;font-weight:800;color:${BRAND_BLUE};letter-spacing:0.5rem;text-transform:uppercase;text-align:center;">
@@ -145,7 +145,7 @@ function buildDraftWelcomeHtml(details) {
                     <p style="margin:0 0 8px 0; font-weight:bold; font-size:15px; line-height:1.5; color:#ffffff;">1. Access Your Portal</p>
                     <p style="margin:0 0 22px 0; font-weight:normal; font-size:15px; line-height:1.65; color:#ffffff;">Log in to your SkyGloss Portal to access your dashboard, online training, product information, resources, and account settings.</p>
 
-                    <!-- CTA – wide pill button, centered -->
+                    <!-- CTA â€“ wide pill button, centered -->
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 32px 0;">
                       <tbody><tr>
                         <td align="center">
@@ -226,16 +226,16 @@ function buildDraftWelcomeHtml(details) {
                 <tbody><tr>
                   <td width="40%" valign="middle" bgcolor="#000000" style="width:40%; padding:28px 22px; background-color:#000000; vertical-align:middle;">
                     <p style="margin:0 0 4px 0; font-family: Arial, Helvetica, sans-serif; font-size:13px; font-weight:bold; color:#ffffff; letter-spacing:0.5px;">
-                      PAUL BILABE
+                      SkyGloss Global
                     </p>
                     <p style="margin:0 0 10px 0; font-family: Arial, Helvetica, sans-serif; font-size:12px; font-weight:bold; color:${BRAND_BLUE}; letter-spacing:0.5px;">
-                      MASTER TRAINER
+                      Certification Department
                     </p>
                     <p style="margin:0 0 4px 0; font-family: Arial, Helvetica, sans-serif; font-size:12px; color:#ffffff;">
-                      +1 (602) 784-4113
+                      +1 602 784 4113
                     </p>
                     <p style="margin:0; font-family: Arial, Helvetica, sans-serif; font-size:12px; color:#ffffff;">
-                      <a href="mailto:certified@skygloss.com" style="color:#ffffff; text-decoration:none;">certified@skygloss.com</a>
+                      <a href="mailto:certified@skygloss.com" style="color:#ffffff; text-decoration:none;">Certified@skygloss.com</a>
                     </p>
                   </td>
                   <td width="60%" valign="middle" bgcolor="#000000" style="width:60%; padding:0; background-color:#000000; vertical-align:middle;">
@@ -246,7 +246,7 @@ function buildDraftWelcomeHtml(details) {
             </td>
           </tr>
 
-          <!-- 9. Footer white logo – separate bottom row, L/R 0, top/bottom padding -->
+          <!-- 9. Footer white logo â€“ separate bottom row, L/R 0, top/bottom padding -->
           <tr>
             <td bgcolor="#000000" style="padding:20px 0; background-color:#000000;">
               <img src="${ASSETS.footerWhite}" alt="SKYGLOSS" width="${WIDTH}" style="display:block; width:100%; max-width:${WIDTH}px; height:auto; border:0; padding:0; margin:0;">
@@ -258,7 +258,7 @@ function buildDraftWelcomeHtml(details) {
         <table role="presentation" width="${WIDTH}" cellpadding="0" cellspacing="0" border="0" style="width:${WIDTH}px; max-width:${WIDTH}px;">
           <tbody><tr>
             <td style="padding:16px 8px; font-family: Arial, Helvetica, sans-serif; font-size:11px; color:#888888; text-align:center;">
-              DRAFT TEMPLATE – for testing only. Not the live welcome email.
+              DRAFT TEMPLATE â€“ for testing only. Not the live welcome email.
             </td>
           </tr>
         </tbody></table>
@@ -271,7 +271,7 @@ function buildDraftWelcomeHtml(details) {
 }
 
 async function sendDraftWelcomeEmail() {
-  // Always send from SkyGloss certified mailbox — never personal Gmail (MAIL_USER).
+  // Always send from SkyGloss certified mailbox â€” never personal Gmail (MAIL_USER).
   const fromUser = 'certified@skygloss.com';
   const fromPass = 'qjyi fuku tgbb xqor';
 
@@ -294,7 +294,7 @@ async function sendDraftWelcomeEmail() {
   const mailOptions = {
     from: `"SkyGloss" <${fromUser}>`,
     to: 'it@skygloss.com',
-    subject: `[DRAFT TEST] Welcome footer logo padding – ${stamp}`,
+    subject: `[DRAFT TEST] Welcome footer logo padding â€“ ${stamp}`,
     html,
   };
 

@@ -313,7 +313,7 @@ async function sendDraftOrderCancellationEmail() {
   if (localRepresentative) {
     console.log('Representative resolved:', localRepresentative.fullName, localRepresentative.partnerCode);
   } else {
-    console.log('No shop representative found – using default Paul Bilabe footer.');
+    console.log('No shop representative found – using default SkyGloss Global / Certification Department footer.');
   }
   console.log('SMTP response:', info.response);
   console.log('Live template in mail.service.ts was NOT changed.');

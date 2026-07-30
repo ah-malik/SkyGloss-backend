@@ -137,8 +137,8 @@ export class MailService {
     return `
                     <strong>Certification Department</strong><br>
                     SkyGloss Global<br><br>
-                    📞 +1 (602) 784-4113<br>
-                    ✉️ certified@skygloss.com`;
+                    📞 +1 602 784 4113<br>
+                    ✉️ Certified@skygloss.com`;
   }
 
   private async resolveLatestFooterContact(user: any): Promise<FooterContact> {
@@ -533,8 +533,8 @@ export class MailService {
                   <td width="50%" valign="top" style="font-size:14px; color:#555;">
                     <strong>Certification Department</strong><br>
                     SkyGloss Global<br><br>
-                    📞 +1 (602) 784-4113<br>
-                    ✉️ certified@skygloss.com
+                    📞 +1 602 784 4113<br>
+                    ✉️ Certified@skygloss.com
                   </td>
 
                   </tr>

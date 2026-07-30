@@ -84,8 +84,8 @@ async function testEmail() {
                         <td width="50%" valign="top" style="font-size:14px; color:#555;">
                           <strong>Certification Department</strong><br>
                           SkyGloss Global<br><br>
-                          📞 +1 (602) 784-4113<br>
-                          ✉️ certified@skygloss.com<br>
+                          📞 +1 602 784 4113<br>
+                          ✉️ Certified@skygloss.com<br>
                           📍 Phoenix, AZ, USA
                         </td>
                       </tr>
