@@ -194,12 +194,13 @@ export class ProductsService {
     id: string,
     updateProductDto: UpdateProductDto,
   ): Promise<ProductDocument> {
+    const updatePayload = { ...updateProductDto };
     console.log(
       `[ProductsService] Updating product ${id} with data:`,
-      JSON.stringify(updateProductDto),
+      JSON.stringify(updatePayload),
     );
     const updatedProduct = await this.productModel
-      .findByIdAndUpdate(id, updateProductDto, { new: true })
+      .findByIdAndUpdate(id, { $set: updatePayload }, { new: true })
       .exec();
     if (!updatedProduct) {
       throw new NotFoundException(`Product with ID ${id} not found`);

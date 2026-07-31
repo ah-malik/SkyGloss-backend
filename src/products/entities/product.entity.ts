@@ -56,6 +56,12 @@ export class Product {
   sdsUrlDutch?: string;
 
   @Prop()
+  sdsAetherUrl?: string;
+
+  @Prop()
+  sdsAetherUrlDutch?: string;
+
+  @Prop()
   applicationGuideUrl?: string;
 
   @Prop({ default: 'published', enum: ['published', 'draft'] })

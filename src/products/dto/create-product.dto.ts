@@ -94,6 +94,14 @@ export class CreateProductDto {
 
   @IsString()
   @IsOptional()
+  sdsAetherUrl?: string;
+
+  @IsString()
+  @IsOptional()
+  sdsAetherUrlDutch?: string;
+
+  @IsString()
+  @IsOptional()
   applicationGuideUrl?: string;
 
   @IsString()
