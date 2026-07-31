@@ -25,6 +25,7 @@ import {
   validateParentRole,
 } from '../common/user-hierarchy';
 import {
+  getDefaultFirstOrderCommissionRates,
   isCommissionEligibleRole,
   normalizeFirstOrderCommissionRates,
   normalizePartnerDevelopmentRatePercent,
@@ -451,14 +452,20 @@ export class UsersService implements OnModuleInit {
       partnerDevelopmentRate: number;
     },
     linkedAt: Date,
+    role: 'master_partner' | 'regional_partner' = 'master_partner',
   ) {
+    const defaults = getDefaultFirstOrderCommissionRates(role);
     const normalizedChild = normalizePartnerCode(childCode);
     const mapped = (links || []).map((entry) =>
       this.buildOperationalLinkEntry(
         entry.partnerCode || '',
         {
-          shopIntroductionRate: entry.firstOrderShopIntroductionRate ?? 5,
-          partnerDevelopmentRate: entry.firstOrderPartnerDevelopmentRate ?? 10,
+          shopIntroductionRate:
+            entry.firstOrderShopIntroductionRate ??
+            defaults.shopIntroductionRate,
+          partnerDevelopmentRate:
+            entry.firstOrderPartnerDevelopmentRate ??
+            defaults.partnerDevelopmentRate,
         },
         entry.linkedAt,
       ),
@@ -511,6 +518,7 @@ export class UsersService implements OnModuleInit {
       normalizedChild,
       rates,
       linkedAt,
+      'master_partner',
     );
     const nextCodes = new Set(
       (refreshed.operationalRepresentativeCodes || []).map((code) =>
@@ -554,6 +562,7 @@ export class UsersService implements OnModuleInit {
       normalizedChild,
       rates,
       linkedAt,
+      'regional_partner',
     );
     const nextCodes = new Set(
       (refreshed.operationalPromoterCodes || []).map((code) =>
@@ -597,6 +606,16 @@ export class UsersService implements OnModuleInit {
       return;
     }
 
+    // Never create an operational FO self-link (owner === child).
+    if (childCode === parentCode) {
+      if (foRatesRequested) {
+        throw new BadRequestException(
+          'A user cannot be linked to their own Add Network parent.',
+        );
+      }
+      return;
+    }
+
     const parent = await this.findByPartnerCode(parentCode);
     if (!parent) {
       if (foRatesRequested) {
@@ -630,6 +649,7 @@ export class UsersService implements OnModuleInit {
       rates = normalizeFirstOrderCommissionRates({
         shopIntroductionRate: firstOrderShopIntroductionRate,
         partnerDevelopmentRate: firstOrderPartnerDevelopmentRate,
+        role: child.role,
       });
     } catch (error: any) {
       throw new BadRequestException(
@@ -842,16 +862,20 @@ export class UsersService implements OnModuleInit {
     ratePercent: number;
     shopIntroductionRatePercent: number;
   }> {
-    const defaults = normalizeFirstOrderCommissionRates();
+    const defaults = normalizeFirstOrderCommissionRates({
+      role: UserRole.MASTER_PARTNER,
+    });
 
     // Already confirmed eligible (frozen at shop assignment).
     if (shop.partnerDevelopmentEligible === true) {
       let shopIntroductionRatePercent =
         normalizeShopIntroductionFirstOrderRatePercent(
           shop.shopIntroductionFirstOrderRatePercent,
+          UserRole.MASTER_PARTNER,
         );
       const ratePercent = normalizePartnerDevelopmentRatePercent(
         shop.partnerDevelopmentRatePercent,
+        UserRole.MASTER_PARTNER,
       );
       return {
         eligible: true,
@@ -900,14 +924,17 @@ export class UsersService implements OnModuleInit {
         return normalizeFirstOrderCommissionRates({
           shopIntroductionRate: link.firstOrderShopIntroductionRate,
           partnerDevelopmentRate: link.firstOrderPartnerDevelopmentRate,
+          role: UserRole.MASTER_PARTNER,
         });
       } catch {
         return {
           shopIntroductionRate: normalizeShopIntroductionFirstOrderRatePercent(
             link.firstOrderShopIntroductionRate,
+            UserRole.MASTER_PARTNER,
           ),
           partnerDevelopmentRate: normalizePartnerDevelopmentRatePercent(
             link.firstOrderPartnerDevelopmentRate,
+            UserRole.MASTER_PARTNER,
           ),
         };
       }
@@ -931,35 +958,51 @@ export class UsersService implements OnModuleInit {
   ): Promise<UserDocument> {
     if (owner.role !== UserRole.MASTER_PARTNER) return owner;
 
+    const ownerCode = normalizePartnerCode(owner.partnerCode);
     const codes = (owner.operationalRepresentativeCodes || [])
       .map((code) => normalizePartnerCode(code))
-      .filter(Boolean) as string[];
-    const existingLinks = owner.operationalRepresentativeLinks || [];
+      .filter((code): code is string => Boolean(code) && code !== ownerCode);
+    const existingLinks = (owner.operationalRepresentativeLinks || []).filter(
+      (link) => normalizePartnerCode(link.partnerCode) !== ownerCode,
+    );
     const linkedCodes = new Set(
       existingLinks
         .map((link) => normalizePartnerCode(link.partnerCode))
         .filter(Boolean),
     );
 
+    const hadSelfLink =
+      (owner.operationalRepresentativeCodes || []).some(
+        (code) => normalizePartnerCode(code) === ownerCode,
+      ) ||
+      (owner.operationalRepresentativeLinks || []).some(
+        (link) => normalizePartnerCode(link.partnerCode) === ownerCode,
+      );
+
     const missing = codes.filter((code) => !linkedCodes.has(code));
-    if (missing.length === 0) return owner;
+    if (missing.length === 0 && !hadSelfLink) return owner;
 
     // Legacy links without a known linkedAt: stamp "now" so only shops
     // created after this migration (and future links) get FO Partner Development.
     const legacyLinkedAt = new Date();
+    const repDefaults = getDefaultFirstOrderCommissionRates(
+      UserRole.MASTER_PARTNER,
+    );
     const additions = missing.map((partnerCode) => ({
       partnerCode,
       linkedAt: legacyLinkedAt,
-      firstOrderShopIntroductionRate: 5,
-      firstOrderPartnerDevelopmentRate: 10,
+      firstOrderShopIntroductionRate: repDefaults.shopIntroductionRate,
+      firstOrderPartnerDevelopmentRate: repDefaults.partnerDevelopmentRate,
     }));
 
+    const nextLinks = [...existingLinks, ...additions];
     const updated = await this.userModel
       .findByIdAndUpdate(
         owner._id,
         {
-          $push: {
-            operationalRepresentativeLinks: { $each: additions },
+          $set: {
+            operationalRepresentativeCodes: codes,
+            operationalRepresentativeLinks: nextLinks,
           },
         },
         { new: true },
@@ -975,33 +1018,50 @@ export class UsersService implements OnModuleInit {
   ): Promise<UserDocument> {
     if (owner.role !== UserRole.REGIONAL_PARTNER) return owner;
 
+    const ownerCode = normalizePartnerCode(owner.partnerCode);
     const codes = (owner.operationalPromoterCodes || [])
       .map((code) => normalizePartnerCode(code))
-      .filter(Boolean) as string[];
-    const existingLinks = owner.operationalPromoterLinks || [];
+      .filter((code): code is string => Boolean(code) && code !== ownerCode);
+    const existingLinks = (owner.operationalPromoterLinks || []).filter(
+      (link) => normalizePartnerCode(link.partnerCode) !== ownerCode,
+    );
     const linkedCodes = new Set(
       existingLinks
         .map((link) => normalizePartnerCode(link.partnerCode))
         .filter(Boolean),
     );
 
+    const hadSelfLink =
+      (owner.operationalPromoterCodes || []).some(
+        (code) => normalizePartnerCode(code) === ownerCode,
+      ) ||
+      (owner.operationalPromoterLinks || []).some(
+        (link) => normalizePartnerCode(link.partnerCode) === ownerCode,
+      );
+
     const missing = codes.filter((code) => !linkedCodes.has(code));
-    if (missing.length === 0) return owner;
+    if (missing.length === 0 && !hadSelfLink) return owner;
 
     const legacyLinkedAt = new Date();
+    const promoterDefaults = getDefaultFirstOrderCommissionRates(
+      UserRole.REGIONAL_PARTNER,
+    );
     const additions = missing.map((partnerCode) => ({
       partnerCode,
       linkedAt: legacyLinkedAt,
-      firstOrderShopIntroductionRate: 5,
-      firstOrderPartnerDevelopmentRate: 10,
+      firstOrderShopIntroductionRate: promoterDefaults.shopIntroductionRate,
+      firstOrderPartnerDevelopmentRate:
+        promoterDefaults.partnerDevelopmentRate,
     }));
 
+    const nextLinks = [...existingLinks, ...additions];
     const updated = await this.userModel
       .findByIdAndUpdate(
         owner._id,
         {
-          $push: {
-            operationalPromoterLinks: { $each: additions },
+          $set: {
+            operationalPromoterCodes: codes,
+            operationalPromoterLinks: nextLinks,
           },
         },
         { new: true },
@@ -1163,14 +1223,17 @@ export class UsersService implements OnModuleInit {
       rates = normalizeFirstOrderCommissionRates({
         shopIntroductionRate: link.firstOrderShopIntroductionRate,
         partnerDevelopmentRate: link.firstOrderPartnerDevelopmentRate,
+        role: UserRole.REGIONAL_PARTNER,
       });
     } catch {
       rates = {
         shopIntroductionRate: normalizeShopIntroductionFirstOrderRatePercent(
           link.firstOrderShopIntroductionRate,
+          UserRole.REGIONAL_PARTNER,
         ),
         partnerDevelopmentRate: normalizePartnerDevelopmentRatePercent(
           link.firstOrderPartnerDevelopmentRate,
+          UserRole.REGIONAL_PARTNER,
         ),
       };
     }
@@ -1516,15 +1579,18 @@ export class UsersService implements OnModuleInit {
             return normalizeFirstOrderCommissionRates({
               shopIntroductionRate: link.firstOrderShopIntroductionRate,
               partnerDevelopmentRate: link.firstOrderPartnerDevelopmentRate,
+              role: UserRole.REGIONAL_PARTNER,
             });
           } catch {
             return {
               shopIntroductionRate:
                 normalizeShopIntroductionFirstOrderRatePercent(
                   link.firstOrderShopIntroductionRate,
+                  UserRole.REGIONAL_PARTNER,
                 ),
               partnerDevelopmentRate: normalizePartnerDevelopmentRatePercent(
                 link.firstOrderPartnerDevelopmentRate,
+                UserRole.REGIONAL_PARTNER,
               ),
             };
           }
@@ -1553,15 +1619,18 @@ export class UsersService implements OnModuleInit {
     try {
       return normalizeFirstOrderCommissionRates({
         shopIntroductionRate: link.firstOrderShopIntroductionRate,
+        role: UserRole.MASTER_PARTNER,
         partnerDevelopmentRate: link.firstOrderPartnerDevelopmentRate,
       });
     } catch {
       return {
         shopIntroductionRate: normalizeShopIntroductionFirstOrderRatePercent(
           link.firstOrderShopIntroductionRate,
+          UserRole.MASTER_PARTNER,
         ),
         partnerDevelopmentRate: normalizePartnerDevelopmentRatePercent(
           link.firstOrderPartnerDevelopmentRate,
+          UserRole.MASTER_PARTNER,
         ),
       };
     }
@@ -2887,14 +2956,24 @@ export class UsersService implements OnModuleInit {
     if (target.status === UserStatus.BLOCKED) {
       throw new BadRequestException('This Representative account is blocked.');
     }
+
+    const targetCode = normalizePartnerCode(target.partnerCode);
+    const ownerCode = normalizePartnerCode(viewer.partnerCode);
     if (
-      normalizePartnerCode(target.referredByPartnerCode) ===
-      normalizePartnerCode(viewer.partnerCode)
+      target._id.toString() === viewer._id.toString() ||
+      (targetCode && ownerCode && targetCode === ownerCode)
+    ) {
+      throw new BadRequestException(
+        'A Representative cannot add themselves to their own network.',
+      );
+    }
+
+    if (
+      normalizePartnerCode(target.referredByPartnerCode) === ownerCode
     ) {
       throw new BadRequestException('This Representative is already linked to your network.');
     }
 
-    const targetCode = normalizePartnerCode(target.partnerCode);
     const existingOperational = (viewer.operationalRepresentativeCodes || []).map(
       (code) => normalizePartnerCode(code),
     );
@@ -2955,22 +3034,28 @@ export class UsersService implements OnModuleInit {
       ]),
     );
 
-    const resolveFoRates = (link?: {
-      firstOrderShopIntroductionRate?: number;
-      firstOrderPartnerDevelopmentRate?: number;
-    }) => {
+    const resolveFoRates = (
+      link?: {
+        firstOrderShopIntroductionRate?: number;
+        firstOrderPartnerDevelopmentRate?: number;
+      },
+      role: 'master_partner' | 'regional_partner' = 'master_partner',
+    ) => {
       try {
         return normalizeFirstOrderCommissionRates({
           shopIntroductionRate: link?.firstOrderShopIntroductionRate,
           partnerDevelopmentRate: link?.firstOrderPartnerDevelopmentRate,
+          role,
         });
       } catch {
         return {
           shopIntroductionRate: normalizeShopIntroductionFirstOrderRatePercent(
             link?.firstOrderShopIntroductionRate,
+            role,
           ),
           partnerDevelopmentRate: normalizePartnerDevelopmentRatePercent(
             link?.firstOrderPartnerDevelopmentRate,
+            role,
           ),
         };
       }
@@ -2986,7 +3071,7 @@ export class UsersService implements OnModuleInit {
     const linkedRepresentatives = linkedRepresentativesRaw.map((rep) => {
       const code = normalizePartnerCode(rep.partnerCode);
       const link = code ? repLinkByCode.get(code) : undefined;
-      const rates = resolveFoRates(link);
+      const rates = resolveFoRates(link, 'master_partner');
       return {
         ...rep,
         linkedAt: link?.linkedAt || null,
@@ -3005,7 +3090,7 @@ export class UsersService implements OnModuleInit {
     const linkedPromoters = linkedPromotersRaw.map((promoter) => {
       const code = normalizePartnerCode(promoter.partnerCode);
       const link = code ? promoterLinkByCode.get(code) : undefined;
-      const rates = resolveFoRates(link);
+      const rates = resolveFoRates(link, 'regional_partner');
       return {
         ...promoter,
         linkedAt: link?.linkedAt || null,
@@ -3100,6 +3185,10 @@ export class UsersService implements OnModuleInit {
       rates = normalizeFirstOrderCommissionRates({
         shopIntroductionRate: firstOrderShopIntroductionRate,
         partnerDevelopmentRate: firstOrderPartnerDevelopmentRate,
+        role:
+          owner.role === UserRole.REGIONAL_PARTNER
+            ? UserRole.REGIONAL_PARTNER
+            : UserRole.MASTER_PARTNER,
       });
     } catch (error: any) {
       throw new BadRequestException(
@@ -3345,6 +3434,17 @@ export class UsersService implements OnModuleInit {
       throw new BadRequestException('Representative not found.');
     }
 
+    const targetCode = normalizePartnerCode(target.partnerCode);
+    const ownerCode = normalizePartnerCode(owner.partnerCode);
+    if (
+      target._id.toString() === owner._id.toString() ||
+      (targetCode && ownerCode && targetCode === ownerCode)
+    ) {
+      throw new BadRequestException(
+        'A Representative cannot add themselves to their own network.',
+      );
+    }
+
     const ownerSubtree = await this.findNetworkUsersForViewer(owner);
     const subtreeIds = new Set(
       [
@@ -3358,8 +3458,6 @@ export class UsersService implements OnModuleInit {
       throw new BadRequestException('This Representative is already in the network.');
     }
 
-    const targetCode = normalizePartnerCode(target.partnerCode);
-    const ownerCode = normalizePartnerCode(owner.partnerCode);
     if (!targetCode || !ownerCode) {
       throw new BadRequestException('Partner ID is required to link Representatives.');
     }
@@ -3381,6 +3479,7 @@ export class UsersService implements OnModuleInit {
       rates = normalizeFirstOrderCommissionRates({
         shopIntroductionRate: firstOrderShopIntroductionRate,
         partnerDevelopmentRate: firstOrderPartnerDevelopmentRate,
+        role: UserRole.MASTER_PARTNER,
       });
     } catch (error: any) {
       throw new BadRequestException(
@@ -3583,6 +3682,16 @@ export class UsersService implements OnModuleInit {
     }
 
     const targetCode = normalizePartnerCode(target.partnerCode);
+    const ownerCode = normalizePartnerCode(viewer.partnerCode);
+    if (
+      target._id.toString() === viewer._id.toString() ||
+      (targetCode && ownerCode && targetCode === ownerCode)
+    ) {
+      throw new BadRequestException(
+        'A Promoter cannot add themselves to their own network.',
+      );
+    }
+
     const existingOperational = (viewer.operationalPromoterCodes || []).map(
       (code) => normalizePartnerCode(code),
     );
@@ -3641,6 +3750,17 @@ export class UsersService implements OnModuleInit {
       throw new BadRequestException('Promoter not found.');
     }
 
+    const targetCode = normalizePartnerCode(target.partnerCode);
+    const ownerCode = normalizePartnerCode(owner.partnerCode);
+    if (
+      target._id.toString() === owner._id.toString() ||
+      (targetCode && ownerCode && targetCode === ownerCode)
+    ) {
+      throw new BadRequestException(
+        'A Promoter cannot add themselves to their own network.',
+      );
+    }
+
     const ownerSubtree = await this.findNetworkUsersForViewer(owner);
     const subtreeIds = new Set(
       [
@@ -3652,8 +3772,6 @@ export class UsersService implements OnModuleInit {
       throw new BadRequestException('This Promoter is already in the network.');
     }
 
-    const targetCode = normalizePartnerCode(target.partnerCode);
-    const ownerCode = normalizePartnerCode(owner.partnerCode);
     if (!targetCode || !ownerCode) {
       throw new BadRequestException('Partner ID is required to link Promoters.');
     }
@@ -3677,6 +3795,7 @@ export class UsersService implements OnModuleInit {
       rates = normalizeFirstOrderCommissionRates({
         shopIntroductionRate: firstOrderShopIntroductionRate,
         partnerDevelopmentRate: firstOrderPartnerDevelopmentRate,
+        role: UserRole.REGIONAL_PARTNER,
       });
     } catch (error: any) {
       throw new BadRequestException(

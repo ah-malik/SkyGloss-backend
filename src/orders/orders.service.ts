@@ -2528,7 +2528,11 @@ export class OrdersService implements OnModuleInit {
     const order = await this.orderModel.findById(id).populate('user');
     if (!order) throw new NotFoundException('Order not found');
 
-    if (actor?.role === UserRole.PARTNER) {
+    // Hub and Representative may update status only for orders in their network.
+    if (
+      actor?.role === UserRole.PARTNER ||
+      actor?.role === UserRole.MASTER_PARTNER
+    ) {
       const orderUserId =
         typeof order.user === 'object' && order.user !== null && '_id' in (order.user as object)
           ? String((order.user as any)._id)
@@ -2539,7 +2543,7 @@ export class OrdersService implements OnModuleInit {
       );
       if (!inNetwork) {
         throw new ForbiddenException(
-          'You can only update orders from shops in your network',
+          'You can only update orders from users in your network',
         );
       }
     }

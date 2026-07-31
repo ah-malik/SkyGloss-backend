@@ -781,8 +781,26 @@ describe('normalizeFirstOrderCommissionRates', () => {
 
   it('does not validate implicit defaults when no explicit input is provided', () => {
     expect(normalizeFirstOrderCommissionRates()).toEqual({
-      shopIntroductionRate: 5,
+      shopIntroductionRate: 20,
       partnerDevelopmentRate: 10,
+    });
+  });
+
+  it('uses Representative defaults (child 20% / parent 10%)', () => {
+    expect(
+      normalizeFirstOrderCommissionRates({ role: 'master_partner' }),
+    ).toEqual({
+      shopIntroductionRate: 20,
+      partnerDevelopmentRate: 10,
+    });
+  });
+
+  it('uses Promoter defaults (child 10% / parent 5%)', () => {
+    expect(
+      normalizeFirstOrderCommissionRates({ role: 'regional_partner' }),
+    ).toEqual({
+      shopIntroductionRate: 10,
+      partnerDevelopmentRate: 5,
     });
   });
 });

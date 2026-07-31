@@ -114,10 +114,42 @@ export interface ShopEarningAssignments {
   shopIntroductionFirstOrderRatePercent?: number;
 }
 
-/** Default FO Child Shop Introduction % (absolute). */
-export const DEFAULT_FIRST_ORDER_SHOP_INTRODUCTION_PERCENT = 5;
-/** Default FO Parent Partner Development % (absolute). */
-export const DEFAULT_FIRST_ORDER_PARTNER_DEVELOPMENT_PERCENT = 10;
+/** Role-specific Admin First Order defaults (absolute %). */
+export const DEFAULT_FIRST_ORDER_RATES_BY_ROLE = {
+  master_partner: {
+    shopIntroductionRate: 20,
+    partnerDevelopmentRate: 10,
+  },
+  regional_partner: {
+    shopIntroductionRate: 10,
+    partnerDevelopmentRate: 5,
+  },
+} as const;
+
+/**
+ * Default FO Child Shop Introduction % (absolute).
+ * Representative default — prefer getDefaultFirstOrderCommissionRates(role).
+ */
+export const DEFAULT_FIRST_ORDER_SHOP_INTRODUCTION_PERCENT =
+  DEFAULT_FIRST_ORDER_RATES_BY_ROLE.master_partner.shopIntroductionRate;
+/**
+ * Default FO Parent Partner Development % (absolute).
+ * Representative default — prefer getDefaultFirstOrderCommissionRates(role).
+ */
+export const DEFAULT_FIRST_ORDER_PARTNER_DEVELOPMENT_PERCENT =
+  DEFAULT_FIRST_ORDER_RATES_BY_ROLE.master_partner.partnerDevelopmentRate;
+
+/** Resolve Admin FO defaults by network role (Rep vs Promoter). */
+export function getDefaultFirstOrderCommissionRates(role?: string): {
+  shopIntroductionRate: number;
+  partnerDevelopmentRate: number;
+} {
+  if (role === UserRole.REGIONAL_PARTNER || role === 'regional_partner') {
+    return { ...DEFAULT_FIRST_ORDER_RATES_BY_ROLE.regional_partner };
+  }
+  // Representative (and unknown role fallback used by Rep FO paths).
+  return { ...DEFAULT_FIRST_ORDER_RATES_BY_ROLE.master_partner };
+}
 
 /** Clamp a commission % to 0–100. */
 export function clampCommissionPercent(
@@ -131,23 +163,25 @@ export function clampCommissionPercent(
   return Math.round(n * 100) / 100;
 }
 
-/** Clamp admin FO Partner Development % (default 10). */
+/** Clamp admin FO Partner Development % (role default when unset). */
 export function normalizePartnerDevelopmentRatePercent(
   value?: number | null,
+  role?: string,
 ): number {
   return clampCommissionPercent(
     value,
-    DEFAULT_FIRST_ORDER_PARTNER_DEVELOPMENT_PERCENT,
+    getDefaultFirstOrderCommissionRates(role).partnerDevelopmentRate,
   );
 }
 
-/** Clamp admin FO Shop Introduction % for linked child (default 5). */
+/** Clamp admin FO Shop Introduction % for linked child (role default when unset). */
 export function normalizeShopIntroductionFirstOrderRatePercent(
   value?: number | null,
+  role?: string,
 ): number {
   return clampCommissionPercent(
     value,
-    DEFAULT_FIRST_ORDER_SHOP_INTRODUCTION_PERCENT,
+    getDefaultFirstOrderCommissionRates(role).shopIntroductionRate,
   );
 }
 
@@ -157,19 +191,25 @@ export function normalizeShopIntroductionFirstOrderRatePercent(
  * Semantics: Child FO % is Shop Introduction paid to the child.
  * Parent FO % is Partner Development paid to the parent on first order only.
  * Both are independent (not a pool split). Subsequent orders pay Child FO % only.
+ *
+ * Defaults: Representative child 20% / parent 10%; Promoter child 10% / parent 5%.
  */
 export function normalizeFirstOrderCommissionRates(params?: {
   shopIntroductionRate?: number | null;
   partnerDevelopmentRate?: number | null;
+  role?: string | null;
 }): {
   shopIntroductionRate: number;
   partnerDevelopmentRate: number;
 } {
+  const role = params?.role ?? undefined;
   const shopIntroductionRate = normalizeShopIntroductionFirstOrderRatePercent(
     params?.shopIntroductionRate,
+    role,
   );
   const partnerDevelopmentRate = normalizePartnerDevelopmentRatePercent(
     params?.partnerDevelopmentRate,
+    role,
   );
 
   const hasExplicitInput =
@@ -194,7 +234,7 @@ export function normalizeFirstOrderCommissionRates(params?: {
 
 /**
  * Resolve absolute FO rates for a first-order split.
- * Example: child 5%, parent 10% → child SI 5%, parent PD 10% (total 15%).
+ * Example: child 20%, parent 10% → child SI 20%, parent PD 10% (total 30%).
  */
 export function resolveFirstOrderPoolSplit(params?: {
   shopIntroductionRate?: number | null;

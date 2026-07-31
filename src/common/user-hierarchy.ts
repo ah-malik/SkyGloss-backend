@@ -40,6 +40,11 @@ export function shouldIncludeViewerInNetworkOrders(viewerRole?: string): boolean
   return viewerRole === UserRole.PARTNER;
 }
 
+/** Hub and Representative may update status for orders in their network. */
+export function canManageNetworkOrderStatus(role?: string): boolean {
+  return role === UserRole.PARTNER || role === UserRole.MASTER_PARTNER;
+}
+
 export type CommissionLike = {
   recipientRole?: string;
   recipientPartnerCode?: string;

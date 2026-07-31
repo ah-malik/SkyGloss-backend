@@ -1,4 +1,5 @@
 import {
+  canManageNetworkOrderStatus,
   canViewerSeeCommissionRecipient,
   canViewerSeeOrderPlacerRole,
   isStrictDescendantRole,
@@ -53,5 +54,13 @@ describe('user-hierarchy visibility', () => {
     expect(shouldIncludeViewerInNetworkOrders('partner')).toBe(true);
     expect(shouldIncludeViewerInNetworkOrders('regional_partner')).toBe(false);
     expect(shouldIncludeViewerInNetworkOrders('master_partner')).toBe(false);
+  });
+
+  it('allows Hub and Representative to manage network order status', () => {
+    expect(canManageNetworkOrderStatus('partner')).toBe(true);
+    expect(canManageNetworkOrderStatus('master_partner')).toBe(true);
+    expect(canManageNetworkOrderStatus('regional_partner')).toBe(false);
+    expect(canManageNetworkOrderStatus('distributor')).toBe(false);
+    expect(canManageNetworkOrderStatus('admin')).toBe(false);
   });
 });

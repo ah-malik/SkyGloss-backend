@@ -172,7 +172,7 @@ export class OrdersController {
 
   @Post('admin/:id/status')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.PARTNER)
+  @Roles(UserRole.ADMIN, UserRole.PARTNER, UserRole.MASTER_PARTNER)
   updateStatus(
     @Param('id') id: string,
     @Body('status') status: any,
