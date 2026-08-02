@@ -21,6 +21,7 @@ import { PdfModule } from './pdf/pdf.module';
 import { RegistrationFeesModule } from './registration-fees/registration-fees.module';
 import { CouponsModule } from './coupons/coupons.module';
 import { EmailSettingsModule } from './email-settings/email-settings.module';
+import { PayoutsModule } from './payouts/payouts.module';
 
 @Module({
   imports: [
@@ -51,6 +52,7 @@ import { EmailSettingsModule } from './email-settings/email-settings.module';
     RegistrationFeesModule,
     CouponsModule,
     EmailSettingsModule,
+    PayoutsModule,
   ],
   controllers: [AppController],
   providers: [AppService, SeedService],

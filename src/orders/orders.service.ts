@@ -18,6 +18,8 @@ import {
   OrderStatus,
 } from './entities/order.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { CreateAdminTestOrderDto } from './dto/create-admin-test-order.dto';
+import { ProductsService } from '../products/products.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
 import { NotificationType } from '../notifications/entities/notification.entity';
@@ -79,6 +81,7 @@ import {
 import { normalizeCurrencyCode } from '../common/currency-codes';
 import { normalizeOrderItemType } from '../common/order-type';
 import { CouponsService } from '../coupons/coupons.service';
+import { CommissionsService } from '../payouts/services/commissions.service';
 
 const USA_COUNTRIES = ['united states', 'usa', 'us', 'united states of america'];
 const PENDING_PAYMENT_CANCEL_DAYS = 3;
@@ -106,6 +109,8 @@ export class OrdersService implements OnModuleInit {
     private pdfService: PdfService,
     private exchangeRatesService: ExchangeRatesService,
     private couponsService: CouponsService,
+    private commissionsService: CommissionsService,
+    private productsService: ProductsService,
   ) {
     const stripeSecretKey = this.configService.get<string>('STRIPE_SECRET_KEY');
     const usaStripeSecretKey = this.configService.get<string>('USA_STRIPE_SECRET_KEY');
@@ -1828,11 +1833,7 @@ export class OrdersService implements OnModuleInit {
         await order.save();
         // Fall through to fresh commission build below.
       } else if (useHierarchyCommission) {
-        const commissionStatus =
-          newStatus === OrderStatus.SHIPPED ||
-          newStatus === OrderStatus.DELIVERED
-            ? ('earned' as const)
-            : ('pending' as const);
+        const commissionStatus = 'pending' as const;
         order.commissions = order.commissions.map((entry) => ({
           ...entry,
           status: commissionStatus,
@@ -1857,11 +1858,7 @@ export class OrdersService implements OnModuleInit {
           shopUser.partnerDevelopmentRepresentativeCode,
         );
         if (partnerDevUser) {
-          const commissionStatus =
-            newStatus === OrderStatus.SHIPPED ||
-            newStatus === OrderStatus.DELIVERED
-              ? ('earned' as const)
-              : ('pending' as const);
+          const commissionStatus = 'pending' as const;
 
           const split = resolveFirstOrderPoolSplit({
             shopIntroductionRate:
@@ -1930,11 +1927,7 @@ export class OrdersService implements OnModuleInit {
         if (!ratesSynced) {
           await this.normalizeFirstOrderSplitOnOrder(order);
         }
-        const commissionStatus =
-          newStatus === OrderStatus.SHIPPED ||
-          newStatus === OrderStatus.DELIVERED
-            ? ('earned' as const)
-            : ('pending' as const);
+        const commissionStatus = 'pending' as const;
         order.commissions = order.commissions.map((entry) => ({
           ...entry,
           status: commissionStatus,
@@ -1950,11 +1943,7 @@ export class OrdersService implements OnModuleInit {
         const monetary = resolveCommissionOrderAmounts(order);
         // Keep Child FO % in sync even after PD is locked (subsequent orders).
         this.syncFirstOrderCommissionRatesOnOrder(order, shopUser, monetary);
-        const commissionStatus =
-          newStatus === OrderStatus.SHIPPED ||
-          newStatus === OrderStatus.DELIVERED
-            ? ('earned' as const)
-            : ('pending' as const);
+        const commissionStatus = 'pending' as const;
         order.commissions = order.commissions.map((entry) => ({
           ...entry,
           status: commissionStatus,
@@ -2052,11 +2041,7 @@ export class OrdersService implements OnModuleInit {
       });
     }
 
-    const commissionStatus =
-      newStatus === OrderStatus.SHIPPED ||
-      newStatus === OrderStatus.DELIVERED
-        ? ('earned' as const)
-        : ('pending' as const);
+    const commissionStatus = 'pending' as const;
 
     order.commissions = entries.map((entry) => ({
       ...entry,
@@ -2565,6 +2550,10 @@ export class OrdersService implements OnModuleInit {
       order.shippingCompany = shippingCompany;
     }
 
+    if (status === OrderStatus.SHIPPED && oldStatus !== OrderStatus.SHIPPED) {
+      order.shippedAt = new Date();
+    }
+
     if (status === OrderStatus.CANCELLED && oldStatus !== OrderStatus.CANCELLED) {
       if (oldStatus === OrderStatus.PAID && order.stripeSessionId) {
         try {
@@ -2629,6 +2618,26 @@ export class OrdersService implements OnModuleInit {
       status === OrderStatus.DELIVERED
     ) {
       await this.applyOrderCommissions(updatedOrder._id.toString(), status);
+    }
+
+    if (
+      status === OrderStatus.SHIPPED &&
+      oldStatus !== OrderStatus.SHIPPED
+    ) {
+      const shippedAt = updatedOrder.shippedAt || new Date();
+      await this.commissionsService
+        .syncFromShippedOrder(updatedOrder._id.toString(), shippedAt)
+        .catch((err) =>
+          this.logger.error('Failed to sync commission records on ship', err),
+        );
+    }
+
+    if (status === OrderStatus.CANCELLED && oldStatus !== OrderStatus.CANCELLED) {
+      await this.commissionsService
+        .cancelCommissionsForOrder(updatedOrder._id.toString())
+        .catch((err) =>
+          this.logger.error('Failed to cancel commission records', err),
+        );
     }
 
     if (status === OrderStatus.PAID && oldStatus !== OrderStatus.PAID) {
@@ -2756,6 +2765,146 @@ export class OrdersService implements OnModuleInit {
       }
       throw new BadRequestException(`Failed to create order request: ${error.message}`);
     }
+  }
+
+  private assertTestOrdersAllowed(): void {
+    const allow =
+      process.env.NODE_ENV !== 'production' ||
+      process.env.ALLOW_TEST_ORDERS === 'true';
+    if (!allow) {
+      throw new ForbiddenException(
+        'Test order creation is disabled in production',
+      );
+    }
+  }
+
+  private buildDummyShippingForShop(shop: UserDocument) {
+    return {
+      email: shop.email || 'test-shop@skygloss.dev',
+      firstName: shop.firstName || 'Test',
+      lastName: shop.lastName || 'Shop',
+      companyName: shop.companyName || 'SkyGloss Test Shop',
+      address: shop.address || '123 Test Street',
+      address2: 'Suite 100',
+      city: shop.city || 'Los Angeles',
+      state: 'CA',
+      zipCode: shop.zipCode || '90001',
+      country: shop.country || 'United States',
+      phoneNumber: shop.phoneNumber || '+1 555 0100',
+      taxId: 'TEST-TAX-001',
+    };
+  }
+
+  async createAdminTestOrder(dto: CreateAdminTestOrderDto) {
+    this.assertTestOrdersAllowed();
+
+    const shop = await this.usersService.findOne(dto.shopUserId);
+    if (!shop) {
+      throw new NotFoundException('Shop user not found');
+    }
+    if (shop.role !== UserRole.CERTIFIED_SHOP) {
+      throw new BadRequestException(
+        'Test orders must be placed for a Certified Shop user',
+      );
+    }
+
+    if (!dto.items?.length) {
+      throw new BadRequestException('Select at least one product');
+    }
+
+    const orderItems: CreateOrderDto['items'] = [];
+    for (const line of dto.items) {
+      const product = await this.productsService.findOne(line.productId, shop);
+      if (!product) {
+        throw new NotFoundException(`Product not found: ${line.productId}`);
+      }
+      const sizeEntry = (product.sizes || []).find(
+        (s: { size: string; price: number }) => s.size === line.size,
+      );
+      if (!sizeEntry) {
+        throw new BadRequestException(
+          `Size "${line.size}" not found for product ${product.name}`,
+        );
+      }
+      orderItems.push({
+        product: String(product._id || product.id),
+        name: product.name,
+        size: line.size,
+        quantity: line.quantity,
+        orderType: normalizeOrderItemType(line.orderType),
+        price: sizeEntry.price,
+        image: product.images?.[0] || product.shopImages?.[0] || '',
+      });
+    }
+
+    const shippingAddress = this.buildDummyShippingForShop(shop);
+    const orderCurrency = await this.getCurrencyForUser(shop);
+    const itemsSubtotal = getItemsSubtotal(orderItems);
+    const shippingCountry = shippingAddress.country || shop.country || '';
+    const shippingFee = calculateShippingFee(shippingCountry, itemsSubtotal);
+    const finalAmount = Math.max(0, itemsSubtotal + shippingFee);
+
+    const initialStatus = dto.initialStatus || OrderStatus.PAID;
+
+    let savedOrder: OrderDocument | undefined;
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        const orderNumber = await this.generateShopOrderNumber(
+          shippingCountry,
+          'request',
+        );
+        const monetary = await this.buildMonetaryFieldsForNewOrder(
+          finalAmount,
+          orderCurrency || 'usd',
+        );
+        const order = new this.orderModel({
+          user: shop._id,
+          items: orderItems,
+          shippingFee,
+          shippingAddress,
+          status: initialStatus,
+          orderNumber,
+          orderFlow: 'request',
+          discount: 0,
+          ...monetary,
+        });
+        savedOrder = await order.save();
+        break;
+      } catch (saveError: any) {
+        if (saveError.code === 11000 && retries > 1) {
+          retries--;
+          continue;
+        }
+        throw saveError;
+      }
+    }
+
+    if (!savedOrder) {
+      throw new BadRequestException('Failed to create test order');
+    }
+
+    await this.applyOrderCommissions(
+      savedOrder._id.toString(),
+      initialStatus,
+    );
+
+    if (dto.markShippedImmediately) {
+      await this.updateStatus(
+        savedOrder._id.toString(),
+        OrderStatus.SHIPPED,
+        dto.trackingId || 'TEST-TRACK-001',
+        dto.shippingCompany || 'SkyGloss Test Courier',
+      );
+    }
+
+    this.logger.log(
+      `[Dev] Test order ${savedOrder.orderNumber} created for shop ${shop.email}`,
+    );
+
+    return this.orderModel
+      .findById(savedOrder._id)
+      .populate('user', 'firstName lastName email partnerCode role');
   }
 
   async getDashboardStats() {

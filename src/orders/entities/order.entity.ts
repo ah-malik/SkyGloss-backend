@@ -142,6 +142,10 @@ export class Order {
   @Prop()
   shippingCompany: string;
 
+  /** Set when order is first marked SHIPPED (30-day commission hold starts). */
+  @Prop()
+  shippedAt?: Date;
+
   @Prop()
   cancellationReason?: string;
 

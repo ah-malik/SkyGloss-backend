@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { CreateAdminTestOrderDto } from './dto/create-admin-test-order.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -166,6 +167,13 @@ export class OrdersController {
   @Roles(UserRole.ADMIN)
   getAllOrders() {
     return this.ordersService.getAllOrders();
+  }
+
+  @Post('admin/test-order')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  createTestOrder(@Body() dto: CreateAdminTestOrderDto) {
+    return this.ordersService.createAdminTestOrder(dto);
   }
 
 

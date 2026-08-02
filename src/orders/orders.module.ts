@@ -12,6 +12,8 @@ import { RegistrationFeesModule } from '../registration-fees/registration-fees.m
 import { PdfModule } from '../pdf/pdf.module';
 import { ExchangeRatesModule } from '../exchange-rates/exchange-rates.module';
 import { CouponsModule } from '../coupons/coupons.module';
+import { PayoutsModule } from '../payouts/payouts.module';
+import { ProductsModule } from '../products/products.module';
 
 @Module({
   imports: [
@@ -26,6 +28,8 @@ import { CouponsModule } from '../coupons/coupons.module';
     forwardRef(() => PdfModule),
     ExchangeRatesModule,
     CouponsModule,
+    PayoutsModule,
+    ProductsModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService, OrdersSchedulerService],
