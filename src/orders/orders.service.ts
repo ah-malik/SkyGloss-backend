@@ -51,6 +51,7 @@ import {
   resolveCommissionOrderAmounts,
   resolveCommissionRatePercent,
   resolveFirstOrderPoolSplit,
+  resolvePartnerDevelopmentAmountFromChildCommission,
   resolveShopCommissionChain,
   shouldUseFirstOrderNetworkCommission,
 } from '../common/commission-distribution';
@@ -1866,7 +1867,7 @@ export class OrdersService implements OnModuleInit {
             partnerDevelopmentRate: shopUser.partnerDevelopmentRatePercent,
           });
 
-          // Child keeps remainder of the FO pool after parent cut.
+          // Align child SI line to Child FO % of order $ (unchanged semantics).
           this.shrinkShopIntroToPercent(
             order,
             monetary,
@@ -1886,7 +1887,11 @@ export class OrdersService implements OnModuleInit {
             earningType: 'Partner Development',
             percentage: split.parentPercent,
             amount: roundMoney(
-              monetary.convertedUsdAmount * (split.parentPercent / 100),
+              resolvePartnerDevelopmentAmountFromChildCommission({
+                orderUsdAmount: monetary.convertedUsdAmount,
+                childShopIntroductionPercent: split.childKeepPercent,
+                parentPartnerDevelopmentPercent: split.parentPercent,
+              }),
             ),
             status: commissionStatus,
             shopId: shopUserId,
@@ -2315,7 +2320,11 @@ export class OrdersService implements OnModuleInit {
       monetary.convertedUsdAmount * (split.childKeepPercent / 100),
     );
     const pdAmount = roundMoney(
-      monetary.convertedUsdAmount * (split.parentPercent / 100),
+      resolvePartnerDevelopmentAmountFromChildCommission({
+        orderUsdAmount: monetary.convertedUsdAmount,
+        childShopIntroductionPercent: split.childKeepPercent,
+        parentPartnerDevelopmentPercent: split.parentPercent,
+      }),
     );
 
     let changed = false;
@@ -2450,7 +2459,11 @@ export class OrdersService implements OnModuleInit {
       earningType: 'Partner Development',
       percentage: split.parentPercent,
       amount: roundMoney(
-        monetary.convertedUsdAmount * (split.parentPercent / 100),
+        resolvePartnerDevelopmentAmountFromChildCommission({
+          orderUsdAmount: monetary.convertedUsdAmount,
+          childShopIntroductionPercent: split.childKeepPercent,
+          parentPartnerDevelopmentPercent: split.parentPercent,
+        }),
       ),
       status: commissionStatus,
       shopId: shopUserId,

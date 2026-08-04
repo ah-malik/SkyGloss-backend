@@ -193,6 +193,8 @@ export class CommissionsService {
   }
 
   async getSummary(userId: string) {
+    await this.releaseAvailableCommissions();
+
     const uid = new Types.ObjectId(userId);
     const records = await this.commissionModel.find({ recipientUserId: uid }).lean();
 
@@ -238,6 +240,8 @@ export class CommissionsService {
     userId: string,
     filters?: { status?: string; page?: number; limit?: number },
   ) {
+    await this.releaseAvailableCommissions();
+
     const query: Record<string, unknown> = {
       recipientUserId: new Types.ObjectId(userId),
     };
@@ -271,49 +275,130 @@ export class CommissionsService {
       })
       .sort({ availableAt: 1 });
 
-    const selected: Types.ObjectId[] = [];
-    let total = 0;
     const target = Math.round(amount * 100) / 100;
+    if (target <= 0) {
+      throw new Error('Invalid withdrawal amount');
+    }
+
+    let runningTotal = 0;
+    const plan: Array<{
+      record: CommissionRecordDocument;
+      mode: 'full' | 'partial';
+      lockAmount?: number;
+    }> = [];
 
     for (const record of available) {
-      if (total >= target) break;
-      selected.push(record._id as Types.ObjectId);
-      total = Math.round((total + record.amount) * 100) / 100;
+      if (runningTotal >= target) break;
+
+      const recordAmount = Math.round(record.amount * 100) / 100;
+      if (recordAmount <= 0) continue;
+
+      if (runningTotal + recordAmount <= target) {
+        plan.push({ record, mode: 'full' });
+        runningTotal = Math.round((runningTotal + recordAmount) * 100) / 100;
+        continue;
+      }
+
+      const need = Math.round((target - runningTotal) * 100) / 100;
+      if (need > 0) {
+        plan.push({ record, mode: 'partial', lockAmount: need });
+        runningTotal = target;
+      }
+      break;
+    }
+
+    if (runningTotal < target) {
+      throw new Error('Insufficient available commission balance');
+    }
+
+    const selected: Types.ObjectId[] = [];
+    try {
+      for (const step of plan) {
+        if (step.mode === 'full') {
+          step.record.status = CommissionLifecycleStatus.LOCKED;
+          await step.record.save();
+          selected.push(step.record._id as Types.ObjectId);
+        } else {
+          const lockedId = await this.splitAndLockRecord(
+            step.record,
+            step.lockAmount as number,
+          );
+          selected.push(lockedId);
+        }
+      }
+      return { recordIds: selected, total: target };
+    } catch (err) {
+      await this.unlockCommissions(selected);
+      throw err;
+    }
+  }
+
+  private async splitAndLockRecord(
+    record: CommissionRecordDocument,
+    lockAmount: number,
+  ): Promise<Types.ObjectId> {
+    const lock = Math.round(lockAmount * 100) / 100;
+    const remainder = Math.round((record.amount - lock) * 100) / 100;
+
+    if (lock <= 0 || lock > record.amount) {
+      throw new Error('Invalid partial commission lock amount');
+    }
+
+    if (remainder <= 0) {
       record.status = CommissionLifecycleStatus.LOCKED;
       await record.save();
+      return record._id as Types.ObjectId;
     }
 
-    if (total < target) {
-      // Rollback locks
-      await this.commissionModel.updateMany(
-        { _id: { $in: selected } },
-        { status: CommissionLifecycleStatus.AVAILABLE },
-      );
-      throw new Error('Insufficient available commission');
-    }
+    record.amount = remainder;
+    await record.save();
 
-    if (total > target) {
-      // Commission records are indivisible — partial amount must match a exact sum
-      await this.commissionModel.updateMany(
-        { _id: { $in: selected } },
-        { status: CommissionLifecycleStatus.AVAILABLE },
-      );
-      throw new Error(
-        'Withdrawal amount must match your full available balance. Use "Withdraw full balance".',
-      );
-    }
+    const partial = await this.commissionModel.create({
+      orderId: record.orderId,
+      orderNumber: record.orderNumber,
+      recipientUserId: record.recipientUserId,
+      recipientPartnerCode: record.recipientPartnerCode,
+      recipientRole: record.recipientRole,
+      earningType: `${record.earningType} (partial)`,
+      percentage: record.percentage,
+      amount: lock,
+      currency: record.currency,
+      status: CommissionLifecycleStatus.LOCKED,
+      shippedAt: record.shippedAt,
+      availableAt: record.availableAt,
+      availableConfirmedAt: record.availableConfirmedAt,
+      shopUserId: record.shopUserId,
+      originalCurrency: record.originalCurrency,
+      exchangeRate: record.exchangeRate,
+      convertedUsdAmount: record.convertedUsdAmount,
+      splitFromRecordId: record._id as Types.ObjectId,
+    });
 
-    return { recordIds: selected, total };
+    return partial._id as Types.ObjectId;
   }
 
   async unlockCommissions(recordIds: Types.ObjectId[]): Promise<void> {
-    await this.commissionModel.updateMany(
-      {
-        _id: { $in: recordIds },
-        status: CommissionLifecycleStatus.LOCKED,
-      },
-      { status: CommissionLifecycleStatus.AVAILABLE, $unset: { withdrawalRequestId: 1 } },
-    );
+    for (const id of recordIds) {
+      const record = await this.commissionModel.findById(id);
+      if (!record || record.status !== CommissionLifecycleStatus.LOCKED) {
+        continue;
+      }
+
+      if (record.splitFromRecordId) {
+        const parent = await this.commissionModel.findById(record.splitFromRecordId);
+        if (parent) {
+          parent.amount =
+            Math.round((parent.amount + record.amount) * 100) / 100;
+          await parent.save();
+        }
+        await record.deleteOne();
+        continue;
+      }
+
+      record.status = CommissionLifecycleStatus.AVAILABLE;
+      record.withdrawalRequestId = undefined;
+      await record.save();
+    }
   }
 
   async markWithdrawn(recordIds: Types.ObjectId[], withdrawalRequestId: string): Promise<void> {

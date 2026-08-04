@@ -12,11 +12,20 @@ async function bootstrap() {
   // Do NOT add manual bodyParser middleware — it conflicts with rawBody
   const app = await NestFactory.create(AppModule, { rawBody: true });
 
-  // Enable CORS
+  // Enable CORS — allow custom client header for API control
   app.enableCors({
     origin: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
+    allowedHeaders: [
+      'Authorization',
+      'Content-Type',
+      'Accept',
+      'Origin',
+      'X-Requested-With',
+      'X-Client-App',
+      'X-Client-Portal',
+    ],
     exposedHeaders: ['Content-Disposition'],
   });
   // Global Config

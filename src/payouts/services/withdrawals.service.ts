@@ -45,14 +45,19 @@ export class WithdrawalsService {
     type: NotificationType;
     title: string;
     message: string;
-    user: string;
+    user?: string;
     triggeredBy?: string;
     link?: string;
     metadata?: Record<string, unknown>;
   }): Promise<void> {
     try {
       const saved = await this.notificationsService.create(data);
-      this.notificationsGateway.broadcastNotification(saved);
+      const payload = saved.toObject ? saved.toObject() : saved;
+      this.notificationsGateway.broadcastNotification({
+        ...payload,
+        user: payload.user?.toString?.() ?? payload.user,
+        triggeredBy: payload.triggeredBy?.toString?.() ?? payload.triggeredBy,
+      });
     } catch (err) {
       console.error('[WithdrawalsService] Notification failed', err);
     }
@@ -157,52 +162,89 @@ export class WithdrawalsService {
       snapshot: { status: initialStatus },
     });
 
-    await this.notifyHubForReview(user, request);
+    await this.notifyStakeholdersOnSubmit(user, request);
 
     return this.enrichWithdrawal(request);
   }
 
-  private async notifyHubForReview(
-    user: { _id: Types.ObjectId; role: UserRole; firstName?: string; lastName?: string },
+  private requesterLabel(user: {
+    firstName?: string;
+    lastName?: string;
+    partnerCode?: string;
+  }): string {
+    const name = `${user.firstName || ''} ${user.lastName || ''}`.trim();
+    return name || user.partnerCode || 'Network member';
+  }
+
+  private async notifyStakeholdersOnSubmit(
+    user: {
+      _id: Types.ObjectId;
+      role: UserRole;
+      firstName?: string;
+      lastName?: string;
+      partnerCode?: string;
+    },
     request: WithdrawalRequestDocument,
   ) {
-    const hubUsers = await this.findHubReviewersForUser(user._id.toString());
+    const label = this.requesterLabel(user);
+    const amount = request.requestedAmount.toFixed(2);
+    const statusNote =
+      request.status === WithdrawalStatus.WAITING_BANK_DETAILS
+        ? ' (awaiting bank details from requester)'
+        : '';
+
+    const hubUsers = await this.usersService.findOwningHubPartners(
+      user._id.toString(),
+    );
     for (const hub of hubUsers) {
       await this.pushNotification({
         type: NotificationType.WITHDRAWAL_SUBMITTED,
         title: 'Withdrawal Review Required',
-        message: `${user.firstName || ''} ${user.lastName || ''} submitted a withdrawal of $${request.requestedAmount.toFixed(2)}.`,
+        message: `${label} submitted a withdrawal of $${amount}.${statusNote}`,
         user: hub._id.toString(),
         triggeredBy: user._id.toString(),
         link: '/dashboard/partner/network?tab=earnings',
-        metadata: { withdrawalRequestId: request._id },
+        metadata: {
+          withdrawalRequestId: request._id,
+          requestNumber: request.requestNumber,
+        },
       });
     }
+
+    await this.pushNotification({
+      type: NotificationType.WITHDRAWAL_SUBMITTED,
+      title: 'New Withdrawal Request',
+      message: `${label} submitted withdrawal ${request.requestNumber} for $${amount}.${statusNote}`,
+      triggeredBy: user._id.toString(),
+      link: '/withdrawals',
+      metadata: {
+        withdrawalRequestId: request._id,
+        requestNumber: request.requestNumber,
+        status: request.status,
+      },
+    });
   }
 
-  private async findHubReviewersForUser(userId: string) {
-    const user = await this.usersService.findOne(userId);
-    if (!user) return [];
-
-    if (user.role === UserRole.PARTNER) {
-      // Hub's own withdrawals go to admin directly — no hub reviewer
-      return [];
-    }
-
-    let current = user;
-    const visited = new Set<string>();
-    while (current?.referredByPartnerCode) {
-      const code = current.referredByPartnerCode.trim().toUpperCase();
-      if (visited.has(code)) break;
-      visited.add(code);
-      const parent = await this.usersService.findByPartnerCode(code);
-      if (!parent) break;
-      if (parent.role === UserRole.PARTNER) {
-        return [parent];
-      }
-      current = parent;
-    }
-    return [];
+  private async notifyAdminsPendingPayout(
+    user: {
+      firstName?: string;
+      lastName?: string;
+      partnerCode?: string;
+    },
+    request: WithdrawalRequestDocument,
+  ) {
+    const label = this.requesterLabel(user);
+    await this.pushNotification({
+      type: NotificationType.WITHDRAWAL_HUB_APPROVED,
+      title: 'Withdrawal Ready for Admin Review',
+      message: `${label}'s withdrawal ${request.requestNumber} ($${request.requestedAmount.toFixed(2)}) was approved by Hub and needs payout.`,
+      triggeredBy: request.hubReviewerId?.toString(),
+      link: '/withdrawals',
+      metadata: {
+        withdrawalRequestId: request._id,
+        requestNumber: request.requestNumber,
+      },
+    });
   }
 
   async listMyWithdrawals(userId: string) {
@@ -214,17 +256,21 @@ export class WithdrawalsService {
   }
 
   async getWithdrawalDetail(id: string, viewerId: string, viewerRole: UserRole) {
-    const request = await this.withdrawalModel.findById(id).lean();
+    const viewerIdStr = String(viewerId?.toString?.() ?? viewerId);
+    const request = await this.withdrawalModel
+      .findById(id)
+      .populate('userId', 'firstName lastName email partnerCode role')
+      .populate('hubReviewerId', 'firstName lastName email partnerCode')
+      .populate('adminReviewerId', 'firstName lastName email')
+      .lean();
     if (!request) throw new NotFoundException('Withdrawal not found');
 
-    const isOwner = request.userId.toString() === viewerId;
+    const requesterId = this.resolveRequesterId(request);
+    const isOwner = requesterId === viewerIdStr;
     const isAdmin = viewerRole === UserRole.ADMIN;
     const isHub =
       viewerRole === UserRole.PARTNER &&
-      (await this.usersService.isUserInViewerNetwork(
-        { _id: viewerId, role: viewerRole } as any,
-        request.userId.toString(),
-      ));
+      (await this.isHubOwnerOfRequester(viewerIdStr, requesterId));
 
     if (!isOwner && !isAdmin && !isHub) {
       throw new ForbiddenException();
@@ -235,37 +281,125 @@ export class WithdrawalsService {
       .find({ _id: { $in: request.commissionRecordIds } })
       .lean();
 
+    let bankDetails: Record<string, unknown> | null = null;
+    if (request.bankDetailsId) {
+      const bankId = request.bankDetailsId.toString();
+      bankDetails = isAdmin
+        ? await this.bankDetailsService.getByIdForAdminReview(bankId)
+        : await this.bankDetailsService.getByIdSafe(bankId);
+    }
+
     return {
       ...this.formatWithdrawal(request),
       commissions,
       history,
+      bankDetails,
     };
   }
 
-  async listHubPending(hubUserId: string) {
-    const hub = await this.usersService.findOne(hubUserId);
+  private resolveRequesterId(w: Record<string, any>): string {
+    const requester = w.userId as { _id?: Types.ObjectId | string };
+    return requester?._id?.toString?.() || String(w.userId || '');
+  }
+
+  private async isHubOwnerOfRequester(
+    hubId: string,
+    requesterId: string,
+  ): Promise<boolean> {
+    const owners = await this.usersService.findOwningHubPartners(requesterId);
+    return owners.some((o) => o._id.toString() === hubId);
+  }
+
+  private async filterWithdrawalsForHub(
+    hubId: string,
+    withdrawals: Record<string, any>[],
+  ): Promise<Record<string, any>[]> {
+    const items: Record<string, any>[] = [];
+    for (const w of withdrawals) {
+      const requesterId = this.resolveRequesterId(w);
+      if (!requesterId) continue;
+      if (await this.isHubOwnerOfRequester(hubId, requesterId)) {
+        items.push(w);
+      }
+    }
+    return items;
+  }
+
+  async listHubNetworkWithdrawals(hubUserId: string) {
+    const hubId = String(hubUserId?.toString?.() ?? hubUserId);
+    const hub = await this.usersService.findOne(hubId);
     if (!hub || hub.role !== UserRole.PARTNER) {
       throw new ForbiddenException('Hub access only');
     }
 
-    const network = await this.usersService.findNetworkUsersForViewer(hub);
-    const networkIds = [
-      ...network.representatives,
-      ...network.promoters,
-      ...network.represented,
-      ...network.distributors,
-    ].map((u) => u._id);
+    const all = await this.withdrawalModel
+      .find({})
+      .sort({ createdAt: -1 })
+      .populate('userId', 'firstName lastName email partnerCode role')
+      .populate('hubReviewerId', 'firstName lastName email partnerCode')
+      .lean();
 
-    const items = await this.withdrawalModel
-      .find({
-        userId: { $in: networkIds },
-        status: WithdrawalStatus.WAITING_HUB_APPROVAL,
-      })
+    const items = await this.filterWithdrawalsForHub(hubId, all);
+    return items.map((w) => this.formatWithdrawal(w));
+  }
+
+  async listHubPending(hubUserId: string) {
+    const hubId = String(hubUserId?.toString?.() ?? hubUserId);
+    const hub = await this.usersService.findOne(hubId);
+    if (!hub || hub.role !== UserRole.PARTNER) {
+      throw new ForbiddenException('Hub access only');
+    }
+
+    const allPending = await this.withdrawalModel
+      .find({ status: WithdrawalStatus.WAITING_HUB_APPROVAL })
       .sort({ createdAt: 1 })
       .populate('userId', 'firstName lastName email partnerCode role')
       .lean();
 
+    const items = await this.filterWithdrawalsForHub(hubId, allPending);
+    for (const w of items) {
+      await this.ensureHubNotifiedForPending(
+        w,
+        w.userId as { _id?: Types.ObjectId | string; firstName?: string; lastName?: string; partnerCode?: string },
+      );
+    }
+
     return items.map((w) => this.formatWithdrawal(w));
+  }
+
+  private async ensureHubNotifiedForPending(
+    request: Record<string, any>,
+    requester: { _id?: Types.ObjectId | string; firstName?: string; lastName?: string; partnerCode?: string },
+  ) {
+    const requestId = request._id?.toString?.();
+    if (!requestId) return;
+
+    const requesterId = requester?._id?.toString?.() || String(request.userId || '');
+    const owners = await this.usersService.findOwningHubPartners(requesterId);
+    const label = this.requesterLabel(requester as any);
+    const amount = Number(request.requestedAmount || 0).toFixed(2);
+
+    for (const hub of owners) {
+      const hubId = hub._id.toString();
+      const exists = await this.notificationsService.existsWithdrawalNotification(
+        requestId,
+        hubId,
+      );
+      if (exists) continue;
+
+      await this.pushNotification({
+        type: NotificationType.WITHDRAWAL_SUBMITTED,
+        title: 'Withdrawal Review Required',
+        message: `${label} submitted a withdrawal of $${amount}.`,
+        user: hubId,
+        triggeredBy: requesterId,
+        link: '/dashboard/partner/network?tab=earnings',
+        metadata: {
+          withdrawalRequestId: requestId,
+          requestNumber: request.requestNumber,
+        },
+      });
+    }
   }
 
   async listAdminPending() {
@@ -273,6 +407,25 @@ export class WithdrawalsService {
       .find({ status: WithdrawalStatus.SENT_TO_ADMIN })
       .sort({ createdAt: 1 })
       .populate('userId', 'firstName lastName email partnerCode role')
+      .populate('hubReviewerId', 'firstName lastName email partnerCode')
+      .lean();
+    return items.map((w) => this.formatWithdrawal(w));
+  }
+
+  async listAdminAll(status?: string) {
+    const query: Record<string, unknown> = {};
+    if (status === 'pending') {
+      query.status = WithdrawalStatus.SENT_TO_ADMIN;
+    } else if (status) {
+      query.status = status;
+    }
+
+    const items = await this.withdrawalModel
+      .find(query)
+      .sort({ createdAt: -1 })
+      .populate('userId', 'firstName lastName email partnerCode role')
+      .populate('hubReviewerId', 'firstName lastName email partnerCode')
+      .populate('adminReviewerId', 'firstName lastName email')
       .lean();
     return items.map((w) => this.formatWithdrawal(w));
   }
@@ -283,6 +436,7 @@ export class WithdrawalsService {
     action: 'approve' | 'reject',
     note?: string,
   ) {
+    const hubId = String(hubUserId?.toString?.() ?? hubUserId);
     const request = await this.withdrawalModel.findById(withdrawalId);
     if (!request) throw new NotFoundException('Withdrawal not found');
 
@@ -290,22 +444,22 @@ export class WithdrawalsService {
       throw new BadRequestException('Withdrawal is not awaiting hub approval');
     }
 
-    const hub = await this.usersService.findOne(hubUserId);
+    const hub = await this.usersService.findOne(hubId);
     if (!hub || hub.role !== UserRole.PARTNER) {
       throw new ForbiddenException();
     }
 
-    const inNetwork = await this.usersService.isUserInViewerNetwork(
-      hub as any,
+    const inNetwork = await this.isHubOwnerOfRequester(
+      hubId,
       request.userId.toString(),
     );
-    if (!inNetwork && request.userId.toString() !== hubUserId) {
+    if (!inNetwork && request.userId.toString() !== hubId) {
       throw new ForbiddenException('User is not in your network');
     }
 
     if (action === 'reject') {
       request.status = WithdrawalStatus.REJECTED_BY_HUB;
-      request.hubReviewerId = new Types.ObjectId(hubUserId);
+      request.hubReviewerId = new Types.ObjectId(hubId);
       request.hubReviewedAt = new Date();
       request.hubReviewNote = note;
       await request.save();
@@ -314,7 +468,7 @@ export class WithdrawalsService {
       await this.auditService.logApproval({
         withdrawalRequestId: request._id as Types.ObjectId,
         action: ApprovalAction.HUB_REJECT,
-        actorUserId: new Types.ObjectId(hubUserId),
+        actorUserId: new Types.ObjectId(hubId),
         actorRole: hub.role,
         previousStatus: WithdrawalStatus.WAITING_HUB_APPROVAL,
         newStatus: WithdrawalStatus.REJECTED_BY_HUB,
@@ -326,7 +480,7 @@ export class WithdrawalsService {
         title: 'Withdrawal Rejected',
         message: `Your withdrawal ${request.requestNumber} was rejected by your Hub.${note ? ` Note: ${note}` : ''}`,
         user: request.userId.toString(),
-        triggeredBy: hubUserId,
+        triggeredBy: hubId,
         link: '/dashboard/partner/network?tab=earnings',
       });
 
@@ -335,7 +489,7 @@ export class WithdrawalsService {
 
     // Approve
     request.status = WithdrawalStatus.HUB_APPROVED;
-    request.hubReviewerId = new Types.ObjectId(hubUserId);
+    request.hubReviewerId = new Types.ObjectId(hubId);
     request.hubReviewedAt = new Date();
     request.hubReviewNote = note;
     request.walletCreditedAt = new Date();
@@ -345,7 +499,7 @@ export class WithdrawalsService {
       request.userId.toString(),
       request.requestedAmount,
       request._id.toString(),
-      hubUserId,
+      hubId,
     );
 
     request.status = WithdrawalStatus.SENT_TO_ADMIN;
@@ -354,7 +508,7 @@ export class WithdrawalsService {
     await this.auditService.logApproval({
       withdrawalRequestId: request._id as Types.ObjectId,
       action: ApprovalAction.HUB_APPROVE,
-      actorUserId: new Types.ObjectId(hubUserId),
+      actorUserId: new Types.ObjectId(hubId),
       actorRole: hub.role,
       previousStatus: WithdrawalStatus.WAITING_HUB_APPROVAL,
       newStatus: WithdrawalStatus.SENT_TO_ADMIN,
@@ -366,9 +520,14 @@ export class WithdrawalsService {
       title: 'Withdrawal Approved by Hub',
       message: `Your withdrawal ${request.requestNumber} was approved and sent to Admin for payout.`,
       user: request.userId.toString(),
-      triggeredBy: hubUserId,
+      triggeredBy: hubId,
       link: '/dashboard/partner/network?tab=earnings',
     });
+
+    const requester = await this.usersService.findOne(request.userId.toString());
+    if (requester) {
+      await this.notifyAdminsPendingPayout(requester as any, request);
+    }
 
     return this.enrichWithdrawal(request);
   }
@@ -507,7 +666,7 @@ export class WithdrawalsService {
     await request.save();
 
     const user = await this.usersService.findOne(userId);
-    if (user) await this.notifyHubForReview(user as any, request);
+    if (user) await this.notifyStakeholdersOnSubmit(user as any, request);
 
     return this.enrichWithdrawal(request);
   }

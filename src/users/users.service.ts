@@ -2684,6 +2684,64 @@ export class UsersService implements OnModuleInit {
     return all.some((u) => u._id.toString() === targetUserId);
   }
 
+  /** Walk upline to the owning Hub (PARTNER), with network-membership fallback. */
+  async findOwningHubPartners(userId: string): Promise<UserDocument[]> {
+    const user = await this.findOne(userId);
+    if (!user || user.role === UserRole.PARTNER) return [];
+
+    const hubs: UserDocument[] = [];
+    const visited = new Set<string>();
+    let current: UserDocument | null = user;
+
+    while (current?.referredByPartnerCode) {
+      const code = normalizePartnerCode(current.referredByPartnerCode);
+      if (!code || visited.has(code)) break;
+      visited.add(code);
+
+      const parent = await this.findByPartnerCode(code);
+      if (!parent) break;
+
+      // Skip invalid self-referrals (e.g. referredByPartnerCode = own partnerCode)
+      if (
+        parent._id.toString() === current._id.toString() ||
+        normalizePartnerCode(parent.partnerCode) === normalizePartnerCode(current.partnerCode)
+      ) {
+        break;
+      }
+
+      if (parent.role === UserRole.PARTNER) {
+        hubs.push(parent);
+        break;
+      }
+      current = parent;
+    }
+
+    if (hubs.length === 0) {
+      const partners = await this.userModel
+        .find({ role: UserRole.PARTNER })
+        .select('-password -refreshTokenHash -resetPasswordToken -resetPasswordExpires')
+        .exec();
+      for (const partner of partners) {
+        if (await this.isUserInViewerNetwork(partner, userId)) {
+          hubs.push(partner);
+        }
+      }
+    }
+
+    if (hubs.length === 0) {
+      const globalHub = await this.findByPartnerCode(GLOBAL_HUB_PARTNER_CODE);
+      if (globalHub) hubs.push(globalHub);
+    }
+
+    const seen = new Set<string>();
+    return hubs.filter((h) => {
+      const id = h._id.toString();
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  }
+
   /** @deprecated Use findNetworkUsersForViewer */
   async findReferredShops(partnerCode: string): Promise<{
     shops: UserDocument[];

@@ -73,6 +73,10 @@ export class CommissionRecord {
 
   @Prop()
   convertedUsdAmount?: number;
+
+  /** Set when this record was split off a larger available commission for partial withdrawal */
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'CommissionRecord' })
+  splitFromRecordId?: Types.ObjectId;
 }
 
 export const CommissionRecordSchema =

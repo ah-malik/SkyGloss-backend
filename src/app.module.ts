@@ -22,6 +22,7 @@ import { RegistrationFeesModule } from './registration-fees/registration-fees.mo
 import { CouponsModule } from './coupons/coupons.module';
 import { EmailSettingsModule } from './email-settings/email-settings.module';
 import { PayoutsModule } from './payouts/payouts.module';
+import { ApiControlModule } from './api-control/api-control.module';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { PayoutsModule } from './payouts/payouts.module';
     CouponsModule,
     EmailSettingsModule,
     PayoutsModule,
+    ApiControlModule,
   ],
   controllers: [AppController],
   providers: [AppService, SeedService],

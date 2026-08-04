@@ -50,7 +50,7 @@ describe('calculateRepresentativeCommissionEntries', () => {
     convertedUsdAmount: usd,
   });
 
-  it('first order: absolute Child FO % + Parent FO %', () => {
+  it('first order: child SI of order $; parent PD of child SI $', () => {
     const entries = calculateRepresentativeCommissionEntries({
       shopId: 'shop1',
       assignments: {
@@ -69,20 +69,17 @@ describe('calculateRepresentativeCommissionEntries', () => {
       recipientPartnerCode: 'REP0002',
       earningType: 'Shop Introduction',
       percentage: 5,
-      amount: 5,
+      amount: 5, // 5% of $100
     });
     expect(entries[1]).toMatchObject({
       recipientPartnerCode: 'REP0001',
       earningType: 'Partner Development',
       percentage: 10,
-      amount: 10,
+      amount: 0.5, // 10% of child's $5 SI
     });
-
-    const total = entries.reduce((sum, e) => sum + e.percentage, 0);
-    expect(total).toBe(15);
   });
 
-  it('allows Parent FO % greater than Child FO % (absolute rates)', () => {
+  it('parent PD is % of child SI even when parent rate exceeds child rate', () => {
     const entries = calculateRepresentativeCommissionEntries({
       shopId: 'shop1',
       assignments: {
@@ -98,11 +95,35 @@ describe('calculateRepresentativeCommissionEntries', () => {
 
     expect(entries.find((e) => e.earningType === 'Partner Development')).toMatchObject({
       percentage: 12,
-      amount: 12,
+      amount: 1.2, // 12% of child's $10 SI
     });
     expect(entries.find((e) => e.earningType === 'Shop Introduction')).toMatchObject({
       percentage: 10,
       amount: 10,
+    });
+  });
+
+  it('user example: child 10% / parent 5% → parent gets 5% of child SI', () => {
+    const entries = calculateRepresentativeCommissionEntries({
+      shopId: 'shop1',
+      assignments: {
+        partnerDevelopmentCommissionPaid: false,
+        partnerDevelopmentEligible: true,
+        partnerDevelopmentRatePercent: 5,
+        shopIntroductionFirstOrderRatePercent: 10,
+      },
+      recipients: { shopIntroduction: rep2, partnerDevelopment: rep1 },
+      monetary: monetary(100),
+      isFirstSuccessfulOrder: true,
+    });
+
+    expect(entries.find((e) => e.earningType === 'Shop Introduction')).toMatchObject({
+      percentage: 10,
+      amount: 10,
+    });
+    expect(entries.find((e) => e.earningType === 'Partner Development')).toMatchObject({
+      percentage: 5,
+      amount: 0.5, // 5% of child's $10 — not 5% of order
     });
   });
 
@@ -144,7 +165,7 @@ describe('calculateRepresentativeCommissionEntries', () => {
     });
   });
 
-  it('supports admin-configured absolute FO rates (15% child / 7% parent → 15% + 7%)', () => {
+  it('supports admin-configured FO rates (15% child / 7% parent → parent = 7% of child SI)', () => {
     const entries = calculateRepresentativeCommissionEntries({
       shopId: 'shop-new',
       assignments: {
@@ -161,15 +182,12 @@ describe('calculateRepresentativeCommissionEntries', () => {
     expect(entries).toHaveLength(2);
     expect(entries.find((e) => e.earningType === 'Partner Development')).toMatchObject({
       percentage: 7,
-      amount: 7,
+      amount: 1.05, // 7% of child's $15 SI
     });
     expect(entries.find((e) => e.earningType === 'Shop Introduction')).toMatchObject({
       percentage: 15,
       amount: 15,
     });
-    expect(
-      entries.reduce((sum, e) => sum + e.percentage, 0),
-    ).toBe(22);
   });
 
   it('second shop first order still pays Partner Development (per-shop, not once per child Rep)', () => {
@@ -194,7 +212,7 @@ describe('calculateRepresentativeCommissionEntries', () => {
     expect(entries.find((e) => e.earningType === 'Partner Development')).toMatchObject({
       recipientPartnerCode: 'REP0001',
       percentage: 5,
-      amount: 10,
+      amount: 1, // 5% of child's $20 SI on $200 order
     });
     expect(entries.find((e) => e.earningType === 'Shop Introduction')).toMatchObject({
       recipientPartnerCode: 'REP0002',
@@ -329,8 +347,8 @@ describe('calculateRepresentativeCommissionEntries', () => {
       isFirstSuccessfulOrder: true,
     });
 
-    expect(entries[0].amount).toBe(5.4); // child absolute 5%
-    expect(entries[1].amount).toBe(10.8); // parent absolute 10%
+    expect(entries[0].amount).toBe(5.4); // child 5% of $108
+    expect(entries[1].amount).toBe(0.54); // parent 10% of child's $5.40 SI
   });
 });
 
@@ -381,7 +399,7 @@ describe('REP → PROM → PROM → SHOP (Promoter FO + parent Rep OS)', () => {
     expect(entries.find((e) => e.recipientPartnerCode === 'PROM0001')).toMatchObject({
       earningType: 'Partner Development',
       percentage: 10,
-      amount: 10,
+      amount: 0.5, // 10% of child's $5 SI
     });
     expect(entries.find((e) => e.recipientPartnerCode === 'REP0001')).toMatchObject({
       earningType: 'Operational Support',

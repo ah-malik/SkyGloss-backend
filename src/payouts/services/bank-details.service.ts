@@ -49,6 +49,18 @@ export class BankDetailsService {
     });
   }
 
+  async getByIdForAdminReview(id: string) {
+    const doc = await this.bankDetailsModel.findById(id);
+    if (!doc || doc.isDeleted) throw new NotFoundException('Bank details not found');
+    return doc.toObject();
+  }
+
+  async getByIdSafe(id: string) {
+    const doc = await this.bankDetailsModel.findById(id);
+    if (!doc || doc.isDeleted) return null;
+    return this.toSafeResponse(doc);
+  }
+
   async getMyBankDetails(userId: string) {
     const docs = await this.bankDetailsModel
       .find({ userId: new Types.ObjectId(userId), isDeleted: false })

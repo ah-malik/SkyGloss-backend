@@ -39,6 +39,8 @@ import { CommissionsController } from './controllers/commissions.controller';
 import { WithdrawalsController } from './controllers/withdrawals.controller';
 import { BankDetailsController } from './controllers/bank-details.controller';
 import { WalletsController } from './controllers/wallets.controller';
+import { AdminTransactionsController } from './controllers/admin-transactions.controller';
+import { AdminTransactionsService } from './services/admin-transactions.service';
 import { UsersModule } from '../users/users.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 
@@ -62,6 +64,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     WithdrawalsController,
     BankDetailsController,
     WalletsController,
+    AdminTransactionsController,
   ],
   providers: [
     CommissionsService,
@@ -70,6 +73,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     BankDetailsService,
     AuditService,
     CommissionSchedulerService,
+    AdminTransactionsService,
   ],
   exports: [CommissionsService, WithdrawalsService],
 })

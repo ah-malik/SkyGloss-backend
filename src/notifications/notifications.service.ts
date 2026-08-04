@@ -189,4 +189,24 @@ export class NotificationsService {
       .limit(20)
       .exec();
   }
+
+  async existsWithdrawalNotification(
+    withdrawalRequestId: string,
+    recipientUserId?: string,
+  ): Promise<boolean> {
+    const idVariants: (string | Types.ObjectId)[] = [withdrawalRequestId];
+    if (Types.ObjectId.isValid(withdrawalRequestId)) {
+      idVariants.push(new Types.ObjectId(withdrawalRequestId));
+    }
+
+    const query: Record<string, unknown> = {
+      type: NotificationType.WITHDRAWAL_SUBMITTED,
+      'metadata.withdrawalRequestId': { $in: idVariants },
+    };
+    if (recipientUserId) {
+      query.user = recipientUserId;
+    }
+    const count = await this.notificationModel.countDocuments(query).exec();
+    return count > 0;
+  }
 }

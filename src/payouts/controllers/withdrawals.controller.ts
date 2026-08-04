@@ -5,6 +5,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { WithdrawalsService } from '../services/withdrawals.service';
@@ -44,10 +45,22 @@ export class WithdrawalsController {
     return this.withdrawalsService.listMyWithdrawals(userId);
   }
 
+  @Get('hub/network')
+  @Roles(UserRole.PARTNER)
+  listHubNetwork(@GetUser('_id') userId: string) {
+    return this.withdrawalsService.listHubNetworkWithdrawals(userId);
+  }
+
   @Get('hub/pending')
   @Roles(UserRole.PARTNER)
   listHubPending(@GetUser('_id') userId: string) {
     return this.withdrawalsService.listHubPending(userId);
+  }
+
+  @Get('admin/all')
+  @Roles(UserRole.ADMIN)
+  listAdminAll(@Query('status') status?: string) {
+    return this.withdrawalsService.listAdminAll(status);
   }
 
   @Get('admin/pending')
