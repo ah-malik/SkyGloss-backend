@@ -3,9 +3,23 @@ import {
   WebSocketServer,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  SubscribeMessage,
+  MessageBody,
+  ConnectedSocket,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
+
+function resolveNotificationUserId(user: unknown): string | undefined {
+  if (!user) return undefined;
+  if (typeof user === 'string') return user;
+  if (typeof user === 'object' && user !== null) {
+    const obj = user as { _id?: { toString?: () => string }; toString?: () => string };
+    if (obj._id) return obj._id.toString?.() ?? String(obj._id);
+    if (typeof obj.toString === 'function') return obj.toString();
+  }
+  return String(user);
+}
 
 @WebSocketGateway({
   cors: {
@@ -25,23 +39,37 @@ export class NotificationsGateway
   }
 
   handleConnection(client: Socket) {
+    const userId = client.handshake.query?.userId;
+    if (typeof userId === 'string' && userId.trim()) {
+      client.join(userId.trim());
+      this.logger.log(`Client ${client.id} auto-joined notification room ${userId.trim()}`);
+    }
     this.logger.log(`Client connected to notifications: ${client.id}`);
-    this.logger.log(
-      `Handshake details: ${JSON.stringify({
-        query: client.handshake.query,
-        auth: client.handshake.auth,
-        address: client.handshake.address,
-      })}`,
-    );
   }
 
   handleDisconnect(client: Socket) {
     this.logger.log(`Client disconnected from notifications: ${client.id}`);
   }
 
+  @SubscribeMessage('join_user_room')
+  handleJoinUserRoom(
+    @MessageBody() data: { userId: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    if (!data?.userId) return;
+    const roomId = String(data.userId).trim();
+    client.join(roomId);
+    this.logger.log(`Client ${client.id} joined notification room ${roomId}`);
+  }
+
   broadcastNotification(notification: any) {
+    const recipientId = resolveNotificationUserId(notification.user);
+    const type = String(notification?.type || '');
+    const isTargetedOnly =
+      type.startsWith('WITHDRAWAL_') || type.startsWith('COMMISSION_');
+
     this.logger.log(
-      `Broadcasting new_notification: ${JSON.stringify(notification)}`,
+      `Sending new_notification${recipientId ? ` to ${recipientId}` : ' (broadcast)'}: ${type}`,
     );
     if (!this.server) {
       this.logger.error(
@@ -49,7 +77,14 @@ export class NotificationsGateway
       );
       return;
     }
-    this.server.emit('new_notification', notification);
+    if (recipientId) {
+      this.server.to(recipientId).emit('new_notification', notification);
+    } else if (!isTargetedOnly) {
+      // Legacy admin-wide notifications (e.g. NEW_USER)
+      this.server.emit('new_notification', notification);
+    } else {
+      this.logger.warn(`Skipped broadcast for targeted notification without recipient: ${type}`);
+    }
     this.logger.log('Emit call completed');
   }
 

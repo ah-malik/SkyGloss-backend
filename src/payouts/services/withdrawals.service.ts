@@ -50,6 +50,10 @@ export class WithdrawalsService {
     link?: string;
     metadata?: Record<string, unknown>;
   }): Promise<void> {
+    if (!data.user) {
+      console.error('[WithdrawalsService] Skipped notification without recipient user:', data.type);
+      return;
+    }
     try {
       const saved = await this.notificationsService.create(data);
       const payload = saved.toObject ? saved.toObject() : saved;
@@ -60,6 +64,23 @@ export class WithdrawalsService {
       });
     } catch (err) {
       console.error('[WithdrawalsService] Notification failed', err);
+    }
+  }
+
+  private async notifyAllAdmins(data: {
+    type: NotificationType;
+    title: string;
+    message: string;
+    triggeredBy?: string;
+    link?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<void> {
+    const admins = await this.usersService.findAdminUsers();
+    for (const admin of admins) {
+      await this.pushNotification({
+        ...data,
+        user: admin._id.toString(),
+      });
     }
   }
 
@@ -211,7 +232,7 @@ export class WithdrawalsService {
       });
     }
 
-    await this.pushNotification({
+    await this.notifyAllAdmins({
       type: NotificationType.WITHDRAWAL_SUBMITTED,
       title: 'New Withdrawal Request',
       message: `${label} submitted withdrawal ${request.requestNumber} for $${amount}.${statusNote}`,
@@ -234,7 +255,7 @@ export class WithdrawalsService {
     request: WithdrawalRequestDocument,
   ) {
     const label = this.requesterLabel(user);
-    await this.pushNotification({
+    await this.notifyAllAdmins({
       type: NotificationType.WITHDRAWAL_HUB_APPROVED,
       title: 'Withdrawal Ready for Admin Review',
       message: `${label}'s withdrawal ${request.requestNumber} ($${request.requestedAmount.toFixed(2)}) was approved by Hub and needs payout.`,

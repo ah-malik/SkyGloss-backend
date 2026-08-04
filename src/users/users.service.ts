@@ -1786,6 +1786,13 @@ export class UsersService implements OnModuleInit {
     return this.userModel.findById(id).exec();
   }
 
+  async findAdminUsers(): Promise<UserDocument[]> {
+    return this.userModel
+      .find({ role: UserRole.ADMIN })
+      .select('_id firstName lastName email role')
+      .exec();
+  }
+
   /** Lightweight lookup for JWT validation (excludes secrets). */
   async findOneForAuth(id: string): Promise<UserDocument | null> {
     return this.userModel
