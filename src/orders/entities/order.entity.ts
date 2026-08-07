@@ -175,3 +175,7 @@ OrderSchema.index({ user: 1, createdAt: -1 });
 OrderSchema.index({ createdAt: -1 });
 OrderSchema.index({ 'commissions.recipientPartnerCode': 1, createdAt: -1 });
 OrderSchema.index({ status: 1, createdAt: -1 });
+OrderSchema.index({ 'commissions.recipientUserId': 1, createdAt: -1 });
+OrderSchema.index({ orderFlow: 1, status: 1, createdAt: -1 });
+OrderSchema.index({ stripeSessionId: 1 }, { sparse: true });
+OrderSchema.index({ shippedAt: 1, status: 1 });

@@ -83,6 +83,8 @@ import { normalizeCurrencyCode } from '../common/currency-codes';
 import { normalizeOrderItemType } from '../common/order-type';
 import { CouponsService } from '../coupons/coupons.service';
 import { CommissionsService } from '../payouts/services/commissions.service';
+import { RedisCacheService } from '../redis/redis-cache.service';
+import { CacheKeys, CacheTtl } from '../redis/redis.constants';
 
 const USA_COUNTRIES = ['united states', 'usa', 'us', 'united states of america'];
 const PENDING_PAYMENT_CANCEL_DAYS = 3;
@@ -112,6 +114,7 @@ export class OrdersService implements OnModuleInit {
     private couponsService: CouponsService,
     private commissionsService: CommissionsService,
     private productsService: ProductsService,
+    private readonly cache: RedisCacheService,
   ) {
     const stripeSecretKey = this.configService.get<string>('STRIPE_SECRET_KEY');
     const usaStripeSecretKey = this.configService.get<string>('USA_STRIPE_SECRET_KEY');
@@ -2921,21 +2924,30 @@ export class OrdersService implements OnModuleInit {
   }
 
   async getDashboardStats() {
-    const recentOrders = await this.orderModel
-      .find()
-      .sort({ createdAt: -1 })
-      .limit(5)
-      .populate('user', 'firstName lastName email');
+    return this.cache.wrap(
+      CacheKeys.ordersDashboardStats,
+      CacheTtl.ordersDashboardStats,
+      async () => {
+        const [recentOrders, salesReport] = await Promise.all([
+          this.orderModel
+            .find()
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .populate('user', 'firstName lastName email')
+            .lean()
+            .exec(),
+          this.computeSalesReport(),
+        ]);
 
-    const salesReport = await this.computeSalesReport();
-
-    return {
-      recentOrders,
-      totalRevenue: salesReport.totalRevenue,
-      baseCurrency: salesReport.baseCurrency,
-      currencyBreakdown: salesReport.currencyBreakdown,
-      chartData: salesReport.chartData,
-    };
+        return {
+          recentOrders,
+          totalRevenue: salesReport.totalRevenue,
+          baseCurrency: salesReport.baseCurrency,
+          currencyBreakdown: salesReport.currencyBreakdown,
+          chartData: salesReport.chartData,
+        };
+      },
+    );
   }
 
   async getExchangeRates() {

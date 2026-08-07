@@ -471,6 +471,7 @@ export function isAlwaysAllowedPath(pathname: string, method: string): boolean {
   const m = method.toUpperCase();
 
   if (path === '/' && m === 'GET') return true;
+  if (path.startsWith('/health')) return true;
   if (path.startsWith('/api-control')) return true;
   if (path.startsWith('/api/docs')) return true;
   if (path === '/stripe/webhook') return true;

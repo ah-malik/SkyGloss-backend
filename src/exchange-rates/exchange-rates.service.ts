@@ -14,6 +14,8 @@ import {
   normalizeCurrencyCode,
 } from '../common/currency-codes';
 import { fetchHistoricalRateToBase } from '../common/historical-fx';
+import { RedisCacheService } from '../redis/redis-cache.service';
+import { CacheKeys, CacheTtl } from '../redis/redis.constants';
 
 /** @deprecated import DEFAULT_EXCHANGE_RATES from currency-codes */
 export { DEFAULT_EXCHANGE_RATES };
@@ -28,6 +30,7 @@ export class ExchangeRatesService implements OnModuleInit {
   constructor(
     @InjectModel(ExchangeRate.name)
     private readonly exchangeRateModel: Model<ExchangeRateDocument>,
+    private readonly cache: RedisCacheService,
   ) {}
 
   async onModuleInit() {
@@ -80,6 +83,8 @@ export class ExchangeRatesService implements OnModuleInit {
         { upsert: true },
       );
 
+      await this.invalidateRateCaches();
+
       this.logger.log(
         `Exchange rates refreshed from market (${updated} currencies updated)`,
       );
@@ -94,22 +99,28 @@ export class ExchangeRatesService implements OnModuleInit {
   }
 
   async getRatesMap(): Promise<Record<string, number>> {
-    const rows = await this.exchangeRateModel.find().lean().exec();
-    const map: Record<string, number> = { [SYSTEM_BASE_CURRENCY]: 1 };
+    return this.cache.wrap(
+      CacheKeys.exchangeRatesMap,
+      CacheTtl.exchangeRates,
+      async () => {
+        const rows = await this.exchangeRateModel.find().lean().exec();
+        const map: Record<string, number> = { [SYSTEM_BASE_CURRENCY]: 1 };
 
-    for (const row of rows) {
-      if (row.currency && row.rateToBase > 0) {
-        map[row.currency] = roundExchangeRate(row.rateToBase);
-      }
-    }
+        for (const row of rows) {
+          if (row.currency && row.rateToBase > 0) {
+            map[row.currency] = roundExchangeRate(row.rateToBase);
+          }
+        }
 
-    for (const [currency, rateToBase] of Object.entries(DEFAULT_EXCHANGE_RATES)) {
-      if (!map[currency] || map[currency] <= 0) {
-        map[currency] = rateToBase;
-      }
-    }
+        for (const [currency, rateToBase] of Object.entries(DEFAULT_EXCHANGE_RATES)) {
+          if (!map[currency] || map[currency] <= 0) {
+            map[currency] = rateToBase;
+          }
+        }
 
-    return map;
+        return map;
+      },
+    );
   }
 
   /**
@@ -187,7 +198,12 @@ export class ExchangeRatesService implements OnModuleInit {
   }
 
   async getAllRates(): Promise<ExchangeRateDocument[]> {
-    return this.exchangeRateModel.find().sort({ currency: 1 }).exec();
+    return this.cache.wrap(
+      CacheKeys.exchangeRatesAll,
+      CacheTtl.exchangeRates,
+      async () =>
+        this.exchangeRateModel.find().sort({ currency: 1 }).lean().exec() as any,
+    );
   }
 
   async updateRate(currency: string, rateToBase: number): Promise<ExchangeRateDocument> {
@@ -195,12 +211,21 @@ export class ExchangeRatesService implements OnModuleInit {
     if (rateToBase <= 0) {
       throw new Error('Exchange rate must be greater than zero');
     }
-    return this.exchangeRateModel
+    const updated = await this.exchangeRateModel
       .findOneAndUpdate(
         { currency: code },
         { currency: code, rateToBase },
         { upsert: true, new: true },
       )
       .exec();
+    await this.invalidateRateCaches();
+    return updated;
+  }
+
+  private async invalidateRateCaches(): Promise<void> {
+    await Promise.all([
+      this.cache.del(CacheKeys.exchangeRatesMap),
+      this.cache.del(CacheKeys.exchangeRatesAll),
+    ]);
   }
 }

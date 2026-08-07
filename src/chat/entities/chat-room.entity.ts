@@ -31,3 +31,7 @@ export class ChatRoom {
 }
 
 export const ChatRoomSchema = SchemaFactory.createForClass(ChatRoom);
+
+ChatRoomSchema.index({ userId: 1, status: 1 });
+ChatRoomSchema.index({ status: 1, lastMessageAt: -1 });
+ChatRoomSchema.index({ userEmail: 1 });

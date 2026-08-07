@@ -332,3 +332,13 @@ UserSchema.index(
     name: 'email_1_role_1',
   },
 );
+
+// Hot-path compound indexes (network tree, maps, admin lists).
+// Do NOT re-declare single-field indexes already created via @Prop({ sparse/unique }).
+UserSchema.index({ role: 1, status: 1 });
+UserSchema.index({ role: 1, createdAt: -1 });
+UserSchema.index({ role: 1, country: 1 });
+UserSchema.index({ operationalRepresentativeCodes: 1 });
+UserSchema.index({ operationalPromoterCodes: 1 });
+UserSchema.index({ isVisibleOnMap: 1, role: 1, status: 1 });
+UserSchema.index({ productGroup: 1 });

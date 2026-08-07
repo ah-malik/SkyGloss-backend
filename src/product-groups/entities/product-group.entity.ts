@@ -48,3 +48,8 @@ export class ProductGroup {
 }
 
 export const ProductGroupSchema = SchemaFactory.createForClass(ProductGroup);
+
+ProductGroupSchema.index({ isDefault: 1, isActive: 1 });
+ProductGroupSchema.index({ countries: 1, isActive: 1 });
+ProductGroupSchema.index({ country: 1, isActive: 1 });
+ProductGroupSchema.index({ isActive: 1 });

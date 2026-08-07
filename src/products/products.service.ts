@@ -9,7 +9,8 @@ import {
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { User, UserRole } from '../users/entities/user.entity';
-import { Schema as MongooseSchema } from 'mongoose';
+import { RedisCacheService } from '../redis/redis-cache.service';
+import { CacheKeys, CacheTtl } from '../redis/redis.constants';
 
 @Injectable()
 export class ProductsService {
@@ -17,6 +18,7 @@ export class ProductsService {
     @InjectModel(Product.name) private productModel: Model<ProductDocument>,
     @InjectModel(ProductGroup.name)
     private productGroupModel: Model<ProductGroupDocument>,
+    private readonly cache: RedisCacheService,
   ) { }
 
   async create(createProductDto: CreateProductDto): Promise<ProductDocument> {
@@ -25,7 +27,9 @@ export class ProductsService {
       JSON.stringify(createProductDto),
     );
     const createdProduct = new this.productModel(createProductDto);
-    return createdProduct.save();
+    const saved = await createdProduct.save();
+    await this.invalidateProductCaches();
+    return saved;
   }
 
   async findAll(
@@ -99,15 +103,20 @@ export class ProductsService {
     }
 
     // 2. Fallback to standard fetching ONLY for users WITHOUT a product group or anonymous users
-    const filter: any = {};
-    if (status) filter.status = status;
-    if (targetAudience)
-      filter.targetAudience = { $in: [targetAudience, 'all'] };
+    // Cache this shared catalog path (not user-specific group pricing).
+    const cacheKey = CacheKeys.productsList(status, targetAudience);
+    return this.cache.wrap(cacheKey, CacheTtl.productsList, async () => {
+      const filter: any = {};
+      if (status) filter.status = status;
+      if (targetAudience)
+        filter.targetAudience = { $in: [targetAudience, 'all'] };
 
-    return this.productModel
-      .find(filter)
-      .sort({ displayOrder: 1, createdAt: -1 })
-      .exec();
+      return this.productModel
+        .find(filter)
+        .sort({ displayOrder: 1, createdAt: -1 })
+        .lean()
+        .exec();
+    });
   }
 
   async findOne(id: string, user?: User): Promise<any> {
@@ -205,6 +214,7 @@ export class ProductsService {
     if (!updatedProduct) {
       throw new NotFoundException(`Product with ID ${id} not found`);
     }
+    await this.invalidateProductCaches();
     return updatedProduct;
   }
 
@@ -213,6 +223,7 @@ export class ProductsService {
     if (!deletedProduct) {
       throw new NotFoundException(`Product with ID ${id} not found`);
     }
+    await this.invalidateProductCaches();
     return deletedProduct;
   }
 
@@ -232,6 +243,7 @@ export class ProductsService {
         { $set: { status: 'published' } },
       )
       .exec();
+    await this.invalidateProductCaches();
   }
 
   async migrateImagePaths(): Promise<void> {
@@ -270,5 +282,10 @@ export class ProductsService {
         console.log(`[ProductsService] Migrated image paths for product: ${product.name}`);
       }
     }
+    await this.invalidateProductCaches();
+  }
+
+  private async invalidateProductCaches(): Promise<void> {
+    await this.cache.delByPrefix(CacheKeys.productsPrefix);
   }
 }

@@ -23,6 +23,8 @@ import { CouponsModule } from './coupons/coupons.module';
 import { EmailSettingsModule } from './email-settings/email-settings.module';
 import { PayoutsModule } from './payouts/payouts.module';
 import { ApiControlModule } from './api-control/api-control.module';
+import { RedisModule } from './redis/redis.module';
+import { HealthModule } from './health/health.module';
 
 @Module({
   imports: [
@@ -37,6 +39,8 @@ import { ApiControlModule } from './api-control/api-control.module';
       }),
       inject: [ConfigService],
     }),
+    RedisModule,
+    HealthModule,
     UsersModule,
     AccessCodesModule,
     ShopRequestsModule,

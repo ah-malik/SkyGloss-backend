@@ -39,6 +39,8 @@ import {
   isGlobalHubPartnerCode,
 } from '../common/global-hub';
 import { emailEqualsQuery, normalizeEmail } from '../common/email';
+import { RedisCacheService } from '../redis/redis-cache.service';
+import { CacheKeys, CacheTtl } from '../redis/redis.constants';
 
 export interface NetworkUsersResult {
   shops: UserDocument[];
@@ -59,6 +61,7 @@ export class UsersService implements OnModuleInit {
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(ProductGroup.name) private productGroupModel: Model<ProductGroupDocument>,
+    private readonly cache: RedisCacheService,
   ) { }
 
   async onModuleInit() {
@@ -2301,44 +2304,49 @@ export class UsersService implements OnModuleInit {
   }
 
   async getStats() {
-    const total = await this.userModel.countDocuments();
-    const admin = await this.userModel.countDocuments({ role: UserRole.ADMIN });
-    const master_partner = await this.userModel.countDocuments({
-      role: UserRole.MASTER_PARTNER,
-    });
-    const distributor = await this.userModel.countDocuments({
-      role: UserRole.DISTRIBUTOR,
-    });
-    const regional_partner = await this.userModel.countDocuments({
-      role: UserRole.REGIONAL_PARTNER,
-    });
-    const partner = await this.userModel.countDocuments({
-      role: UserRole.PARTNER,
-    });
-    const certified_shop = await this.userModel.countDocuments({
-      role: UserRole.CERTIFIED_SHOP,
-    });
-    // Sub-Promoter role removed — keep key for admin dashboard shape compatibility
-    const sub_promoter = 0;
+    return this.cache.wrap(CacheKeys.usersStats, CacheTtl.usersStats, async () => {
+      // Parallel counts — same results as sequential, faster under load
+      const [
+        total,
+        admin,
+        master_partner,
+        distributor,
+        regional_partner,
+        partner,
+        certified_shop,
+        recentUsers,
+      ] = await Promise.all([
+        this.userModel.countDocuments(),
+        this.userModel.countDocuments({ role: UserRole.ADMIN }),
+        this.userModel.countDocuments({ role: UserRole.MASTER_PARTNER }),
+        this.userModel.countDocuments({ role: UserRole.DISTRIBUTOR }),
+        this.userModel.countDocuments({ role: UserRole.REGIONAL_PARTNER }),
+        this.userModel.countDocuments({ role: UserRole.PARTNER }),
+        this.userModel.countDocuments({ role: UserRole.CERTIFIED_SHOP }),
+        this.userModel
+          .find({ role: { $ne: UserRole.ADMIN } })
+          .sort({ createdAt: -1 })
+          .limit(5)
+          .select('firstName lastName email role partnerCode shopName createdAt')
+          .lean()
+          .exec(),
+      ]);
 
-    const recentUsers = await this.userModel
-      .find({ role: { $ne: UserRole.ADMIN } })
-      .sort({ createdAt: -1 })
-      .limit(5)
-      .select('firstName lastName email role partnerCode shopName createdAt')
-      .lean();
+      // Sub-Promoter role removed — keep key for admin dashboard shape compatibility
+      const sub_promoter = 0;
 
-    return {
-      total,
-      admin,
-      master_partner,
-      distributor,
-      regional_partner,
-      partner,
-      certified_shop,
-      sub_promoter,
-      recentUsers,
-    };
+      return {
+        total,
+        admin,
+        master_partner,
+        distributor,
+        regional_partner,
+        partner,
+        certified_shop,
+        sub_promoter,
+        recentUsers,
+      };
+    });
   }
 
   async completeCourse(

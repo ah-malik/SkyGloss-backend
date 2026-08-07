@@ -14,14 +14,21 @@ export interface Response<T> {
 }
 
 @Injectable()
-export class TransformInterceptor<T> implements NestInterceptor<
-  T,
-  Response<T>
-> {
+export class TransformInterceptor<T>
+  implements NestInterceptor<T, Response<T> | T>
+{
   intercept(
     context: ExecutionContext,
     next: CallHandler,
-  ): Observable<Response<T>> {
+  ): Observable<Response<T> | T> {
+    const request = context.switchToHttp().getRequest<{ url?: string }>();
+    const path = (request.url || '').split('?')[0];
+
+    // Keep Terminus health payloads in native format for uptime monitors
+    if (path === '/health' || path.startsWith('/health/')) {
+      return next.handle();
+    }
+
     return next.handle().pipe(
       map((data) => ({
         data,
