@@ -58,6 +58,81 @@ export class PdfService {
     return candidates.find((candidate) => fs.existsSync(candidate)) || null;
   }
 
+  /**
+   * Helvetica (PDF built-in) cannot render ₹ / many Unicode currency glyphs.
+   * Prefer DejaVu Sans so invoice symbols match the admin UI.
+   */
+  private resolveUnicodeFonts(): { regular: string; bold: string } | null {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const regular = require.resolve('dejavu-fonts-ttf/ttf/DejaVuSans.ttf');
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const bold = require.resolve('dejavu-fonts-ttf/ttf/DejaVuSans-Bold.ttf');
+      if (fs.existsSync(regular) && fs.existsSync(bold)) {
+        return { regular, bold };
+      }
+    } catch {
+      // package missing — try system fallbacks below
+    }
+
+    const systemPairs: Array<{ regular: string; bold: string }> = [
+      {
+        regular: 'C:\\Windows\\Fonts\\arial.ttf',
+        bold: 'C:\\Windows\\Fonts\\arialbd.ttf',
+      },
+      {
+        regular: '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        bold: '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+      },
+    ];
+
+    for (const pair of systemPairs) {
+      if (fs.existsSync(pair.regular) && fs.existsSync(pair.bold)) {
+        return pair;
+      }
+    }
+    return null;
+  }
+
+  private getOrderCurrencyCode(order: Order | any): string {
+    const raw =
+      order?.originalCurrency ||
+      order?.currency ||
+      order?.baseCurrency ||
+      'USD';
+    return String(raw).trim().toUpperCase();
+  }
+
+  private getCurrencySymbol(currency?: string): string {
+    const symbols: Record<string, string> = {
+      USD: '$',
+      EUR: '€',
+      GBP: '£',
+      AUD: 'A$',
+      CAD: 'C$',
+      NZD: 'NZ$',
+      INR: '₹',
+      PKR: 'Rs',
+      AED: 'AED ',
+      SAR: 'SAR ',
+      JPY: '¥',
+      CNY: '¥',
+    };
+    const key = currency?.toUpperCase();
+    return (key && symbols[key]) || (currency ? `${currency} ` : '$');
+  }
+
+  private formatMoney(amount: number, currencySymbol: string): string {
+    const value = Number.isFinite(amount) ? amount : 0;
+    // Keep space when symbol is a code prefix (e.g. "AED ")
+    const needsSpace =
+      currencySymbol.endsWith(' ') || /^[A-Z]{2,}/.test(currencySymbol);
+    const prefix = needsSpace
+      ? currencySymbol.trimEnd() + ' '
+      : currencySymbol;
+    return `${prefix}${value.toFixed(2)}`;
+  }
+
   async generateCertificate(user: User): Promise<Buffer> {
     return new Promise(async (resolve, reject) => {
       try {
@@ -207,22 +282,35 @@ export class PdfService {
 
       const registrationOrder = isRegistrationOrder(order);
 
+      // Unicode-capable fonts so ₹ / € / £ render (Helvetica cannot).
+      const unicodeFonts = this.resolveUnicodeFonts();
+      const fontRegular = unicodeFonts ? 'InvoiceSans' : 'Helvetica';
+      const fontBold = unicodeFonts ? 'InvoiceSans-Bold' : 'Helvetica-Bold';
+      if (unicodeFonts) {
+        doc.registerFont(fontRegular, unicodeFonts.regular);
+        doc.registerFont(fontBold, unicodeFonts.bold);
+      }
+
+      const currencyCode = this.getOrderCurrencyCode(order);
+      const currencySymbol = this.getCurrencySymbol(currencyCode);
+
       // Header
-      doc.fontSize(24).fillColor('#0EA0DC').font('Helvetica-Bold').text(
+      doc.fontSize(24).fillColor('#0EA0DC').font(fontBold).text(
         registrationOrder ? 'Registration Invoice' : 'Order Invoice',
         { align: 'center' },
       );
       doc.moveDown();
 
-      doc.fontSize(12).fillColor('#272727').font('Helvetica');
+      doc.fontSize(12).fillColor('#272727').font(fontRegular);
       doc.text(`Order Number: ${order.orderNumber}`);
       doc.text(`Date: ${new Date((order as any).createdAt).toLocaleString()}`);
       doc.text(`Status: ${order.status.toUpperCase()}`);
+      doc.text(`Currency: ${currencyCode}`);
       doc.moveDown();
 
       // Customer Info
-      doc.fontSize(14).font('Helvetica-Bold').text('Customer Information:');
-      doc.fontSize(12).font('Helvetica');
+      doc.fontSize(14).font(fontBold).text('Customer Information:');
+      doc.fontSize(12).font(fontRegular);
       const user = order.user as any;
       doc.text(`Name: ${user?.firstName} ${user?.lastName}`);
       doc.text(`Email: ${user?.email}`);
@@ -230,8 +318,8 @@ export class PdfService {
 
       // Shipping Info
       const shipping = order.shippingAddress;
-      doc.fontSize(14).font('Helvetica-Bold').text('Shipping Address:');
-      doc.fontSize(12).font('Helvetica');
+      doc.fontSize(14).font(fontBold).text('Shipping Address:');
+      doc.fontSize(12).font(fontRegular);
       doc.text(
         `Name: ${[shipping.firstName, shipping.lastName].filter(Boolean).join(' ') || 'N/A'}`,
       );
@@ -254,7 +342,7 @@ export class PdfService {
       doc.moveDown();
 
       // Items Table
-      doc.fontSize(14).font('Helvetica-Bold').text('Order Items:', { underline: true });
+      doc.fontSize(14).font(fontBold).text('Order Items:', { underline: true });
       doc.moveDown(0.5);
 
       const itemColumns = {
@@ -299,7 +387,7 @@ export class PdfService {
           price: 'Price',
           total: 'Total',
         },
-        'Helvetica-Bold',
+        fontBold,
         10,
       );
       doc.y = headerY + 18;
@@ -307,25 +395,11 @@ export class PdfService {
       doc.lineWidth(1).moveTo(50, doc.y).lineTo(550, doc.y).stroke();
       doc.moveDown(0.75);
 
-      const getCurrencySymbol = (currency?: string) => {
-        const symbols: Record<string, string> = {
-          'USD': '$',
-          'EUR': '€',
-          'GBP': '£',
-          'AUD': '$',
-          'CAD': '$',
-          'INR': '₹',
-          'AED': 'AED '
-        };
-        const key = currency?.toUpperCase();
-        return (key && symbols[key]) || (currency ? (currency + ' ') : '??? ');
-      };
+      console.log(
+        `[PdfService] Generating PDF for order ${order.orderNumber}. currency=${order.currency} originalCurrency=${(order as any).originalCurrency} resolved=${currencyCode} symbol=${currencySymbol} unicodeFont=${!!unicodeFonts}`,
+      );
 
-      console.log(`[PdfService] Generating PDF for order ${order.orderNumber}. Currency in object: ${order.currency}`);
-      const currencySymbol = getCurrencySymbol(order.currency);
-      console.log(`[PdfService] Resolved symbol: ${currencySymbol}`);
-
-      doc.font('Helvetica');
+      doc.font(fontRegular);
       order.items.forEach((item) => {
         const rowY = doc.y;
         const lineTotal = item.price * item.quantity;
@@ -334,11 +408,11 @@ export class PdfService {
           size: item.size || '',
           type: formatOrderItemTypeLabel(item.orderType),
           qty: item.quantity.toString(),
-          price: `${currencySymbol}${item.price.toFixed(2)}`,
-          total: `${currencySymbol}${lineTotal.toFixed(2)}`,
+          price: this.formatMoney(item.price, currencySymbol),
+          total: this.formatMoney(lineTotal, currencySymbol),
         };
 
-        doc.fontSize(10).font('Helvetica');
+        doc.fontSize(10).font(fontRegular);
         const rowHeight = Math.max(
           ...(Object.keys(itemColumns) as Array<keyof typeof itemColumns>).map((key) =>
             measureCellHeight(rowValues[key], itemColumns[key].w),
@@ -346,7 +420,7 @@ export class PdfService {
           16,
         );
 
-        drawItemRow(rowY, rowValues, 'Helvetica', 10);
+        drawItemRow(rowY, rowValues, fontRegular, 10);
         doc.y = rowY + rowHeight + tableRowPadding;
       });
 
@@ -361,9 +435,9 @@ export class PdfService {
       );
 
       const totalsY = doc.y;
-      doc.fontSize(12).font('Helvetica');
+      doc.fontSize(12).font(fontRegular);
       doc.text('Subtotal', 50, totalsY, { width: 380, align: 'right' });
-      doc.text(`${currencySymbol}${subtotal.toFixed(2)}`, 430, totalsY, {
+      doc.text(this.formatMoney(subtotal, currencySymbol), 430, totalsY, {
         width: 115,
         align: 'right',
       });
@@ -373,7 +447,7 @@ export class PdfService {
         const discountY = doc.y;
         const discountLabel = getDiscountDisplayLabel(order as any);
         doc.text(discountLabel, 50, discountY, { width: 380, align: 'right' });
-        doc.text(`-${currencySymbol}${discount.toFixed(2)}`, 430, discountY, {
+        doc.text(`-${this.formatMoney(discount, currencySymbol)}`, 430, discountY, {
           width: 115,
           align: 'right',
         });
@@ -384,7 +458,7 @@ export class PdfService {
         const shippingY = doc.y;
         if (shippingFee > 0.01) {
           doc.text('Shipping', 50, shippingY, { width: 380, align: 'right' });
-          doc.text(`${currencySymbol}${shippingFee.toFixed(2)}`, 430, shippingY, {
+          doc.text(this.formatMoney(shippingFee, currencySymbol), 430, shippingY, {
             width: 115,
             align: 'right',
           });
@@ -396,9 +470,9 @@ export class PdfService {
       }
 
       const totalY = doc.y;
-      doc.fontSize(16).font('Helvetica-Bold');
+      doc.fontSize(16).font(fontBold);
       doc.text('Total Amount', 50, totalY, { width: 380, align: 'right' });
-      doc.text(`${currencySymbol}${total.toFixed(2)}`, 430, totalY, {
+      doc.text(this.formatMoney(total, currencySymbol), 430, totalY, {
         width: 115,
         align: 'right',
       });

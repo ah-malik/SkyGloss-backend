@@ -388,6 +388,15 @@ export const ADMIN_APIS: ApiEndpointDef[] = [
   def('admin', 'Notifications', 'PATCH', '/notifications/:id/read', 'Mark notification read'),
   def('admin', 'Notifications', 'PATCH', '/notifications/read-all', 'Mark all read'),
 
+  // User activity logs
+  def(
+    'admin',
+    'User Activity',
+    'GET',
+    '/admin/user-activity',
+    'List user login and action activity logs',
+  ),
+
   // Withdrawals
   def('admin', 'Withdrawals', 'GET', '/withdrawals/admin/pending', 'Pending withdrawals'),
   def('admin', 'Withdrawals', 'GET', '/withdrawals/:id', 'Withdrawal detail'),

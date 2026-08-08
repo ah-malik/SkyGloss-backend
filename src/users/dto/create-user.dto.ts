@@ -180,8 +180,7 @@ export class CreateUserDto {
   customCommissionRate?: number | null;
 
   /**
-   * First Order rates when creating a Rep/Promoter under another Rep/Promoter
-   * (same model as Admin Add to Network).
+   * @deprecated Legacy FO rate fields — ignored. Rates are fixed 10% / 5% / 10%.
    */
   @IsNumber()
   @Min(0)
@@ -194,4 +193,22 @@ export class CreateUserDto {
   @Max(100)
   @IsOptional()
   firstOrderPartnerDevelopmentRate?: number;
+
+  /**
+   * Optional Partner Intro network ID.
+   * REP create: another Representative.
+   * Promoter create (Hub parent): another Promoter under the same Hub.
+   * When Promoter parent is REP/Promoter, that parent becomes Partner Intro automatically.
+   */
+  @IsString()
+  @IsOptional()
+  partnerIntroCode?: string;
+
+  /**
+   * Operational Support Representative for a shop (Admin assign — REP only).
+   * Empty / null clears the assignment (Unassigned).
+   */
+  @IsString()
+  @IsOptional()
+  operationalSupportRepresentativeCode?: string | null;
 }

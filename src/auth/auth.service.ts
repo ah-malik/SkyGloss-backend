@@ -39,6 +39,18 @@ import {
   PARTNER_CODE_MIN_LENGTH,
   PARTNER_CODE_REGEX,
 } from '../common/partner-code';
+import { UserActivityService } from '../user-activity/user-activity.service';
+import { UserActivityAction } from '../user-activity/entities/user-activity-log.entity';
+
+export interface AuthActivityContext {
+  portal?: string;
+  ipAddress?: string;
+  userAgent?: string;
+  browser?: string;
+  os?: string;
+  device?: string;
+  actorId?: string;
+}
 
 @Injectable()
 export class AuthService {
@@ -53,6 +65,7 @@ export class AuthService {
     private productGroupsService: ProductGroupsService,
     private couponsService: CouponsService,
     private registrationFeesService: RegistrationFeesService,
+    private userActivityService: UserActivityService,
   ) { }
 
   private rolesForPortal(portal: AuthPortal): UserRole[] {
@@ -111,7 +124,7 @@ export class AuthService {
     return null;
   }
 
-  async login(user: any) {
+  async login(user: any, activity?: AuthActivityContext) {
     const userId = user._id.toString();
 
     // Enforce payment for self-registered regional distributors
@@ -134,6 +147,25 @@ export class AuthService {
     // Enforce payment for self-registered certified shops has been moved to the frontend
     // Users can login, but will be blocked from accessing specific courses until paid
 
+    await this.userActivityService.log({
+      userId,
+      action: UserActivityAction.LOGIN,
+      portal: activity?.portal,
+      ipAddress: activity?.ipAddress,
+      userAgent: activity?.userAgent,
+      browser: activity?.browser,
+      os: activity?.os,
+      device: activity?.device,
+      metadata: {
+        method: 'password',
+        role: user.role,
+        email: user.email,
+        country: user.country,
+        partnerCode: user.partnerCode,
+        status: user.status,
+      },
+    });
+
     const payload = { email: user.email, sub: userId, role: user.role };
     return {
       access_token: this.jwtService.sign(payload),
@@ -153,7 +185,10 @@ export class AuthService {
     };
   }
 
-  async loginWithAccessCode(loginAccessCodeDto: LoginAccessCodeDto) {
+  async loginWithAccessCode(
+    loginAccessCodeDto: LoginAccessCodeDto,
+    activity?: AuthActivityContext,
+  ) {
     try {
       // Try validating without allowing used first to see if it's a fresh login
       let code;
@@ -187,6 +222,25 @@ export class AuthService {
 
           // Return login for existing user
           const payload = { sub: user._id.toString(), role: user.role };
+          await this.userActivityService.log({
+            userId: user._id.toString(),
+            action: UserActivityAction.LOGIN_ACCESS_CODE,
+            portal: activity?.portal || 'shop',
+            ipAddress: activity?.ipAddress,
+            userAgent: activity?.userAgent,
+            browser: activity?.browser,
+            os: activity?.os,
+            device: activity?.device,
+            metadata: {
+              method: 'access_code',
+              role: user.role,
+              email: user.email,
+              country: user.country,
+              partnerCode: user.partnerCode,
+              status: user.status,
+              freshCode: false,
+            },
+          });
           return {
             access_token: this.jwtService.sign(payload),
             user: {
@@ -218,6 +272,25 @@ export class AuthService {
       await this.accessCodesService.markAsUsed(code.code);
 
       const payload = { sub: user._id.toString(), role: user.role };
+      await this.userActivityService.log({
+        userId: user._id.toString(),
+        action: UserActivityAction.LOGIN_ACCESS_CODE,
+        portal: activity?.portal || 'shop',
+        ipAddress: activity?.ipAddress,
+        userAgent: activity?.userAgent,
+        browser: activity?.browser,
+        os: activity?.os,
+        device: activity?.device,
+        metadata: {
+          method: 'access_code',
+          role: user.role,
+          email: user.email,
+          country: user.country,
+          partnerCode: user.partnerCode,
+          status: user.status,
+          freshCode: true,
+        },
+      });
       return {
         access_token: this.jwtService.sign(payload),
         user: {
@@ -575,12 +648,32 @@ export class AuthService {
     return this.ordersService.verifyRegistrationPayment(userId);
   }
 
-  async impersonate(targetUserId: string) {
+  async impersonate(targetUserId: string, activity?: AuthActivityContext) {
     const user = await (this.usersService as any).userModel.findById(targetUserId);
     if (!user) {
       throw new BadRequestException('User not found');
     }
     const userId = user._id.toString();
+    await this.userActivityService.log({
+      userId,
+      action: UserActivityAction.IMPERSONATE,
+      actorId: activity?.actorId,
+      portal: activity?.portal || 'admin',
+      ipAddress: activity?.ipAddress,
+      userAgent: activity?.userAgent,
+      browser: activity?.browser,
+      os: activity?.os,
+      device: activity?.device,
+      metadata: {
+        method: 'impersonate',
+        targetRole: user.role,
+        targetEmail: user.email,
+        targetName: [user.firstName, user.lastName].filter(Boolean).join(' ').trim(),
+        country: user.country,
+        partnerCode: user.partnerCode,
+        status: user.status,
+      },
+    });
     const payload = { email: user.email, sub: userId, role: user.role };
     return {
       access_token: this.jwtService.sign(payload),

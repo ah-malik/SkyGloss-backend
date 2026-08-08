@@ -9,6 +9,7 @@ import {
   HttpCode,
   HttpStatus,
   BadRequestException,
+  Req,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
@@ -21,6 +22,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { UserRole } from '../users/entities/user.entity';
+import { getRequestMeta } from '../user-activity/request-meta';
 
 @Controller('auth')
 export class AuthController {
@@ -28,7 +30,7 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  async login(@Body() loginDto: LoginDto) {
+  async login(@Body() loginDto: LoginDto, @Req() req: any) {
     const user = await this.authService.validateUser(
       loginDto.email,
       loginDto.password,
@@ -37,13 +39,24 @@ export class AuthController {
     if (!user) {
       throw new BadRequestException('Invalid credentials');
     }
-    return this.authService.login(user); // user is the plain object from validateUser
+    const meta = getRequestMeta(req);
+    return this.authService.login(user, {
+      portal: loginDto.portal,
+      ...meta,
+    });
   }
 
   @Post('login/access-code')
   @HttpCode(HttpStatus.OK)
-  async loginAccessCode(@Body() loginAccessCodeDto: LoginAccessCodeDto) {
-    return this.authService.loginWithAccessCode(loginAccessCodeDto);
+  async loginAccessCode(
+    @Body() loginAccessCodeDto: LoginAccessCodeDto,
+    @Req() req: any,
+  ) {
+    const meta = getRequestMeta(req);
+    return this.authService.loginWithAccessCode(loginAccessCodeDto, {
+      portal: 'shop',
+      ...meta,
+    });
   }
 
   @Post('register')
@@ -97,7 +110,16 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
-  async impersonate(@Param('userId') userId: string) {
-    return this.authService.impersonate(userId);
+  async impersonate(@Param('userId') userId: string, @Req() req: any) {
+    const meta = getRequestMeta(req);
+    const actorId =
+      req.user?.id ||
+      req.user?._id?.toString?.() ||
+      (typeof req.user?._id === 'string' ? req.user._id : undefined);
+    return this.authService.impersonate(userId, {
+      portal: 'admin',
+      actorId,
+      ...meta,
+    });
   }
 }

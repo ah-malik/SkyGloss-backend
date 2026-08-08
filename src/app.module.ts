@@ -25,6 +25,7 @@ import { PayoutsModule } from './payouts/payouts.module';
 import { ApiControlModule } from './api-control/api-control.module';
 import { RedisModule } from './redis/redis.module';
 import { HealthModule } from './health/health.module';
+import { UserActivityModule } from './user-activity/user-activity.module';
 
 @Module({
   imports: [
@@ -59,6 +60,7 @@ import { HealthModule } from './health/health.module';
     EmailSettingsModule,
     PayoutsModule,
     ApiControlModule,
+    UserActivityModule,
   ],
   controllers: [AppController],
   providers: [AppService, SeedService],

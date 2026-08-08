@@ -2,6 +2,8 @@ import {
   calculateCommissionEntries,
   calculateHierarchyCommissionEntries,
   calculateRepresentativeCommissionEntries,
+  DEFAULT_COMMISSION_RATES_PERCENT,
+  DEFAULT_PARTNER_INTRO_RATE_PERCENT,
   normalizeFirstOrderCommissionRates,
   resolveCommissionOrderAmounts,
   resolvePartnerDevelopmentRepresentative,
@@ -40,7 +42,7 @@ describe('resolveCommissionOrderAmounts', () => {
   });
 });
 
-describe('calculateRepresentativeCommissionEntries', () => {
+describe('calculateRepresentativeCommissionEntries (10/5/10 of order $)', () => {
   const rep2 = { _id: 'rep2', partnerCode: 'REP0002', role: 'master_partner' };
   const rep1 = { _id: 'rep1', partnerCode: 'REP0001', role: 'master_partner' };
   const monetary = (usd: number) => ({
@@ -50,14 +52,14 @@ describe('calculateRepresentativeCommissionEntries', () => {
     convertedUsdAmount: usd,
   });
 
-  it('first order: child SI of order $; parent PD of child SI $', () => {
+  it('pays Shop Intro 10% + Partner Intro 5% of order $ on every order', () => {
     const entries = calculateRepresentativeCommissionEntries({
       shopId: 'shop1',
       assignments: {
-        partnerDevelopmentCommissionPaid: false,
         partnerDevelopmentEligible: true,
-        partnerDevelopmentRatePercent: 10,
-        shopIntroductionFirstOrderRatePercent: 5,
+        partnerDevelopmentRatePercent: 5,
+        shopIntroductionFirstOrderRatePercent: 10,
+        partnerDevelopmentRepresentativeCode: 'REP0001',
       },
       recipients: { shopIntroduction: rep2, partnerDevelopment: rep1 },
       monetary: monetary(100),
@@ -68,205 +70,45 @@ describe('calculateRepresentativeCommissionEntries', () => {
     expect(entries[0]).toMatchObject({
       recipientPartnerCode: 'REP0002',
       earningType: 'Shop Introduction',
-      percentage: 5,
-      amount: 5, // 5% of $100
+      percentage: 10,
+      amount: 10,
     });
     expect(entries[1]).toMatchObject({
       recipientPartnerCode: 'REP0001',
       earningType: 'Partner Development',
-      percentage: 10,
-      amount: 0.5, // 10% of child's $5 SI
+      percentage: 5,
+      amount: 5, // 5% of order $, not of child SI
     });
   });
 
-  it('parent PD is % of child SI even when parent rate exceeds child rate', () => {
+  it('subsequent orders still pay Partner Intro', () => {
     const entries = calculateRepresentativeCommissionEntries({
       shopId: 'shop1',
       assignments: {
-        partnerDevelopmentCommissionPaid: false,
-        partnerDevelopmentEligible: true,
-        partnerDevelopmentRatePercent: 12,
-        shopIntroductionFirstOrderRatePercent: 10,
-      },
-      recipients: { shopIntroduction: rep2, partnerDevelopment: rep1 },
-      monetary: monetary(100),
-      isFirstSuccessfulOrder: true,
-    });
-
-    expect(entries.find((e) => e.earningType === 'Partner Development')).toMatchObject({
-      percentage: 12,
-      amount: 1.2, // 12% of child's $10 SI
-    });
-    expect(entries.find((e) => e.earningType === 'Shop Introduction')).toMatchObject({
-      percentage: 10,
-      amount: 10,
-    });
-  });
-
-  it('user example: child 10% / parent 5% → parent gets 5% of child SI', () => {
-    const entries = calculateRepresentativeCommissionEntries({
-      shopId: 'shop1',
-      assignments: {
-        partnerDevelopmentCommissionPaid: false,
+        partnerDevelopmentCommissionPaid: true,
         partnerDevelopmentEligible: true,
         partnerDevelopmentRatePercent: 5,
         shopIntroductionFirstOrderRatePercent: 10,
+        partnerDevelopmentRepresentativeCode: 'REP0001',
       },
       recipients: { shopIntroduction: rep2, partnerDevelopment: rep1 },
       monetary: monetary(100),
-      isFirstSuccessfulOrder: true,
+      isFirstSuccessfulOrder: false,
     });
 
-    expect(entries.find((e) => e.earningType === 'Shop Introduction')).toMatchObject({
-      percentage: 10,
-      amount: 10,
-    });
+    expect(entries).toHaveLength(2);
     expect(entries.find((e) => e.earningType === 'Partner Development')).toMatchObject({
       percentage: 5,
-      amount: 0.5, // 5% of child's $10 — not 5% of order
+      amount: 5,
     });
   });
 
-  it('unlinked / pre-link shops: default 20% Shop Introduction (no FO split)', () => {
+  it('plain Shop Intro without Partner Intro uses default 10%', () => {
     const entries = calculateRepresentativeCommissionEntries({
       shopId: 'shop-old',
       assignments: {
-        partnerDevelopmentCommissionPaid: false,
         partnerDevelopmentEligible: false,
       },
-      recipients: { shopIntroduction: rep2, partnerDevelopment: rep1 },
-      monetary: monetary(100),
-      isFirstSuccessfulOrder: true,
-    });
-
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({
-      recipientPartnerCode: 'REP0002',
-      earningType: 'Shop Introduction',
-      percentage: 20,
-      amount: 20,
-    });
-  });
-
-  it('unlinked Rep respects admin custom default Shop Introduction rate', () => {
-    const entries = calculateRepresentativeCommissionEntries({
-      shopId: 'shop-custom',
-      assignments: { partnerDevelopmentEligible: false },
-      recipients: { shopIntroduction: rep2, partnerDevelopment: null },
-      monetary: monetary(100),
-      isFirstSuccessfulOrder: true,
-      defaultShopIntroductionRatePercent: 25,
-    });
-
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({
-      percentage: 25,
-      amount: 25,
-    });
-  });
-
-  it('supports admin-configured FO rates (15% child / 7% parent → parent = 7% of child SI)', () => {
-    const entries = calculateRepresentativeCommissionEntries({
-      shopId: 'shop-new',
-      assignments: {
-        partnerDevelopmentCommissionPaid: false,
-        partnerDevelopmentEligible: true,
-        partnerDevelopmentRatePercent: 7,
-        shopIntroductionFirstOrderRatePercent: 15,
-      },
-      recipients: { shopIntroduction: rep2, partnerDevelopment: rep1 },
-      monetary: monetary(100),
-      isFirstSuccessfulOrder: true,
-    });
-
-    expect(entries).toHaveLength(2);
-    expect(entries.find((e) => e.earningType === 'Partner Development')).toMatchObject({
-      percentage: 7,
-      amount: 1.05, // 7% of child's $15 SI
-    });
-    expect(entries.find((e) => e.earningType === 'Shop Introduction')).toMatchObject({
-      percentage: 15,
-      amount: 15,
-    });
-  });
-
-  it('second shop first order still pays Partner Development (per-shop, not once per child Rep)', () => {
-    const entries = calculateRepresentativeCommissionEntries({
-      shopId: 'shop2',
-      assignments: {
-        partnerDevelopmentCommissionPaid: false,
-        partnerDevelopmentEligible: true,
-        partnerDevelopmentRatePercent: 5,
-        shopIntroductionFirstOrderRatePercent: 10,
-      },
-      recipients: { shopIntroduction: rep2, partnerDevelopment: rep1 },
-      monetary: monetary(200),
-      isFirstSuccessfulOrder: true,
-    });
-
-    expect(entries).toHaveLength(2);
-    expect(entries.map((e) => e.earningType).sort()).toEqual([
-      'Partner Development',
-      'Shop Introduction',
-    ]);
-    expect(entries.find((e) => e.earningType === 'Partner Development')).toMatchObject({
-      recipientPartnerCode: 'REP0001',
-      percentage: 5,
-      amount: 1, // 5% of child's $20 SI on $200 order
-    });
-    expect(entries.find((e) => e.earningType === 'Shop Introduction')).toMatchObject({
-      recipientPartnerCode: 'REP0002',
-      percentage: 10,
-      amount: 20,
-    });
-  });
-
-  it('subsequent orders: full Child FO % to child only, Parent gets $0', () => {
-    const entries = calculateRepresentativeCommissionEntries({
-      shopId: 'shop1',
-      assignments: {
-        partnerDevelopmentCommissionPaid: true,
-        partnerDevelopmentEligible: true,
-        partnerDevelopmentRatePercent: 7,
-        shopIntroductionFirstOrderRatePercent: 15,
-      },
-      recipients: { shopIntroduction: rep2, partnerDevelopment: rep1 },
-      monetary: monetary(100),
-      isFirstSuccessfulOrder: false,
-    });
-
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({
-      recipientPartnerCode: 'REP0002',
-      earningType: 'Shop Introduction',
-      percentage: 15,
-      amount: 15,
-    });
-  });
-
-  it('unlinked subsequent orders still use default 20% Shop Introduction', () => {
-    const entries = calculateRepresentativeCommissionEntries({
-      shopId: 'shop1',
-      assignments: { partnerDevelopmentEligible: false },
-      recipients: { shopIntroduction: rep2, partnerDevelopment: null },
-      monetary: monetary(100),
-      isFirstSuccessfulOrder: false,
-    });
-
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({
-      percentage: 20,
-      amount: 20,
-    });
-  });
-
-  it('first order without a Partner Development rep: child FO Shop Intro rate only', () => {
-    const entries = calculateRepresentativeCommissionEntries({
-      shopId: 'shop1',
-      assignments: {
-        partnerDevelopmentEligible: true,
-        shopIntroductionFirstOrderRatePercent: 10,
-      },
       recipients: { shopIntroduction: rep2, partnerDevelopment: null },
       monetary: monetary(100),
       isFirstSuccessfulOrder: true,
@@ -274,34 +116,42 @@ describe('calculateRepresentativeCommissionEntries', () => {
 
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
+      recipientPartnerCode: 'REP0002',
       earningType: 'Shop Introduction',
       percentage: 10,
       amount: 10,
     });
   });
 
-  it('first order when Partner Development already paid: child FO Shop Intro rate only', () => {
+  it('Operational Support 10% can equal Shop Intro recipient', () => {
     const entries = calculateRepresentativeCommissionEntries({
       shopId: 'shop1',
       assignments: {
-        partnerDevelopmentCommissionPaid: true,
-        partnerDevelopmentEligible: true,
+        partnerDevelopmentEligible: false,
         shopIntroductionFirstOrderRatePercent: 10,
       },
-      recipients: { shopIntroduction: rep2, partnerDevelopment: rep1 },
+      recipients: {
+        shopIntroduction: rep2,
+        partnerDevelopment: null,
+        operationalSupport: rep2,
+      },
       monetary: monetary(100),
-      isFirstSuccessfulOrder: true,
+      operationalSupportRatePercent: 10,
     });
 
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({
-      earningType: 'Shop Introduction',
+    expect(entries).toHaveLength(2);
+    expect(entries.find((e) => e.earningType === 'Shop Introduction')).toMatchObject({
+      recipientPartnerCode: 'REP0002',
+      amount: 10,
+    });
+    expect(entries.find((e) => e.earningType === 'Operational Support')).toMatchObject({
+      recipientPartnerCode: 'REP0002',
       percentage: 10,
       amount: 10,
     });
   });
 
-  it('never pays Partner Development to the same Representative as Shop Introduction', () => {
+  it('never pays Partner Intro to the same user as Shop Intro', () => {
     const entries = calculateRepresentativeCommissionEntries({
       shopId: 'shop1',
       assignments: {
@@ -310,23 +160,10 @@ describe('calculateRepresentativeCommissionEntries', () => {
       },
       recipients: { shopIntroduction: rep2, partnerDevelopment: rep2 },
       monetary: monetary(100),
-      isFirstSuccessfulOrder: true,
     });
 
     expect(entries).toHaveLength(1);
     expect(entries[0].percentage).toBe(10);
-  });
-
-  it('no Shop Introduction recipient means no commissions at all', () => {
-    const entries = calculateRepresentativeCommissionEntries({
-      shopId: 'shop1',
-      assignments: {},
-      recipients: { shopIntroduction: null, partnerDevelopment: rep1 },
-      monetary: monetary(100),
-      isFirstSuccessfulOrder: true,
-    });
-
-    expect(entries).toHaveLength(0);
   });
 
   it('converts to USD using the locked FX rate', () => {
@@ -334,8 +171,8 @@ describe('calculateRepresentativeCommissionEntries', () => {
       shopId: 'shop1',
       assignments: {
         partnerDevelopmentEligible: true,
-        partnerDevelopmentRatePercent: 10,
-        shopIntroductionFirstOrderRatePercent: 5,
+        partnerDevelopmentRatePercent: 5,
+        shopIntroductionFirstOrderRatePercent: 10,
       },
       recipients: { shopIntroduction: rep2, partnerDevelopment: rep1 },
       monetary: {
@@ -344,15 +181,14 @@ describe('calculateRepresentativeCommissionEntries', () => {
         exchangeRateToUsd: 1.08,
         convertedUsdAmount: 108,
       },
-      isFirstSuccessfulOrder: true,
     });
 
-    expect(entries[0].amount).toBe(5.4); // child 5% of $108
-    expect(entries[1].amount).toBe(0.54); // parent 10% of child's $5.40 SI
+    expect(entries[0].amount).toBe(10.8); // 10% of $108
+    expect(entries[1].amount).toBe(5.4); // 5% of $108
   });
 });
 
-describe('REP → PROM → PROM → SHOP (Promoter FO + parent Rep OS)', () => {
+describe('Promoter Shop Intro + Partner Intro + OS', () => {
   const rep = { _id: 'rep1', partnerCode: 'REP0001', role: 'master_partner' };
   const parentProm = {
     _id: 'prom1',
@@ -370,335 +206,88 @@ describe('REP → PROM → PROM → SHOP (Promoter FO + parent Rep OS)', () => {
     exchangeRateToUsd: 1,
     convertedUsdAmount: usd,
   });
-  const foAssignments = {
-    partnerDevelopmentCommissionPaid: false,
-    partnerDevelopmentEligible: true,
-    partnerDevelopmentRatePercent: 10,
-    shopIntroductionFirstOrderRatePercent: 5,
-  };
 
-  it('first order: child SI + parent PD + parent Rep OS (20%)', () => {
+  it('pays SI 10% + Partner Intro 5% + OS 10% of order $', () => {
     const entries = calculateRepresentativeCommissionEntries({
       shopId: 'shop1',
-      assignments: foAssignments,
+      assignments: {
+        partnerDevelopmentEligible: true,
+        partnerDevelopmentRatePercent: 5,
+        shopIntroductionFirstOrderRatePercent: 10,
+      },
       recipients: {
         shopIntroduction: childProm,
         partnerDevelopment: parentProm,
         operationalSupport: rep,
       },
       monetary: monetary(100),
-      isFirstSuccessfulOrder: true,
+      operationalSupportRatePercent: 10,
     });
 
     expect(entries).toHaveLength(3);
     expect(entries.find((e) => e.recipientPartnerCode === 'PROM0002')).toMatchObject({
       earningType: 'Shop Introduction',
-      percentage: 5,
-      amount: 5,
+      percentage: 10,
+      amount: 10,
     });
     expect(entries.find((e) => e.recipientPartnerCode === 'PROM0001')).toMatchObject({
       earningType: 'Partner Development',
-      percentage: 10,
-      amount: 0.5, // 10% of child's $5 SI
-    });
-    expect(entries.find((e) => e.recipientPartnerCode === 'REP0001')).toMatchObject({
-      earningType: 'Operational Support',
-      percentage: 20,
-      amount: 20,
-    });
-  });
-
-  it('subsequent orders: child SI + parent Rep OS (20%), no parent PD', () => {
-    const entries = calculateRepresentativeCommissionEntries({
-      shopId: 'shop1',
-      assignments: {
-        ...foAssignments,
-        partnerDevelopmentCommissionPaid: true,
-      },
-      recipients: {
-        shopIntroduction: childProm,
-        partnerDevelopment: parentProm,
-        operationalSupport: rep,
-      },
-      monetary: monetary(100),
-      isFirstSuccessfulOrder: false,
-    });
-
-    expect(entries).toHaveLength(2);
-    expect(entries.find((e) => e.recipientPartnerCode === 'PROM0002')).toMatchObject({
-      earningType: 'Shop Introduction',
       percentage: 5,
       amount: 5,
     });
     expect(entries.find((e) => e.recipientPartnerCode === 'REP0001')).toMatchObject({
       earningType: 'Operational Support',
-      percentage: 20,
-      amount: 20,
+      percentage: 10,
+      amount: 10,
     });
+  });
+});
+
+describe('normalizeFirstOrderCommissionRates', () => {
+  it('defaults to 10% Shop Intro and 5% Partner Intro', () => {
+    expect(normalizeFirstOrderCommissionRates()).toEqual({
+      shopIntroductionRate: 10,
+      partnerDevelopmentRate: 5,
+    });
+  });
+
+  it('allows Partner Intro rate independent of Shop Intro', () => {
     expect(
-      entries.find((e) => e.earningType === 'Partner Development'),
-    ).toBeUndefined();
-  });
-
-  it('does not add Operational Support when operationalSupport recipient is omitted', () => {
-    const entries = calculateRepresentativeCommissionEntries({
-      shopId: 'shop1',
-      assignments: foAssignments,
-      recipients: {
-        shopIntroduction: childProm,
-        partnerDevelopment: parentProm,
-      },
-      monetary: monetary(100),
-      isFirstSuccessfulOrder: true,
+      normalizeFirstOrderCommissionRates({
+        shopIntroductionRate: 10,
+        partnerDevelopmentRate: 5,
+      }),
+    ).toEqual({
+      shopIntroductionRate: 10,
+      partnerDevelopmentRate: 5,
     });
+  });
+});
 
-    expect(entries).toHaveLength(2);
+describe('shouldUseFirstOrderNetworkCommission', () => {
+  it('uses earning-type path for Rep / Promoter Shop Intro', () => {
     expect(
-      entries.find((e) => e.earningType === 'Operational Support'),
-    ).toBeUndefined();
+      shouldUseFirstOrderNetworkCommission({
+        shopIntroductionRole: 'master_partner',
+      }),
+    ).toBe(true);
+    expect(
+      shouldUseFirstOrderNetworkCommission({
+        shopIntroductionRole: 'regional_partner',
+      }),
+    ).toBe(true);
   });
 
-  it('respects custom Operational Support rate on parent Rep', () => {
-    const entries = calculateRepresentativeCommissionEntries({
-      shopId: 'shop1',
-      assignments: {
-        ...foAssignments,
-        partnerDevelopmentCommissionPaid: true,
-      },
-      recipients: {
-        shopIntroduction: childProm,
-        partnerDevelopment: parentProm,
-        operationalSupport: rep,
-      },
-      monetary: monetary(100),
-      isFirstSuccessfulOrder: false,
-      operationalSupportRatePercent: 25,
-    });
-
-    expect(entries.find((e) => e.earningType === 'Operational Support')).toMatchObject({
-      percentage: 25,
-      amount: 25,
-    });
-  });
-});
-
-describe('resolveShopCommissionChain', () => {
-  const users = {
-    PROM: {
-      _id: { toString: () => 'prom1' },
-      partnerCode: 'PROM01',
-      role: 'regional_partner',
-      referredByPartnerCode: 'REP01',
-    },
-    SUB: {
-      _id: { toString: () => 'sub1' },
-      partnerCode: 'SUB001',
-      role: 'sub_promoter',
-      referredByPartnerCode: 'PROM01',
-    },
-    REP: {
-      _id: { toString: () => 'rep1' },
-      partnerCode: 'REP01',
-      role: 'master_partner',
-    },
-  };
-
-  const lookup = async (code: string) => {
-    const map: Record<string, (typeof users)[keyof typeof users]> = {
-      PROM01: users.PROM,
-      SUB001: users.SUB,
-      REP01: users.REP,
-    };
-    return map[code] ?? null;
-  };
-
-  it('resolves the Representative even when the shop links through a promoter chain', async () => {
-    const chain = await resolveShopCommissionChain(
-      { referredByPartnerCode: 'PROM01' },
-      lookup,
-    );
-
-    expect(chain.promoter?.partnerCode).toBe('PROM01');
-    expect(chain.represented?.partnerCode).toBe('REP01');
-  });
-
-  it('resolves the Representative through a sub-promoter chain', async () => {
-    const chain = await resolveShopCommissionChain(
-      { referredByPartnerCode: 'SUB001' },
-      lookup,
-    );
-
-    expect(chain.subPromoter?.partnerCode).toBe('SUB001');
-    expect(chain.represented?.partnerCode).toBe('REP01');
-  });
-
-  it('resolves the Representative directly', async () => {
-    const chain = await resolveShopCommissionChain(
-      { referredByPartnerCode: 'REP01' },
-      lookup,
-    );
-
-    expect(chain.represented?.partnerCode).toBe('REP01');
-    expect(chain.promoter).toBeNull();
-  });
-});
-
-describe('resolvePartnerDevelopmentRepresentative', () => {
-  const rep1 = {
-    _id: { toString: () => 'rep1' },
-    partnerCode: 'REP0001',
-    role: 'master_partner',
-  };
-  const rep2Parent = {
-    _id: { toString: () => 'rep2' },
-    partnerCode: 'REP0002',
-    role: 'master_partner',
-    referredByPartnerCode: 'REP0001',
-  };
-
-  const lookup = async (code: string) => {
-    if (code === 'REP0001') return rep1;
-    if (code === 'REP0002') return rep2Parent;
-    return null;
-  };
-
-  it('prefers the explicit partnerDevelopmentRepresentativeCode', async () => {
-    const result = await resolvePartnerDevelopmentRepresentative(
-      { partnerDevelopmentRepresentativeCode: 'REP0001' },
-      lookup,
-    );
-    expect(result?.partnerCode).toBe('REP0001');
-  });
-
-  it('falls back to referredByPartnerCode when no explicit PD rep is set', async () => {
-    const result = await resolvePartnerDevelopmentRepresentative(
-      { referredByPartnerCode: 'REP0001' },
-      lookup,
-    );
-    expect(result?.partnerCode).toBe('REP0001');
-  });
-
-  it('returns null when neither resolves to a Representative', async () => {
-    const result = await resolvePartnerDevelopmentRepresentative({}, lookup);
-    expect(result).toBeNull();
-  });
-});
-
-describe('resolveShopEarningAssignments', () => {
-  const rep2 = {
-    _id: { toString: () => 'rep2' },
-    partnerCode: 'REP0002',
-    role: 'master_partner',
-    referredByPartnerCode: undefined as string | undefined,
-    partnerDevelopmentRepresentativeCode: 'REP0001',
-  };
-  const rep1 = {
-    _id: { toString: () => 'rep1' },
-    partnerCode: 'REP0001',
-    role: 'master_partner',
-  };
-
-  const lookup = async (code: string) => {
-    if (code === 'REP0002') return rep2;
-    if (code === 'REP0001') return rep1;
-    return null;
-  };
-
-  it('assigns Shop Introduction + Partner Development from the chain on first resolution', async () => {
-    const result = await resolveShopEarningAssignments(
-      { _id: { toString: () => 'shop1' }, referredByPartnerCode: 'REP0002' },
-      lookup,
-    );
-
-    expect(result.shopIntroductionRepresentativeCode).toBe('REP0002');
-    expect(result.partnerDevelopmentRepresentativeCode).toBe('REP0001');
-    expect(result.partnerDevelopmentCommissionPaid).toBe(false);
-  });
-
-  it('never overwrites an already-assigned Shop Introduction rep (immutable)', async () => {
-    const result = await resolveShopEarningAssignments(
-      {
-        _id: { toString: () => 'shop1' },
-        referredByPartnerCode: 'REP0001', // would resolve differently if re-evaluated
-        shopIntroductionRepresentativeCode: 'REP0002',
-      },
-      lookup,
-    );
-
-    expect(result.shopIntroductionRepresentativeCode).toBe('REP0002');
-  });
-
-  it('assigns Shop Introduction to the direct Promoter (not upstream Rep)', async () => {
-    const promoter = {
-      _id: { toString: () => 'prom1' },
-      partnerCode: 'PROM01',
-      role: 'regional_partner',
-      referredByPartnerCode: 'REP01',
-    };
-    const rep = {
-      _id: { toString: () => 'rep1' },
-      partnerCode: 'REP01',
-      role: 'master_partner',
-    };
-    const promoterLookup = async (code: string) => {
-      if (code === 'PROM01') return promoter;
-      if (code === 'REP01') return rep;
-      return null;
-    };
-
-    const result = await resolveShopEarningAssignments(
-      { _id: { toString: () => 'shop1' }, referredByPartnerCode: 'PROM01' },
-      promoterLookup,
-    );
-
-    expect(result.shopIntroductionRepresentativeCode).toBe('PROM01');
-  });
-});
-
-describe('calculateCommissionEntries (deprecated legacy wrapper)', () => {
-  it('still pays the Representative found via the promoter chain', () => {
-    const entries = calculateCommissionEntries(
-      100,
-      {
-        isDirectHub: false,
-        represented: { _id: 'rep1', partnerCode: 'REP01', role: 'master_partner' },
-        promoter: { _id: 'prom1', partnerCode: 'PROM01', role: 'regional_partner' },
-        subPromoter: null,
-      },
-      1,
-    );
-
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({
-      recipientPartnerCode: 'REP01',
-      earningType: 'Shop Introduction',
-      percentage: 20,
-      amount: 20,
-    });
-  });
-
-  it('returns nothing for a direct-hub shop', () => {
-    const entries = calculateCommissionEntries(100, {
-      isDirectHub: true,
-      represented: null,
-      promoter: null,
-      subPromoter: null,
-    });
-    expect(entries).toHaveLength(0);
+  it('uses earning-type path when Operational Support is assigned', () => {
+    expect(
+      shouldUseFirstOrderNetworkCommission({
+        hasOperationalSupport: true,
+      }),
+    ).toBe(true);
   });
 });
 
 describe('calculateHierarchyCommissionEntries', () => {
-  const rep = {
-    _id: 'rep1',
-    partnerCode: 'R4R4',
-    role: 'master_partner',
-  };
-  const prom = {
-    _id: 'prom1',
-    partnerCode: 'P1P1',
-    role: 'regional_partner',
-  };
   const monetary = {
     orderAmount: 100,
     orderCurrency: 'USD',
@@ -706,119 +295,137 @@ describe('calculateHierarchyCommissionEntries', () => {
     convertedUsdAmount: 100,
   };
 
-  it('Rep → Promoter → Shop pays Promoter 10% SI + Rep 20% OS on every order', () => {
+  it('Rep → Shop: 10% Shop Introduction', () => {
     const entries = calculateHierarchyCommissionEntries({
-      shopId: 'shop1',
+      shopId: 's1',
       chain: {
-        isDirectHub: false,
-        promoter: prom,
+        promoter: null,
         subPromoter: null,
-        represented: rep,
+        represented: {
+          _id: 'r1',
+          partnerCode: 'REP1',
+          role: 'master_partner',
+        },
+        isDirectHub: false,
       },
       monetary,
     });
-
-    expect(entries).toHaveLength(2);
-    expect(entries.find((e) => e.recipientPartnerCode === 'P1P1')).toMatchObject({
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
       earningType: 'Shop Introduction',
+      percentage: DEFAULT_COMMISSION_RATES_PERCENT.master_partner,
+      amount: 10,
+    });
+  });
+
+  it('Rep → Promoter → Shop: Promoter SI + Rep Partner Intro (not auto OS)', () => {
+    const entries = calculateHierarchyCommissionEntries({
+      shopId: 's1',
+      chain: {
+        promoter: {
+          _id: 'p1',
+          partnerCode: 'PROM1',
+          role: 'regional_partner',
+        },
+        subPromoter: null,
+        represented: {
+          _id: 'r1',
+          partnerCode: 'REP1',
+          role: 'master_partner',
+        },
+        isDirectHub: false,
+      },
+      monetary,
+    });
+    expect(entries.find((e) => e.earningType === 'Shop Introduction')).toMatchObject({
+      recipientPartnerCode: 'PROM1',
       percentage: 10,
       amount: 10,
     });
-    expect(entries.find((e) => e.recipientPartnerCode === 'R4R4')).toMatchObject({
-      earningType: 'Operational Support',
-      percentage: 20,
-      amount: 20,
+    expect(entries.find((e) => e.earningType === 'Partner Development')).toMatchObject({
+      recipientPartnerCode: 'REP1',
+      percentage: DEFAULT_PARTNER_INTRO_RATE_PERCENT,
+      amount: 5,
     });
+    expect(entries.some((e) => e.earningType === 'Operational Support')).toBe(false);
   });
+});
 
-  it('Rep → Shop pays Rep 20% Shop Introduction only', () => {
-    const entries = calculateHierarchyCommissionEntries({
-      shopId: 'shop1',
-      chain: {
-        isDirectHub: false,
-        promoter: null,
-        subPromoter: null,
-        represented: rep,
+describe('resolveShopEarningAssignments', () => {
+  it('does not auto-assign Operational Support', async () => {
+    const users: Record<string, any> = {
+      REP2: {
+        _id: { toString: () => 'id-rep2' },
+        partnerCode: 'REP2',
+        role: 'master_partner',
+        partnerDevelopmentRepresentativeCode: 'REP1',
       },
-      monetary,
-    });
+      REP1: {
+        _id: { toString: () => 'id-rep1' },
+        partnerCode: 'REP1',
+        role: 'master_partner',
+      },
+    };
 
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({
-      recipientPartnerCode: 'R4R4',
-      earningType: 'Shop Introduction',
-      percentage: 20,
-      amount: 20,
-    });
-  });
-});
-
-describe('shouldUseFirstOrderNetworkCommission', () => {
-  it('returns false for Rep → Promoter → Shop (Promoter is SI recipient)', () => {
-    expect(
-      shouldUseFirstOrderNetworkCommission({
-        partnerDevelopmentEligible: true,
-        shopIntroductionRole: 'regional_partner',
-      }),
-    ).toBe(false);
-  });
-
-  it('returns true for Rep Add-to-Network FO (Rep is SI recipient)', () => {
-    expect(
-      shouldUseFirstOrderNetworkCommission({
-        partnerDevelopmentEligible: true,
-        shopIntroductionRole: 'master_partner',
-      }),
-    ).toBe(true);
-  });
-});
-
-describe('normalizeFirstOrderCommissionRates', () => {
-  it('rejects parent FO above child FO when admin provides explicit rates', () => {
-    expect(() =>
-      normalizeFirstOrderCommissionRates({
-        shopIntroductionRate: 5,
-        partnerDevelopmentRate: 10,
-      }),
-    ).toThrow(
-      'Parent First Order Commission cannot exceed Child First Order Commission.',
+    const result = await resolveShopEarningAssignments(
+      { _id: { toString: () => 'shop1' }, referredByPartnerCode: 'REP2' },
+      async (code) => users[code] || null,
+      async () => users.REP1,
     );
-  });
 
-  it('allows parent FO equal to child FO', () => {
-    expect(
-      normalizeFirstOrderCommissionRates({
-        shopIntroductionRate: 10,
-        partnerDevelopmentRate: 10,
+    expect(result.shopIntroductionRepresentativeCode).toBe('REP2');
+    expect(result.partnerDevelopmentRepresentativeCode).toBe('REP1');
+    expect(result.operationalSupportRepresentativeCode).toBeUndefined();
+  });
+});
+
+describe('resolvePartnerDevelopmentRepresentative', () => {
+  it('uses explicit Partner Intro code on the Shop Intro user', async () => {
+    const result = await resolvePartnerDevelopmentRepresentative(
+      {
+        partnerDevelopmentRepresentativeCode: 'REP1',
+        referredByPartnerCode: 'HUB1',
+      },
+      async (code) =>
+        code === 'REP1'
+          ? {
+              _id: { toString: () => 'id1' },
+              partnerCode: 'REP1',
+              role: 'master_partner',
+            }
+          : null,
+    );
+    expect(result?.partnerCode).toBe('REP1');
+  });
+});
+
+describe('resolveShopCommissionChain', () => {
+  it('resolves Rep → Shop', async () => {
+    const chain = await resolveShopCommissionChain(
+      { referredByPartnerCode: 'REP1' },
+      async () => ({
+        _id: { toString: () => 'r1' },
+        partnerCode: 'REP1',
+        role: 'master_partner',
       }),
-    ).toEqual({
-      shopIntroductionRate: 10,
-      partnerDevelopmentRate: 10,
-    });
+    );
+    expect(chain.represented?.partnerCode).toBe('REP1');
+    expect(chain.promoter).toBeNull();
   });
+});
 
-  it('does not validate implicit defaults when no explicit input is provided', () => {
-    expect(normalizeFirstOrderCommissionRates()).toEqual({
-      shopIntroductionRate: 20,
-      partnerDevelopmentRate: 10,
+describe('calculateCommissionEntries (deprecated wrapper)', () => {
+  it('returns Shop Intro for represented chain', () => {
+    const entries = calculateCommissionEntries(100, {
+      promoter: null,
+      subPromoter: null,
+      represented: {
+        _id: 'r1',
+        partnerCode: 'REP1',
+        role: 'master_partner',
+      },
+      isDirectHub: false,
     });
-  });
-
-  it('uses Representative defaults (child 20% / parent 10%)', () => {
-    expect(
-      normalizeFirstOrderCommissionRates({ role: 'master_partner' }),
-    ).toEqual({
-      shopIntroductionRate: 20,
-      partnerDevelopmentRate: 10,
-    });
-  });
-
-  it('uses Promoter defaults (child 10% / parent 5%)', () => {
-    expect(
-      normalizeFirstOrderCommissionRates({ role: 'regional_partner' }),
-    ).toEqual({
-      shopIntroductionRate: 10,
-      partnerDevelopmentRate: 5,
-    });
+    expect(entries[0]?.earningType).toBe('Shop Introduction');
   });
 });

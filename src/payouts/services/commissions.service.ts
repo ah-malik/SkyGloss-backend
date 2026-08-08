@@ -42,7 +42,27 @@ export class CommissionsService {
         earningType: entry.earningType || 'Shop Introduction',
       });
 
-      if (existing) continue;
+      if (existing) {
+        // Keep PENDING_HOLD rows aligned with locked order.commissions
+        // (e.g. legacy Shop Intro 20% repaired back to 10% after ship).
+        if (
+          existing.status === CommissionLifecycleStatus.PENDING_HOLD &&
+          (Number(existing.percentage) !== Number(entry.percentage) ||
+            Math.abs(Number(existing.amount) - Number(entry.amount)) >= 0.02)
+        ) {
+          existing.percentage = entry.percentage;
+          existing.amount = entry.amount;
+          existing.recipientPartnerCode = entry.recipientPartnerCode;
+          existing.originalCurrency = entry.originalCurrency;
+          existing.exchangeRate = entry.exchangeRate;
+          existing.convertedUsdAmount = entry.convertedUsdAmount;
+          await existing.save();
+          this.logger.log(
+            `Updated PENDING_HOLD commission ${existing._id} for order ${order.orderNumber}: ${entry.percentage}% / $${entry.amount}`,
+          );
+        }
+        continue;
+      }
 
       const record = await this.commissionModel.create({
         orderId: order._id,

@@ -128,10 +128,10 @@ export class User {
       {
         partnerCode: { type: String, required: true },
         linkedAt: { type: Date, required: true },
-        /** REP2 Shop Introduction % on eligible shops' first order (default 10). */
-        firstOrderShopIntroductionRate: { type: Number, default: 5 },
-        /** Parent (REP1) Partner Development % on eligible shops' first order (default 10). */
-        firstOrderPartnerDevelopmentRate: { type: Number, default: 10 },
+        /** Shop Introduction % of order $ (default 10). */
+        firstOrderShopIntroductionRate: { type: Number, default: 10 },
+        /** Partner Intro % of order $ (default 5). */
+        firstOrderPartnerDevelopmentRate: { type: Number, default: 5 },
       },
     ],
     default: [],
@@ -149,17 +149,16 @@ export class User {
 
   /**
    * Structured operational Promoter links (keeps codes array in sync).
-   * First Order rates apply only to shops created after linkedAt — same model as Representatives.
    */
   @Prop({
     type: [
       {
         partnerCode: { type: String, required: true },
         linkedAt: { type: Date, required: true },
-        /** Child Promoter Shop Introduction % on eligible shops' first order (default 10). */
-        firstOrderShopIntroductionRate: { type: Number, default: 5 },
-        /** Parent Partner Development % on eligible shops' first order (default 10). */
-        firstOrderPartnerDevelopmentRate: { type: Number, default: 10 },
+        /** Shop Introduction % of order $ (default 10). */
+        firstOrderShopIntroductionRate: { type: Number, default: 10 },
+        /** Partner Intro % of order $ (default 5). */
+        firstOrderPartnerDevelopmentRate: { type: Number, default: 5 },
       },
     ],
     default: [],
@@ -220,7 +219,10 @@ export class User {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
   shopIntroductionRepresentativeId?: MongooseSchema.Types.ObjectId;
 
-  /** Operational Support Representative for this shop — assigned once at shop create. */
+  /**
+   * Operational Support Representative for this shop.
+   * Starts Unassigned; Admin later assigns a REP only.
+   */
   @Prop({ sparse: true })
   operationalSupportRepresentativeCode?: string;
 
@@ -228,33 +230,23 @@ export class User {
   operationalSupportRepresentativeId?: MongooseSchema.Types.ObjectId;
 
   /**
-   * When true, this shop is eligible for First Order Partner Development split
-   * (shop joined the intro Rep AFTER that Rep was Add-to-Network linked).
-   * Unset/false until evaluated at assignment time — do not default to false
-   * or new shops are incorrectly blocked from FO eligibility checks.
+   * When true, Partner Intro (Partner Development) is paid on every order
+   * for this shop (5% of order $ by default).
    */
   @Prop()
   partnerDevelopmentEligible?: boolean;
 
-  /**
-   * Frozen Partner Development % for this shop's first-order split (parent share).
-   * Copied from the operational link at shop assignment time.
-   */
+  /** Partner Intro % of order $ (default 5). */
   @Prop()
   partnerDevelopmentRatePercent?: number;
 
-  /**
-   * Frozen Shop Introduction % for this shop's first-order split (child Rep share).
-   * Copied from the operational link at shop assignment time (default 10).
-   */
+  /** Shop Introduction % of order $ (default 10). */
   @Prop()
   shopIntroductionFirstOrderRatePercent?: number;
 
   /**
-   * True once this shop's one-time Partner Development commission has
-   * been paid out (on the shop's first successful, non-registration order).
-   * Shop-level flag — each eligible shop under a linked Rep pays Partner
-   * Development independently.
+   * Legacy FO lock flag — no longer gates Partner Intro (paid every order).
+   * Kept for historical data compatibility.
    */
   @Prop({ default: false })
   partnerDevelopmentCommissionPaid?: boolean;

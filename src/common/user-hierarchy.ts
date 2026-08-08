@@ -155,18 +155,13 @@ export function filterCommissionsForViewerWithSplitContext<T extends CommissionL
 /** Roles that must be linked to a parent network user via referredByPartnerCode. */
 export const HIERARCHY_PARENT_ROLES: Partial<Record<UserRole, UserRole[]>> = {
   [UserRole.DISTRIBUTOR]: [UserRole.PARTNER],
-  // Representative → Representative / Distributor / Hub (never Promoter)
-  [UserRole.MASTER_PARTNER]: [
-    UserRole.MASTER_PARTNER,
-    UserRole.DISTRIBUTOR,
-    UserRole.PARTNER,
-  ],
-  // Promoter → Promoter / Representative / Distributor / Hub
+  // Representative → Hub only (Partner Intro is a separate optional field)
+  [UserRole.MASTER_PARTNER]: [UserRole.PARTNER],
+  // Promoter → Hub / Representative / Promoter (Add to Network)
   [UserRole.REGIONAL_PARTNER]: [
-    UserRole.REGIONAL_PARTNER,
-    UserRole.MASTER_PARTNER,
-    UserRole.DISTRIBUTOR,
     UserRole.PARTNER,
+    UserRole.MASTER_PARTNER,
+    UserRole.REGIONAL_PARTNER,
   ],
   // [UserRole.SUB_PROMOTER]: [UserRole.REGIONAL_PARTNER], // removed — use Promoter Network operational links
   [UserRole.CERTIFIED_SHOP]: [
@@ -192,8 +187,9 @@ export function getParentLinkLabel(childRole?: string): string {
     case UserRole.DISTRIBUTOR:
       return 'Assigned Hub';
     case UserRole.MASTER_PARTNER:
+      return 'Hub User';
     case UserRole.REGIONAL_PARTNER:
-      return 'Add Network';
+      return 'Add to Network';
     // case UserRole.SUB_PROMOTER:
     //   return 'Assigned Main Promoter';
     case UserRole.CERTIFIED_SHOP:
