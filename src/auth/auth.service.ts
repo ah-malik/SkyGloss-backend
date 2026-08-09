@@ -4,6 +4,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { UsersService } from '../users/users.service';
 import { AccessCodesService } from '../access-codes/access-codes.service';
@@ -41,6 +42,16 @@ import {
 } from '../common/partner-code';
 import { UserActivityService } from '../user-activity/user-activity.service';
 import { UserActivityAction } from '../user-activity/entities/user-activity-log.entity';
+import { parseDurationToMs } from './auth-cookies';
+
+export interface IssuedAuthTokens {
+  access_token: string;
+  refresh_token: string;
+  csrf_token: string;
+  accessMaxAgeMs: number;
+  refreshMaxAgeMs: number;
+  user: Record<string, any>;
+}
 
 export interface AuthActivityContext {
   portal?: string;
@@ -58,6 +69,7 @@ export class AuthService {
   constructor(
     private usersService: UsersService,
     private jwtService: JwtService,
+    private configService: ConfigService,
     private accessCodesService: AccessCodesService,
     private mailService: MailService,
     private ordersService: OrdersService,
@@ -68,6 +80,150 @@ export class AuthService {
     private registrationFeesService: RegistrationFeesService,
     private userActivityService: UserActivityService,
   ) { }
+
+  private accessExpiresIn(): string {
+    return (
+      this.configService.get<string>('JWT_ACCESS_EXPIRATION') ||
+      this.configService.get<string>('JWT_EXPIRATION') ||
+      '15m'
+    );
+  }
+
+  private refreshExpiresIn(): string {
+    return this.configService.get<string>('JWT_REFRESH_EXPIRATION') || '7d';
+  }
+
+  private toPublicUser(user: any, userId: string) {
+    return {
+      id: userId,
+      _id: userId,
+      email: user.email,
+      role: user.role,
+      country: user.country,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      productGroup: user.productGroup,
+      isPartnerPaid: user.isPartnerPaid,
+      partnerCode: user.partnerCode,
+      hasSeenWelcomePopup: user.hasSeenWelcomePopup,
+      preferredLanguage: user.preferredLanguage,
+      status: user.status,
+    };
+  }
+
+  /**
+   * Issues access + refresh + CSRF tokens and persists refresh hash (revokes prior refresh).
+   * Pass rotateRefresh=false for admin impersonation handoff so the real user's
+   * refresh session is not revoked.
+   */
+  async issueAuthTokens(
+    user: any,
+    options?: { rotateRefresh?: boolean },
+  ): Promise<IssuedAuthTokens> {
+    const rotateRefresh = options?.rotateRefresh !== false;
+    const userId = (user._id || user.id || user.sub).toString();
+    const accessExpiresIn = this.accessExpiresIn();
+    const refreshExpiresIn = this.refreshExpiresIn();
+
+    const access_token = this.jwtService.sign(
+      { email: user.email, sub: userId, role: user.role },
+      { expiresIn: accessExpiresIn as any },
+    );
+
+    let refresh_token = '';
+    let refreshMaxAgeMs = 0;
+    if (rotateRefresh) {
+      // jti is hashed (bcrypt 72-byte limit) — full refresh JWT is only in HttpOnly cookie.
+      const refreshJti = crypto.randomBytes(32).toString('hex');
+      refresh_token = this.jwtService.sign(
+        { sub: userId, typ: 'refresh', jti: refreshJti },
+        { expiresIn: refreshExpiresIn as any },
+      );
+      const refreshTokenHash = await bcrypt.hash(refreshJti, 10);
+      await this.usersService.setRefreshTokenHash(userId, refreshTokenHash);
+      refreshMaxAgeMs = parseDurationToMs(refreshExpiresIn, 7 * 86_400_000);
+    }
+
+    const csrf_token = crypto.randomBytes(32).toString('hex');
+
+    return {
+      access_token,
+      refresh_token,
+      csrf_token,
+      accessMaxAgeMs: parseDurationToMs(accessExpiresIn, 15 * 60_000),
+      refreshMaxAgeMs,
+      user: this.toPublicUser(user, userId),
+    };
+  }
+
+  async refreshAuthTokens(refreshToken: string): Promise<IssuedAuthTokens> {
+    if (!refreshToken) {
+      throw new UnauthorizedException('Refresh token missing');
+    }
+
+    let userId: string | null = null;
+    let jti: string | null = null;
+    try {
+      const decoded = this.jwtService.verify(refreshToken) as {
+        sub?: string;
+        typ?: string;
+        jti?: string;
+      };
+      if (decoded?.typ === 'refresh' && decoded.sub && decoded.jti) {
+        userId = decoded.sub;
+        jti = decoded.jti;
+      }
+    } catch {
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    if (!userId || !jti) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    const record = await this.usersService.getRefreshTokenRecord(userId);
+    if (!record?.refreshTokenHash) {
+      throw new UnauthorizedException('Session revoked');
+    }
+    if (record.status === UserStatus.BLOCKED) {
+      throw new UnauthorizedException('Account is blocked');
+    }
+
+    const matches = await bcrypt.compare(jti, record.refreshTokenHash);
+    if (!matches) {
+      // Possible theft/reuse — revoke all sessions for this user
+      await this.usersService.setRefreshTokenHash(userId, null);
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    const user = await this.usersService.findOneForAuth(userId);
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    return this.issueAuthTokens(user);
+  }
+
+  async revokeRefreshToken(userId: string): Promise<void> {
+    if (!userId) return;
+    await this.usersService.setRefreshTokenHash(userId, null);
+  }
+
+  /** Decode refresh JWT without rotating — used for logout revoke. */
+  peekRefreshUserId(refreshToken: string): string | null {
+    try {
+      const decoded = this.jwtService.verify(refreshToken) as {
+        sub?: string;
+        typ?: string;
+      };
+      if (decoded?.typ === 'refresh' && decoded.sub) {
+        return decoded.sub;
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
 
   private rolesForPortal(portal: AuthPortal): UserRole[] {
     if (portal === 'shop') {
@@ -168,23 +324,7 @@ export class AuthService {
       },
     });
 
-    const payload = { email: user.email, sub: userId, role: user.role };
-    return {
-      access_token: this.jwtService.sign(payload),
-      user: {
-        id: userId,
-        email: user.email,
-        role: user.role,
-        country: user.country,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        productGroup: user.productGroup,
-        isPartnerPaid: user.isPartnerPaid,
-        partnerCode: user.partnerCode,
-        hasSeenWelcomePopup: user.hasSeenWelcomePopup,
-        preferredLanguage: user.preferredLanguage,
-      },
-    };
+    return this.issueAuthTokens(user);
   }
 
   async loginWithAccessCode(
@@ -223,7 +363,6 @@ export class AuthService {
           }
 
           // Return login for existing user
-          const payload = { sub: user._id.toString(), role: user.role };
           await this.userActivityService.log({
             userId: user._id.toString(),
             action: UserActivityAction.LOGIN_ACCESS_CODE,
@@ -244,20 +383,7 @@ export class AuthService {
               freshCode: false,
             },
           });
-          return {
-            access_token: this.jwtService.sign(payload),
-            user: {
-              id: user._id.toString(),
-              role: user.role,
-              country: user.country,
-              firstName: user.firstName,
-              lastName: user.lastName,
-              productGroup: user.productGroup,
-              partnerCode: user.partnerCode,
-              hasSeenWelcomePopup: user.hasSeenWelcomePopup,
-              preferredLanguage: user.preferredLanguage,
-            },
-          };
+          return this.issueAuthTokens(user);
         }
         throw error;
       }
@@ -274,7 +400,6 @@ export class AuthService {
       // Mark code as used
       await this.accessCodesService.markAsUsed(code.code);
 
-      const payload = { sub: user._id.toString(), role: user.role };
       const accessCodeActivity = {
         portal: activity?.portal || 'shop',
         country: user.country || activity?.country || loginAccessCodeDto.country,
@@ -308,18 +433,7 @@ export class AuthService {
         action: UserActivityAction.LOGIN_ACCESS_CODE,
         ...accessCodeActivity,
       });
-      return {
-        access_token: this.jwtService.sign(payload),
-        user: {
-          id: user._id.toString(),
-          role: user.role,
-          country: user.country,
-          productGroup: user.productGroup,
-          partnerCode: user.partnerCode,
-          hasSeenWelcomePopup: user.hasSeenWelcomePopup,
-          preferredLanguage: user.preferredLanguage,
-        },
-      };
+      return this.issueAuthTokens(user);
     } catch (err: any) {
       console.error('Critical login error:', err);
       const allCodes = await (
@@ -730,6 +844,7 @@ export class AuthService {
     user.password = hashedPassword;
     user.resetPasswordToken = undefined;
     user.resetPasswordExpires = undefined;
+    user.refreshTokenHash = undefined;
     await user.save();
 
     return { message: 'Password has been reset successfully' };
@@ -739,6 +854,11 @@ export class AuthService {
     return this.ordersService.verifyRegistrationPayment(userId);
   }
 
+  /**
+   * One-time access JWT for admin→portal handoff.
+   * Does NOT rotate refresh tokens (avoids kicking the real user's session).
+   * Frontend exchanges via POST /auth/establish-session.
+   */
   async impersonate(targetUserId: string, activity?: AuthActivityContext) {
     const user = await (this.usersService as any).userModel.findById(targetUserId);
     if (!user) {
@@ -766,23 +886,20 @@ export class AuthService {
         status: user.status,
       },
     });
-    const payload = { email: user.email, sub: userId, role: user.role };
+
+    const accessExpiresIn = this.accessExpiresIn();
+    const access_token = this.jwtService.sign(
+      { email: user.email, sub: userId, role: user.role },
+      { expiresIn: accessExpiresIn as any },
+    );
+
     return {
-      access_token: this.jwtService.sign(payload),
-      user: {
-        _id: userId,
-        id: userId,
-        email: user.email,
-        role: user.role,
-        country: user.country,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        productGroup: user.productGroup,
-        isPartnerPaid: user.isPartnerPaid,
-        partnerCode: user.partnerCode,
-        hasSeenWelcomePopup: user.hasSeenWelcomePopup,
-        preferredLanguage: user.preferredLanguage,
-      },
-    };
+      access_token,
+      refresh_token: '',
+      csrf_token: '',
+      accessMaxAgeMs: parseDurationToMs(accessExpiresIn, 15 * 60_000),
+      refreshMaxAgeMs: 0,
+      user: this.toPublicUser(user, userId),
+    } as IssuedAuthTokens;
   }
 }

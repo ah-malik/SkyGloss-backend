@@ -9,21 +9,29 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
+import { WsAuthService, WsAuthedUser } from '../auth/ws-auth.service';
+import { installWsAuthMiddleware } from '../auth/install-ws-auth.middleware';
 
 function resolveNotificationUserId(user: unknown): string | undefined {
   if (!user) return undefined;
   if (typeof user === 'string') return user;
   if (typeof user === 'object' && user !== null) {
-    const obj = user as { _id?: { toString?: () => string }; toString?: () => string };
+    const obj = user as {
+      _id?: { toString?: () => string };
+      toString?: () => string;
+    };
     if (obj._id) return obj._id.toString?.() ?? String(obj._id);
     if (typeof obj.toString === 'function') return obj.toString();
   }
   return String(user);
 }
 
+type AuthedSocket = Socket & { data: { user?: WsAuthedUser } };
+
 @WebSocketGateway({
   cors: {
-    origin: '*',
+    origin: true,
+    credentials: true,
   },
 })
 export class NotificationsGateway
@@ -34,17 +42,29 @@ export class NotificationsGateway
 
   private readonly logger = new Logger(NotificationsGateway.name);
 
+  constructor(private readonly wsAuthService: WsAuthService) {}
+
   afterInit(server: Server) {
+    installWsAuthMiddleware(server, this.wsAuthService);
     this.logger.log('NotificationsGateway initialized');
   }
 
-  handleConnection(client: Socket) {
-    const userId = client.handshake.query?.userId;
-    if (typeof userId === 'string' && userId.trim()) {
-      client.join(userId.trim());
-      this.logger.log(`Client ${client.id} auto-joined notification room ${userId.trim()}`);
+  async handleConnection(client: AuthedSocket) {
+    const user = client.data?.user;
+    if (!user) {
+      this.logger.warn(
+        `Rejecting unauthenticated notifications socket ${client.id}`,
+      );
+      client.emit('auth_error', { message: 'Authentication required' });
+      client.disconnect(true);
+      return;
     }
-    this.logger.log(`Client connected to notifications: ${client.id}`);
+
+    client.join(user.id);
+    client.emit('authenticated', { userId: user.id });
+    this.logger.log(
+      `Notifications client ${client.id} authenticated as ${user.id}`,
+    );
   }
 
   handleDisconnect(client: Socket) {
@@ -54,12 +74,23 @@ export class NotificationsGateway
   @SubscribeMessage('join_user_room')
   handleJoinUserRoom(
     @MessageBody() data: { userId: string },
-    @ConnectedSocket() client: Socket,
+    @ConnectedSocket() client: AuthedSocket,
   ) {
-    if (!data?.userId) return;
-    const roomId = String(data.userId).trim();
-    client.join(roomId);
-    this.logger.log(`Client ${client.id} joined notification room ${roomId}`);
+    const user = client.data?.user;
+    if (!user || !data?.userId) {
+      return { error: 'Unauthorized' };
+    }
+
+    // Only allow joining your own notification room
+    if (String(data.userId).trim() !== user.id) {
+      return { error: 'Forbidden' };
+    }
+
+    client.join(user.id);
+    this.logger.log(
+      `Client ${client.id} joined notification room ${user.id}`,
+    );
+    return { ok: true };
   }
 
   broadcastNotification(notification: any) {
@@ -80,10 +111,13 @@ export class NotificationsGateway
     if (recipientId) {
       this.server.to(recipientId).emit('new_notification', notification);
     } else if (!isTargetedOnly) {
-      // Legacy admin-wide notifications (e.g. NEW_USER)
+      // Legacy admin-wide notifications (e.g. NEW_USER) — admins join their own rooms;
+      // also emit globally for authenticated admin sockets listening.
       this.server.emit('new_notification', notification);
     } else {
-      this.logger.warn(`Skipped broadcast for targeted notification without recipient: ${type}`);
+      this.logger.warn(
+        `Skipped broadcast for targeted notification without recipient: ${type}`,
+      );
     }
     this.logger.log('Emit call completed');
   }

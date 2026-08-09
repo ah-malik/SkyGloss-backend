@@ -1890,6 +1890,25 @@ export class UsersService implements OnModuleInit {
       .exec();
   }
 
+  async setRefreshTokenHash(
+    userId: string,
+    refreshTokenHash: string | null,
+  ): Promise<void> {
+    await this.userModel.findByIdAndUpdate(userId, {
+      $set: { refreshTokenHash: refreshTokenHash ?? null },
+    });
+  }
+
+  async getRefreshTokenRecord(
+    userId: string,
+  ): Promise<{ refreshTokenHash?: string; status?: string } | null> {
+    return this.userModel
+      .findById(userId)
+      .select('refreshTokenHash status')
+      .lean()
+      .exec();
+  }
+
   async findByEmail(email: string): Promise<UserDocument | null> {
     return this.userModel
       .findOne({ email: emailEqualsQuery(email) })

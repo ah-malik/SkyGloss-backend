@@ -1,4 +1,4 @@
-import { forwardRef, Inject } from '@nestjs/common';
+import { forwardRef, Inject, Logger } from '@nestjs/common';
 import {
   WebSocketGateway,
   WebSocketServer,
@@ -14,15 +14,22 @@ import { NotificationsService } from '../../notifications/notifications.service'
 import { NotificationsGateway } from '../../notifications/notifications.gateway';
 import { NotificationType } from '../../notifications/entities/notification.entity';
 import { UsersService } from '../../users/users.service';
+import { WsAuthService, WsAuthedUser } from '../../auth/ws-auth.service';
+import { installWsAuthMiddleware } from '../../auth/install-ws-auth.middleware';
+
+type AuthedSocket = Socket & { data: { user?: WsAuthedUser } };
 
 @WebSocketGateway({
   cors: {
-    origin: '*',
+    origin: true,
+    credentials: true,
   },
 })
 export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
+
+  private readonly logger = new Logger(ChatGateway.name);
 
   constructor(
     private readonly chatService: ChatService,
@@ -30,37 +37,86 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly notificationsGateway: NotificationsGateway,
     @Inject(forwardRef(() => UsersService))
     private readonly usersService: UsersService,
-  ) { }
+    private readonly wsAuthService: WsAuthService,
+  ) {}
 
-  async handleConnection(client: Socket) {
-    console.log(`Client connected: ${client.id}`);
+  afterInit(server: Server) {
+    installWsAuthMiddleware(server, this.wsAuthService);
+  }
+
+  async handleConnection(client: AuthedSocket) {
+    const user = client.data?.user;
+    if (!user) {
+      this.logger.warn(`Rejecting unauthenticated chat socket ${client.id}`);
+      client.emit('auth_error', { message: 'Authentication required' });
+      client.disconnect(true);
+      return;
+    }
+
+    // Personal notification/chat alerts room — always own id only
+    client.join(user.id);
+    client.emit('authenticated', { userId: user.id });
+    this.logger.log(`Chat client ${client.id} authenticated as ${user.id}`);
   }
 
   async handleDisconnect(client: Socket) {
-    console.log(`Client disconnected: ${client.id}`);
+    this.logger.log(`Chat client disconnected: ${client.id}`);
+  }
+
+  private requireUser(client: AuthedSocket): WsAuthedUser | null {
+    return client.data?.user || null;
+  }
+
+  private async canAccessRoom(
+    user: WsAuthedUser,
+    roomId: string,
+  ): Promise<boolean> {
+    const room = await this.chatService.getRoomById(roomId);
+    if (!room) return false;
+    const ownerId = room.userId?.toString?.();
+    if (ownerId && ownerId === user.id) return true;
+    return this.wsAuthService.canAccessOtherUserRooms(user.role);
   }
 
   @SubscribeMessage('join_room')
   async handleJoinRoom(
     @MessageBody() data: { roomId: string },
-    @ConnectedSocket() client: Socket,
+    @ConnectedSocket() client: AuthedSocket,
   ) {
-    client.join(data.roomId);
+    const user = this.requireUser(client);
+    if (!user || !data?.roomId) {
+      return { error: 'Unauthorized' };
+    }
 
-    // Send chat history to the client
+    const allowed = await this.canAccessRoom(user, data.roomId);
+    if (!allowed) {
+      return { error: 'Forbidden' };
+    }
+
+    client.join(data.roomId);
     const messages = await this.chatService.getMessages(data.roomId);
     client.emit('chat_history', messages);
-
-    console.log(`Client ${client.id} joined room ${data.roomId}`);
+    this.logger.log(`Client ${client.id} joined room ${data.roomId}`);
+    return { ok: true };
   }
 
   @SubscribeMessage('join_user_room')
   async handleJoinUserRoom(
     @MessageBody() data: { userId: string },
-    @ConnectedSocket() client: Socket,
+    @ConnectedSocket() client: AuthedSocket,
   ) {
-    client.join(data.userId);
-    console.log(`Client ${client.id} joined personal room ${data.userId}`);
+    const user = this.requireUser(client);
+    if (!user || !data?.userId) {
+      return { error: 'Unauthorized' };
+    }
+
+    // Prevent spoofing another user's personal room (admins use roomId joins).
+    if (String(data.userId) !== user.id) {
+      return { error: 'Forbidden' };
+    }
+
+    client.join(user.id);
+    return { ok: true };
   }
 
   @SubscribeMessage('send_message')
@@ -68,59 +124,83 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody()
     data: {
       roomId: string;
-      senderName: string;
-      senderType: string;
+      senderName?: string;
+      senderType?: string;
       message: string;
     },
-    @ConnectedSocket() client: Socket,
+    @ConnectedSocket() client: AuthedSocket,
   ) {
-    // Save message to database
+    const user = this.requireUser(client);
+    if (!user || !data?.roomId || !data?.message?.trim()) {
+      return { error: 'Unauthorized' };
+    }
+
+    const allowed = await this.canAccessRoom(user, data.roomId);
+    if (!allowed) {
+      return { error: 'Forbidden' };
+    }
+
+    // Never trust client-provided sender identity
+    const senderType = this.wsAuthService.resolveSenderType(user.role);
+    const senderName = this.wsAuthService.displayName(user);
+    const messageText = data.message.trim();
+
     const savedMessage = await this.chatService.saveMessage(
       data.roomId,
-      data.senderName,
-      data.senderType,
-      data.message,
+      senderName,
+      senderType,
+      messageText,
     );
 
-    // Broadcast message to all clients in the room (e.g. if they have the chat open)
     this.server.to(data.roomId.toString()).emit('new_message', savedMessage);
 
-    // Notify admin panel about new message, ONLY if sender is user
-    if (data.senderType === 'user') {
-      const { notification, isNew } =
+    if (senderType === 'user') {
+      const { notification } =
         await this.notificationsService.createOrUpdateChatNotification({
           type: NotificationType.CHAT_MESSAGE,
           title: 'New Chat Message',
-          message: `New message from ${data.senderName}: ${data.message.substring(0, 50)}${data.message.length > 50 ? '...' : ''}`,
-          metadata: { roomId: data.roomId.toString(), senderName: data.senderName },
+          message: `New message from ${senderName}: ${messageText.substring(0, 50)}${messageText.length > 50 ? '...' : ''}`,
+          metadata: {
+            roomId: data.roomId.toString(),
+            senderName,
+          },
           link: `/live-chat?roomId=${data.roomId.toString()}`,
-          triggeredBy: (await this.chatService.getRoomById(data.roomId))?.userId?.toString(),
+          triggeredBy: (
+            await this.chatService.getRoomById(data.roomId)
+          )?.userId?.toString(),
         });
 
       this.server.emit('message_notification', {
         roomId: data.roomId.toString(),
-        message: data.message,
-        senderName: data.senderName,
+        message: messageText,
+        senderName,
       });
 
-      // Also emit to the notifications namespace if it's a new notification, OR an update one
       this.notificationsGateway.broadcastNotification(notification);
 
-      // --- Notify the Referring Partner ---
       try {
         const room = await this.chatService.getRoomById(data.roomId);
         if (room && room.userId) {
-          const user = await this.usersService.findOne(room.userId.toString());
-          if (user && user.referredByPartnerCode) {
-            const partner = await this.usersService.findByPartnerCode(user.referredByPartnerCode);
-            if (partner && partner._id.toString() !== room.userId.toString()) {
-              // Create database notification for the partner
+          const roomUser = await this.usersService.findOne(
+            room.userId.toString(),
+          );
+          if (roomUser && roomUser.referredByPartnerCode) {
+            const partner = await this.usersService.findByPartnerCode(
+              roomUser.referredByPartnerCode,
+            );
+            if (
+              partner &&
+              partner._id.toString() !== room.userId.toString()
+            ) {
               const partnerNotif = await this.notificationsService.create({
                 user: partner._id.toString(),
                 type: NotificationType.CHAT_MESSAGE,
                 title: 'New message from Shop',
-                message: `Shop "${data.senderName}" sent a message.`,
-                metadata: { roomId: data.roomId.toString(), senderName: data.senderName },
+                message: `Shop "${senderName}" sent a message.`,
+                metadata: {
+                  roomId: data.roomId.toString(),
+                  senderName,
+                },
                 link: `/live-chat?roomId=${data.roomId.toString()}`,
                 triggeredBy: room.userId.toString(),
               });
@@ -129,32 +209,34 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           }
         }
       } catch (err) {
-        console.error('[ChatGateway] Failed to notify partner:', err);
+        this.logger.error('Failed to notify partner', err as any);
       }
     }
 
-    // IF sender is admin, notify the specific user
-    if (data.senderType === 'admin') {
+    if (senderType === 'admin') {
       const room = await this.chatService.getRoomById(data.roomId);
       if (room && room.userId) {
         const userId = room.userId.toString();
 
-        // Notify the specific user via their personal room (for toast/global alert)
-        this.server.to(userId.toString()).emit('new_admin_message', {
+        this.server.to(userId).emit('new_admin_message', {
           roomId: data.roomId.toString(),
-          message: data.message,
-          senderName: data.senderName,
+          message: messageText,
+          senderName,
         });
 
-        // Create database notification for the user
         await this.notificationsService.create({
-          user: userId.toString(),
+          user: userId,
           type: NotificationType.CHAT_MESSAGE,
           title: 'New message from Partner',
-          message: data.message.substring(0, 50) + (data.message.length > 50 ? '...' : ''),
-          metadata: { roomId: data.roomId.toString(), senderName: data.senderName },
+          message:
+            messageText.substring(0, 50) +
+            (messageText.length > 50 ? '...' : ''),
+          metadata: {
+            roomId: data.roomId.toString(),
+            senderName,
+          },
           link: `/live-chat?roomId=${data.roomId.toString()}`,
-          triggeredBy: 'admin', // Or some specific admin ID if available
+          triggeredBy: user.id,
         });
       }
     }
@@ -162,13 +244,19 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return savedMessage;
   }
 
-
   @SubscribeMessage('typing')
-  handleTyping(
-    @MessageBody() data: { roomId: string; userName: string },
-    @ConnectedSocket() client: Socket,
+  async handleTyping(
+    @MessageBody() data: { roomId: string; userName?: string },
+    @ConnectedSocket() client: AuthedSocket,
   ) {
-    // Broadcast typing indicator to room except sender
-    client.to(data.roomId).emit('user_typing', { userName: data.userName });
+    const user = this.requireUser(client);
+    if (!user || !data?.roomId) return;
+
+    const allowed = await this.canAccessRoom(user, data.roomId);
+    if (!allowed) return;
+
+    client.to(data.roomId).emit('user_typing', {
+      userName: this.wsAuthService.displayName(user),
+    });
   }
 }

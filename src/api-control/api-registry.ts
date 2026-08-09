@@ -40,6 +40,9 @@ export const FRONTEND_APIS: ApiEndpointDef[] = [
     'Validate shop registration coupon',
   ),
   def('frontend', 'Auth', 'GET', '/auth/profile', 'Get profile'),
+  def('frontend', 'Auth', 'POST', '/auth/refresh', 'Refresh session'),
+  def('frontend', 'Auth', 'POST', '/auth/logout', 'Logout / revoke session'),
+  def('frontend', 'Auth', 'POST', '/auth/establish-session', 'Establish cookie session'),
   def('frontend', 'Auth', 'GET', '/auth/verify-payment/:userId', 'Verify registration payment'),
 
   // Public
@@ -226,6 +229,9 @@ export const ADMIN_APIS: ApiEndpointDef[] = [
   // Auth
   def('admin', 'Auth', 'POST', '/auth/login', 'Login'),
   def('admin', 'Auth', 'GET', '/auth/profile', 'Get profile'),
+  def('admin', 'Auth', 'POST', '/auth/refresh', 'Refresh session'),
+  def('admin', 'Auth', 'POST', '/auth/logout', 'Logout / revoke session'),
+  def('admin', 'Auth', 'POST', '/auth/establish-session', 'Establish cookie session'),
   def('admin', 'Auth', 'POST', '/auth/impersonate/:userId', 'Impersonate user'),
   def('admin', 'Auth', 'POST', '/auth/register', 'Register'),
   def('admin', 'Auth', 'POST', '/auth/forgot-password', 'Forgot password'),
@@ -493,5 +499,14 @@ export function isAlwaysAllowedPath(pathname: string, method: string): boolean {
   if (path === '/stripe/webhook') return true;
   if (path === '/orders/webhook' || path === '/orders/webhook-usa') return true;
   if (path === '/certifications/webhook') return true;
+  // Session lifecycle must remain reachable even if Auth APIs are toggled off
+  if (
+    m === 'POST' &&
+    (path === '/auth/refresh' ||
+      path === '/auth/logout' ||
+      path === '/auth/establish-session')
+  ) {
+    return true;
+  }
   return false;
 }

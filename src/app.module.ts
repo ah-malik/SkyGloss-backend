@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -26,6 +26,7 @@ import { ApiControlModule } from './api-control/api-control.module';
 import { RedisModule } from './redis/redis.module';
 import { HealthModule } from './health/health.module';
 import { UserActivityModule } from './user-activity/user-activity.module';
+import { CsrfMiddleware } from './auth/csrf.middleware';
 
 @Module({
   imports: [
@@ -65,4 +66,8 @@ import { UserActivityModule } from './user-activity/user-activity.module';
   controllers: [AppController],
   providers: [AppService, SeedService],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(CsrfMiddleware).forRoutes('*');
+  }
+}

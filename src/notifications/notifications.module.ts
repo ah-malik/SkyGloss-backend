@@ -7,6 +7,7 @@ import {
   Notification,
   NotificationSchema,
 } from './entities/notification.entity';
+import { WsAuthModule } from '../auth/ws-auth.module';
 
 @Global()
 @Module({
@@ -14,6 +15,7 @@ import {
     MongooseModule.forFeature([
       { name: Notification.name, schema: NotificationSchema },
     ]),
+    WsAuthModule,
   ],
   controllers: [NotificationsController],
   providers: [NotificationsService, NotificationsGateway],

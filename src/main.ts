@@ -5,12 +5,14 @@ import { ValidationPipe } from '@nestjs/common';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
-import * as bodyParser from 'body-parser';
+import cookieParser from 'cookie-parser';
 
 async function bootstrap() {
   // rawBody: true lets NestJS capture raw body for Stripe webhook verification
   // Do NOT add manual bodyParser middleware — it conflicts with rawBody
   const app = await NestFactory.create(AppModule, { rawBody: true });
+
+  app.use(cookieParser());
 
   // Enable CORS — allow custom client header for API control
   app.enableCors({
@@ -25,8 +27,9 @@ async function bootstrap() {
       'X-Requested-With',
       'X-Client-App',
       'X-Client-Portal',
+      'X-CSRF-Token',
     ],
-    exposedHeaders: ['Content-Disposition'],
+    exposedHeaders: ['Content-Disposition', 'X-CSRF-Token'],
   });
   // Global Config
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
@@ -40,6 +43,7 @@ async function bootstrap() {
     .setDescription('The API documentation for the E-commerce platform')
     .setVersion('1.0')
     .addBearerAuth()
+    .addCookieAuth('sg_access_token')
     .build();
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);

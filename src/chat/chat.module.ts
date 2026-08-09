@@ -6,6 +6,7 @@ import { ChatGateway } from './chat/chat.gateway';
 import { ChatRoom, ChatRoomSchema } from './entities/chat-room.entity';
 import { ChatMessage, ChatMessageSchema } from './entities/chat-message.entity';
 import { UsersModule } from '../users/users.module';
+import { WsAuthModule } from '../auth/ws-auth.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { UsersModule } from '../users/users.module';
       { name: ChatMessage.name, schema: ChatMessageSchema },
     ]),
     forwardRef(() => UsersModule),
+    WsAuthModule,
   ],
   controllers: [ChatController],
   providers: [ChatService, ChatGateway],

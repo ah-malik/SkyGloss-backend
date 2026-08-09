@@ -2,7 +2,17 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PassportStrategy } from '@nestjs/passport';
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Request } from 'express';
 import { UsersService } from '../../users/users.service';
+import { ACCESS_TOKEN_COOKIE } from '../auth-cookies';
+
+function extractAccessToken(req: Request): string | null {
+  const fromCookie = (req as any)?.cookies?.[ACCESS_TOKEN_COOKIE];
+  if (typeof fromCookie === 'string' && fromCookie.length > 0) {
+    return fromCookie;
+  }
+  return ExtractJwt.fromAuthHeaderAsBearerToken()(req);
+}
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -11,7 +21,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     private usersService: UsersService,
   ) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest: extractAccessToken,
       ignoreExpiration: false,
       secretOrKey: configService.get<string>('JWT_SECRET') as string,
     });
@@ -20,6 +30,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   async validate(payload: any) {
     if (!payload.sub) {
       throw new UnauthorizedException();
+    }
+    // Reject refresh tokens if presented as access credentials
+    if (payload.typ === 'refresh') {
+      throw new UnauthorizedException('Invalid access token');
     }
     const user = await this.usersService.findOneForAuth(payload.sub);
     if (!user) {
