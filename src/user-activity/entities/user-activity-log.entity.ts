@@ -29,6 +29,10 @@ export class UserActivityLog {
   @Prop()
   portal?: string;
 
+  /** Denormalized user country for filtering (e.g. India). */
+  @Prop({ index: true })
+  country?: string;
+
   @Prop()
   ipAddress?: string;
 
@@ -45,3 +49,4 @@ export const UserActivityLogSchema =
 UserActivityLogSchema.index({ createdAt: -1 });
 UserActivityLogSchema.index({ action: 1, createdAt: -1 });
 UserActivityLogSchema.index({ user: 1, createdAt: -1 });
+UserActivityLogSchema.index({ country: 1, createdAt: -1 });

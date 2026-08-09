@@ -44,6 +44,7 @@ import { UserActivityAction } from '../user-activity/entities/user-activity-log.
 
 export interface AuthActivityContext {
   portal?: string;
+  country?: string;
   ipAddress?: string;
   userAgent?: string;
   browser?: string;
@@ -151,6 +152,7 @@ export class AuthService {
       userId,
       action: UserActivityAction.LOGIN,
       portal: activity?.portal,
+      country: user.country || activity?.country,
       ipAddress: activity?.ipAddress,
       userAgent: activity?.userAgent,
       browser: activity?.browser,
@@ -226,6 +228,7 @@ export class AuthService {
             userId: user._id.toString(),
             action: UserActivityAction.LOGIN_ACCESS_CODE,
             portal: activity?.portal || 'shop',
+            country: user.country || activity?.country,
             ipAddress: activity?.ipAddress,
             userAgent: activity?.userAgent,
             browser: activity?.browser,
@@ -272,10 +275,9 @@ export class AuthService {
       await this.accessCodesService.markAsUsed(code.code);
 
       const payload = { sub: user._id.toString(), role: user.role };
-      await this.userActivityService.log({
-        userId: user._id.toString(),
-        action: UserActivityAction.LOGIN_ACCESS_CODE,
+      const accessCodeActivity = {
         portal: activity?.portal || 'shop',
+        country: user.country || activity?.country || loginAccessCodeDto.country,
         ipAddress: activity?.ipAddress,
         userAgent: activity?.userAgent,
         browser: activity?.browser,
@@ -285,11 +287,26 @@ export class AuthService {
           method: 'access_code',
           role: user.role,
           email: user.email,
-          country: user.country,
+          country: user.country || loginAccessCodeDto.country,
           partnerCode: user.partnerCode,
           status: user.status,
           freshCode: true,
         },
+      };
+      await this.userActivityService.log({
+        userId: user._id.toString(),
+        action: UserActivityAction.REGISTER,
+        ...accessCodeActivity,
+        metadata: {
+          ...accessCodeActivity.metadata,
+          method: 'access_code_register',
+          registrationType: 'access_code',
+        },
+      });
+      await this.userActivityService.log({
+        userId: user._id.toString(),
+        action: UserActivityAction.LOGIN_ACCESS_CODE,
+        ...accessCodeActivity,
       });
       return {
         access_token: this.jwtService.sign(payload),
@@ -319,11 +336,38 @@ export class AuthService {
     }
   }
 
-  async register(createUserDto: CreateUserDto) {
-    return this.usersService.create(createUserDto);
+  async register(
+    createUserDto: CreateUserDto,
+    activity?: AuthActivityContext,
+  ) {
+    const user = await this.usersService.create(createUserDto);
+    await this.userActivityService.log({
+      userId: user._id.toString(),
+      action: UserActivityAction.REGISTER,
+      portal: activity?.portal || 'partner',
+      country: user.country || createUserDto.country || activity?.country,
+      ipAddress: activity?.ipAddress,
+      userAgent: activity?.userAgent,
+      browser: activity?.browser,
+      os: activity?.os,
+      device: activity?.device,
+      metadata: {
+        method: 'register',
+        registrationType: 'generic',
+        role: user.role,
+        email: user.email,
+        country: user.country || createUserDto.country,
+        partnerCode: user.partnerCode,
+        status: user.status,
+      },
+    });
+    return user;
   }
 
-  async registerPartner(createUserDto: CreateUserDto) {
+  async registerPartner(
+    createUserDto: CreateUserDto,
+    activity?: AuthActivityContext,
+  ) {
     // Generate a unique 6-digit partner code for self-registration
     let partnerCode = '';
     let isUnique = false;
@@ -343,6 +387,27 @@ export class AuthService {
     };
 
     const user = await this.usersService.create(partnerDto as CreateUserDto);
+
+    await this.userActivityService.log({
+      userId: user._id.toString(),
+      action: UserActivityAction.REGISTER,
+      portal: activity?.portal || 'partner',
+      country: user.country || createUserDto.country || activity?.country,
+      ipAddress: activity?.ipAddress,
+      userAgent: activity?.userAgent,
+      browser: activity?.browser,
+      os: activity?.os,
+      device: activity?.device,
+      metadata: {
+        method: 'register',
+        registrationType: 'partner',
+        role: user.role,
+        email: user.email,
+        country: user.country || createUserDto.country,
+        partnerCode: user.partnerCode,
+        status: user.status,
+      },
+    });
 
     // Send Emails asynchronously
     if (user.email) {
@@ -405,7 +470,10 @@ export class AuthService {
     return this.couponsService.validateForShopRegistration(code, subtotal);
   }
 
-  async registerShop(createUserDto: CreateUserDto) {
+  async registerShop(
+    createUserDto: CreateUserDto,
+    activity?: AuthActivityContext,
+  ) {
     let partnerId = createUserDto.referredByPartnerCode?.trim().toUpperCase() || '';
     let hearAboutSource = createUserDto.hearAboutUs?.trim() || '';
 
@@ -501,6 +569,29 @@ export class AuthService {
       console.log('[AuthService] Creating Shop user...');
       const user = await this.usersService.create(shopDto as CreateUserDto);
       console.log('[AuthService] Shop user created:', user._id);
+
+      await this.userActivityService.log({
+        userId: user._id.toString(),
+        action: UserActivityAction.REGISTER,
+        portal: activity?.portal || 'shop',
+        country: user.country || createUserDto.country || activity?.country,
+        ipAddress: activity?.ipAddress,
+        userAgent: activity?.userAgent,
+        browser: activity?.browser,
+        os: activity?.os,
+        device: activity?.device,
+        metadata: {
+          method: 'register',
+          registrationType: 'shop',
+          role: user.role,
+          email: user.email,
+          country: user.country || createUserDto.country,
+          partnerCode: user.partnerCode,
+          referredBy: partnerId,
+          status: user.status,
+          couponCode: appliedCouponCode,
+        },
+      });
 
       // Send Emails
       if (user.email) {
@@ -659,6 +750,7 @@ export class AuthService {
       action: UserActivityAction.IMPERSONATE,
       actorId: activity?.actorId,
       portal: activity?.portal || 'admin',
+      country: user.country || activity?.country,
       ipAddress: activity?.ipAddress,
       userAgent: activity?.userAgent,
       browser: activity?.browser,

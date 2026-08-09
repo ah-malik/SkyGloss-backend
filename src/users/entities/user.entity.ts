@@ -240,9 +240,13 @@ export class User {
   @Prop()
   partnerDevelopmentRatePercent?: number;
 
-  /** Shop Introduction % of order $ (default 10). */
+  /** Shop Introduction % of order $ (default 10). Admin may override per shop. */
   @Prop()
   shopIntroductionFirstOrderRatePercent?: number;
+
+  /** Operational Support % of order $ (default 10). Admin may override per shop. */
+  @Prop({ min: 0, max: 100 })
+  operationalSupportRatePercent?: number;
 
   /**
    * Legacy FO lock flag — no longer gates Partner Intro (paid every order).
@@ -306,9 +310,19 @@ export class User {
   @Prop({ unique: true, sparse: true })
   certificateNumber?: number;
 
-  /** Custom commission % for Representative / Promoter. Omit for role default. */
+  /**
+   * Shop Intro % override for Representative / Promoter (default 10).
+   * Omit / null → role default.
+   */
   @Prop({ min: 0, max: 100 })
   customCommissionRate?: number;
+
+  /**
+   * Partner Intro % paid to this user's Partner Intro on their shops (default 5).
+   * Omit / null → default 5%.
+   */
+  @Prop({ min: 0, max: 100 })
+  partnerIntroRatePercent?: number;
 }
 
 

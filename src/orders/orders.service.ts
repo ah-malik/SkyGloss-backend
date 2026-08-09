@@ -1925,13 +1925,20 @@ export class OrdersService implements OnModuleInit {
           }
         : null;
 
-    // Spec rates: Shop Intro 10%, Partner Intro 5%, OS 10% of order $.
-    // Use shop FO stamps (live Add-to-Network rates), with legacy 20% SI → 10%.
-    const foRates = this.resolveLockedFirstOrderRates(
+    // Defaults: Shop Intro 10%, Partner Intro 5%, OS 10%.
+    // Admin may override per shop (stamps) or per Shop Intro user (custom rates).
+    const foRates = this.resolveCommissionRatesForShop(
       shopUser,
-      shopIntroUserForMode?.role,
+      shopIntroUserForMode,
     );
-    const operationalSupportRatePercent = 10;
+    const operationalSupportRatePercent =
+      shopUser.operationalSupportRatePercent != null &&
+      !Number.isNaN(Number(shopUser.operationalSupportRatePercent))
+        ? Math.max(
+            0,
+            Math.min(100, Number(shopUser.operationalSupportRatePercent)),
+          )
+        : 10;
 
     let entries;
     if (useHierarchyCommission) {
@@ -2203,10 +2210,57 @@ export class OrdersService implements OnModuleInit {
   }
 
   /**
-   * Resolve Shop Intro / Partner Intro % for a new commission calculation.
-   * Legacy unlinked default was 20% SI — under the current 10/5 model that
-   * stamp must not inflate commissions (especially on later status updates).
+   * Resolve Shop Intro / Partner Intro % for a shop order.
+   * Priority: shop stamp → Shop Intro user custom → role defaults (10 / 5).
    */
+  private resolveCommissionRatesForShop(
+    shopUser: {
+      shopIntroductionFirstOrderRatePercent?: number;
+      partnerDevelopmentRatePercent?: number;
+    },
+    shopIntroUser?: {
+      role?: string;
+      customCommissionRate?: number | null;
+      partnerIntroRatePercent?: number | null;
+    } | null,
+  ): { shopIntroductionRate: number; partnerDevelopmentRate: number } {
+    const defaults = getDefaultFirstOrderCommissionRates(shopIntroUser?.role);
+
+    const userSi =
+      shopIntroUser != null
+        ? resolveCommissionRatePercent(
+            shopIntroUser.role || 'master_partner',
+            shopIntroUser.customCommissionRate,
+          )
+        : defaults.shopIntroductionRate;
+
+    const userPi =
+      shopIntroUser?.partnerIntroRatePercent != null &&
+      !Number.isNaN(Number(shopIntroUser.partnerIntroRatePercent))
+        ? Math.max(
+            0,
+            Math.min(100, Number(shopIntroUser.partnerIntroRatePercent)),
+          )
+        : defaults.partnerDevelopmentRate;
+
+    const shopSi = shopUser.shopIntroductionFirstOrderRatePercent;
+    const shopPi = shopUser.partnerDevelopmentRatePercent;
+
+    // Legacy unlinked SI default was 20% — treat as current default.
+    const shopIntroductionRate =
+      shopSi != null && !Number.isNaN(Number(shopSi)) && Number(shopSi) !== 20
+        ? Math.max(0, Math.min(100, Number(shopSi)))
+        : userSi;
+
+    const partnerDevelopmentRate =
+      shopPi != null && !Number.isNaN(Number(shopPi))
+        ? Math.max(0, Math.min(100, Number(shopPi)))
+        : userPi;
+
+    return { shopIntroductionRate, partnerDevelopmentRate };
+  }
+
+  /** @deprecated Alias — prefer resolveCommissionRatesForShop. */
   private resolveLockedFirstOrderRates(
     shopUser: {
       shopIntroductionFirstOrderRatePercent?: number;
@@ -2214,22 +2268,7 @@ export class OrdersService implements OnModuleInit {
     },
     role?: string,
   ): { shopIntroductionRate: number; partnerDevelopmentRate: number } {
-    const defaults = getDefaultFirstOrderCommissionRates(role);
-    const split = resolveFirstOrderPoolSplit({
-      shopIntroductionRate: shopUser.shopIntroductionFirstOrderRatePercent,
-      partnerDevelopmentRate: shopUser.partnerDevelopmentRatePercent,
-    });
-
-    // Legacy unlinked SI default was 20%. Current model is absolute 10% SI.
-    const shopIntroductionRate =
-      split.childKeepPercent === 20
-        ? defaults.shopIntroductionRate
-        : split.childKeepPercent;
-
-    return {
-      shopIntroductionRate,
-      partnerDevelopmentRate: split.parentPercent,
-    };
+    return this.resolveCommissionRatesForShop(shopUser, { role });
   }
 
   /**
@@ -2290,6 +2329,7 @@ export class OrdersService implements OnModuleInit {
       partnerDevelopmentCommissionPaid?: boolean;
       shopIntroductionFirstOrderRatePercent?: number;
       partnerDevelopmentRatePercent?: number;
+      operationalSupportRatePercent?: number;
     },
     monetary: { convertedUsdAmount: number },
   ): boolean {
@@ -2326,7 +2366,14 @@ export class OrdersService implements OnModuleInit {
       }
 
       if (entry.earningType === 'Operational Support') {
-        const osPct = 10;
+        const osPct =
+          shopUser.operationalSupportRatePercent != null &&
+          !Number.isNaN(Number(shopUser.operationalSupportRatePercent))
+            ? Math.max(
+                0,
+                Math.min(100, Number(shopUser.operationalSupportRatePercent)),
+              )
+            : 10;
         const osAmount = roundMoney(
           monetary.convertedUsdAmount * (osPct / 100),
         );

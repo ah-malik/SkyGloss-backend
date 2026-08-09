@@ -11,6 +11,11 @@ import { UserActivityService } from './user-activity.service';
 export class UserActivityController {
   constructor(private readonly userActivityService: UserActivityService) {}
 
+  @Get('countries')
+  listCountries() {
+    return this.userActivityService.listCountries();
+  }
+
   @Get()
   list(
     @Query('page') page?: string,
@@ -19,6 +24,7 @@ export class UserActivityController {
     @Query('action') action?: string,
     @Query('userId') userId?: string,
     @Query('portal') portal?: string,
+    @Query('country') country?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
   ) {
@@ -29,6 +35,7 @@ export class UserActivityController {
       action,
       userId,
       portal,
+      country,
       from,
       to,
     });

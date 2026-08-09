@@ -60,18 +60,33 @@ export class AuthController {
   }
 
   @Post('register')
-  async register(@Body() createUserDto: CreateUserDto) {
-    return this.authService.register(createUserDto);
+  async register(@Body() createUserDto: CreateUserDto, @Req() req: any) {
+    const meta = getRequestMeta(req);
+    return this.authService.register(createUserDto, {
+      portal: 'partner',
+      country: createUserDto.country,
+      ...meta,
+    });
   }
 
   @Post('register-partner')
-  async registerPartner(@Body() createUserDto: CreateUserDto) {
-    return this.authService.registerPartner(createUserDto);
+  async registerPartner(@Body() createUserDto: CreateUserDto, @Req() req: any) {
+    const meta = getRequestMeta(req);
+    return this.authService.registerPartner(createUserDto, {
+      portal: 'partner',
+      country: createUserDto.country,
+      ...meta,
+    });
   }
 
   @Post('register-shop')
-  async registerShop(@Body() createUserDto: CreateUserDto) {
-    return this.authService.registerShop(createUserDto);
+  async registerShop(@Body() createUserDto: CreateUserDto, @Req() req: any) {
+    const meta = getRequestMeta(req);
+    return this.authService.registerShop(createUserDto, {
+      portal: 'shop',
+      country: createUserDto.country,
+      ...meta,
+    });
   }
 
   @Post('validate-shop-registration-coupon')

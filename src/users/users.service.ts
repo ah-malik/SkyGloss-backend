@@ -30,6 +30,7 @@ import {
   normalizeFirstOrderCommissionRates,
   normalizePartnerDevelopmentRatePercent,
   normalizeShopIntroductionFirstOrderRatePercent,
+  resolveCommissionRatePercent,
   resolveShopCommissionChain,
   resolveShopEarningAssignments,
 } from '../common/commission-distribution';
@@ -287,11 +288,31 @@ export class UsersService implements OnModuleInit {
       password: hashedPassword,
       role: createUserDto.role,
     };
-    // Rates are fixed 10/5/10 — strip legacy FO + Partner Intro create helpers.
+    // Map legacy FO aliases → current rate fields, then strip helpers.
+    if (
+      userData.customCommissionRate == null &&
+      createUserDto.firstOrderShopIntroductionRate != null
+    ) {
+      userData.customCommissionRate =
+        createUserDto.firstOrderShopIntroductionRate;
+    }
+    if (
+      userData.partnerIntroRatePercent == null &&
+      createUserDto.firstOrderPartnerDevelopmentRate != null
+    ) {
+      userData.partnerIntroRatePercent =
+        createUserDto.firstOrderPartnerDevelopmentRate;
+    }
     delete userData.firstOrderShopIntroductionRate;
     delete userData.firstOrderPartnerDevelopmentRate;
     delete userData.partnerIntroCode;
     delete userData.operationalSupportRepresentativeCode;
+    // Shop-only rate fields are not set on create for non-shops.
+    if (userData.role !== UserRole.CERTIFIED_SHOP) {
+      delete userData.shopIntroductionFirstOrderRatePercent;
+      delete userData.partnerDevelopmentRatePercent;
+      delete userData.operationalSupportRatePercent;
+    }
 
     if (userData.role === UserRole.PARTNER) {
       delete userData.referredByPartnerCode;
@@ -339,6 +360,7 @@ export class UsersService implements OnModuleInit {
     }
 
     this.normalizeCustomCommissionRate(userData.role, userData);
+    this.normalizePartnerIntroRatePercent(userData.role, userData);
 
     // Auto-geocode if coordinates are missing
     if (!userData.latitude || !userData.longitude) {
@@ -928,6 +950,20 @@ export class UsersService implements OnModuleInit {
       }
     }
 
+    // Prefer Admin overrides on the Shop Intro user; else role defaults.
+    const siRate =
+      shopIntroUser != null
+        ? resolveCommissionRatePercent(
+            shopIntroUser.role,
+            shopIntroUser.customCommissionRate,
+          )
+        : defaults.shopIntroductionRate;
+    const piRate =
+      shopIntroUser?.partnerIntroRatePercent != null &&
+      !Number.isNaN(Number(shopIntroUser.partnerIntroRatePercent))
+        ? Math.max(0, Math.min(100, Number(shopIntroUser.partnerIntroRatePercent)))
+        : defaults.partnerDevelopmentRate;
+
     if (
       pdCode &&
       pdCode !== normalizePartnerCode(shopIntroCode) &&
@@ -936,26 +972,23 @@ export class UsersService implements OnModuleInit {
       updatePayload.partnerDevelopmentRepresentativeCode = pdCode;
       if (pdId) updatePayload.partnerDevelopmentRepresentativeId = pdId;
       updatePayload.partnerDevelopmentEligible = true;
-      updatePayload.partnerDevelopmentRatePercent =
-        defaults.partnerDevelopmentRate;
-      updatePayload.shopIntroductionFirstOrderRatePercent =
-        defaults.shopIntroductionRate;
+      if (shop.partnerDevelopmentRatePercent == null) {
+        updatePayload.partnerDevelopmentRatePercent = piRate;
+      }
+      if (shop.shopIntroductionFirstOrderRatePercent == null) {
+        updatePayload.shopIntroductionFirstOrderRatePercent = siRate;
+      }
     } else if (
       shop.partnerDevelopmentRepresentativeCode &&
       shop.partnerDevelopmentEligible !== true
     ) {
       updatePayload.partnerDevelopmentEligible = true;
       updatePayload.partnerDevelopmentRatePercent =
-        shop.partnerDevelopmentRatePercent ?? defaults.partnerDevelopmentRate;
+        shop.partnerDevelopmentRatePercent ?? piRate;
       updatePayload.shopIntroductionFirstOrderRatePercent =
-        shop.shopIntroductionFirstOrderRatePercent ??
-        defaults.shopIntroductionRate;
-    } else if (
-      !pdCode &&
-      !shop.shopIntroductionFirstOrderRatePercent
-    ) {
-      updatePayload.shopIntroductionFirstOrderRatePercent =
-        defaults.shopIntroductionRate;
+        shop.shopIntroductionFirstOrderRatePercent ?? siRate;
+    } else if (!shop.shopIntroductionFirstOrderRatePercent) {
+      updatePayload.shopIntroductionFirstOrderRatePercent = siRate;
     }
 
     // Operational Support stays Unassigned unless Admin already set it.
@@ -1274,9 +1307,18 @@ export class UsersService implements OnModuleInit {
       return shop;
     }
 
-    const rates = getDefaultFirstOrderCommissionRates(
+    const defaultRates = getDefaultFirstOrderCommissionRates(
       UserRole.REGIONAL_PARTNER,
     );
+    const siRate = resolveCommissionRatePercent(
+      childPromoter.role,
+      childPromoter.customCommissionRate,
+    );
+    const piRate =
+      childPromoter.partnerIntroRatePercent != null &&
+      !Number.isNaN(Number(childPromoter.partnerIntroRatePercent))
+        ? Math.max(0, Math.min(100, Number(childPromoter.partnerIntroRatePercent)))
+        : defaultRates.partnerDevelopmentRate;
 
     // Partner Intro: Promoter's Partner Intro (Promoter or REP), else operational parent Promoter.
     let partnerIntroCode =
@@ -1319,9 +1361,12 @@ export class UsersService implements OnModuleInit {
       shopIntroductionRepresentativeId: childPromoter._id,
       shopIntroductionPromoterCode: childCode,
       shopIntroductionPromoterId: childPromoter._id,
-      shopIntroductionFirstOrderRatePercent: rates.shopIntroductionRate,
-      shopIntroductionPromoterFirstOrderRatePercent: rates.shopIntroductionRate,
+      shopIntroductionPromoterFirstOrderRatePercent: siRate,
     };
+    // Do not overwrite Admin shop-level rate overrides.
+    if (shop.shopIntroductionFirstOrderRatePercent == null) {
+      updatePayload.shopIntroductionFirstOrderRatePercent = siRate;
+    }
 
     if (
       partnerIntro &&
@@ -1331,10 +1376,11 @@ export class UsersService implements OnModuleInit {
       updatePayload.partnerDevelopmentRepresentativeCode = partnerIntroCode;
       updatePayload.partnerDevelopmentRepresentativeId = partnerIntro._id;
       updatePayload.partnerDevelopmentEligible = true;
-      updatePayload.partnerDevelopmentRatePercent = rates.partnerDevelopmentRate;
       updatePayload.partnerDevelopmentPromoterEligible = true;
-      updatePayload.partnerDevelopmentPromoterRatePercent =
-        rates.partnerDevelopmentRate;
+      updatePayload.partnerDevelopmentPromoterRatePercent = piRate;
+      if (shop.partnerDevelopmentRatePercent == null) {
+        updatePayload.partnerDevelopmentRatePercent = piRate;
+      }
       if (partnerIntro.role === UserRole.REGIONAL_PARTNER) {
         updatePayload.partnerDevelopmentPromoterCode = partnerIntroCode;
         updatePayload.partnerDevelopmentPromoterId = partnerIntro._id;
@@ -2227,6 +2273,38 @@ export class UsersService implements OnModuleInit {
       }
     }
 
+    if (updatePayload.partnerIntroRatePercent !== undefined) {
+      if (currentUser.role !== UserRole.ADMIN) {
+        delete updatePayload.partnerIntroRatePercent;
+      } else {
+        this.normalizePartnerIntroRatePercent(roleAfterUpdate, updatePayload);
+      }
+    }
+
+    // Shop-only commission rate overrides (Admin).
+    if (targetUserForHierarchy.role !== UserRole.CERTIFIED_SHOP) {
+      delete updatePayload.shopIntroductionFirstOrderRatePercent;
+      delete updatePayload.partnerDevelopmentRatePercent;
+      delete updatePayload.operationalSupportRatePercent;
+    } else if (currentUser.role === UserRole.ADMIN) {
+      this.normalizeShopCommissionRateField(
+        updatePayload,
+        'shopIntroductionFirstOrderRatePercent',
+      );
+      this.normalizeShopCommissionRateField(
+        updatePayload,
+        'partnerDevelopmentRatePercent',
+      );
+      this.normalizeShopCommissionRateField(
+        updatePayload,
+        'operationalSupportRatePercent',
+      );
+    } else {
+      delete updatePayload.shopIntroductionFirstOrderRatePercent;
+      delete updatePayload.partnerDevelopmentRatePercent;
+      delete updatePayload.operationalSupportRatePercent;
+    }
+
     if (
       updatePayload.role !== undefined &&
       updatePayload.role !== targetUserForHierarchy.role &&
@@ -2345,6 +2423,7 @@ export class UsersService implements OnModuleInit {
         action,
         actorId: currentUser._id?.toString(),
         portal: currentUser.role === UserRole.ADMIN ? 'admin' : 'partner',
+        country: updatedUser.country,
         metadata: {
           method: 'status_update',
           previousStatus,
@@ -4124,10 +4203,53 @@ export class UsersService implements OnModuleInit {
     const rate = Number(payload.customCommissionRate);
     if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
       throw new BadRequestException(
-        'Commission rate must be a number between 0 and 100',
+        'Shop Intro rate must be a number between 0 and 100',
       );
     }
     payload.customCommissionRate = rate;
+  }
+
+  private normalizePartnerIntroRatePercent(
+    role: UserRole,
+    payload: { partnerIntroRatePercent?: number | null },
+  ): void {
+    if (payload.partnerIntroRatePercent === undefined) return;
+
+    if (!isCommissionEligibleRole(role)) {
+      payload.partnerIntroRatePercent = null;
+      return;
+    }
+
+    if (payload.partnerIntroRatePercent === null) return;
+
+    const rate = Number(payload.partnerIntroRatePercent);
+    if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+      throw new BadRequestException(
+        'Partner Intro rate must be a number between 0 and 100',
+      );
+    }
+    payload.partnerIntroRatePercent = rate;
+  }
+
+  private normalizeShopCommissionRateField(
+    payload: Record<string, unknown>,
+    field:
+      | 'shopIntroductionFirstOrderRatePercent'
+      | 'partnerDevelopmentRatePercent'
+      | 'operationalSupportRatePercent',
+  ): void {
+    if (payload[field] === undefined) return;
+    if (payload[field] === null || payload[field] === '') {
+      payload[field] = null;
+      return;
+    }
+    const rate = Number(payload[field]);
+    if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+      throw new BadRequestException(
+        'Commission rate must be a number between 0 and 100',
+      );
+    }
+    payload[field] = rate;
   }
 
   /** Walk parent links upward and return true if partnerCode appears in viewer's upline. */

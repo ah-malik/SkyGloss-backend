@@ -172,15 +172,23 @@ export class CreateUserDto {
   @IsOptional()
   preferredLanguage?: string;
 
-  /** Commission % override for Representative or Promoter. */
+  /** Shop Intro % override for Representative or Promoter (default 10). */
   @IsNumber()
   @Min(0)
   @Max(100)
   @IsOptional()
   customCommissionRate?: number | null;
 
+  /** Partner Intro % for this user's Partner Intro (default 5). */
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  @IsOptional()
+  partnerIntroRatePercent?: number | null;
+
   /**
-   * @deprecated Legacy FO rate fields — ignored. Rates are fixed 10% / 5% / 10%.
+   * Legacy FO rate field aliases (still accepted).
+   * Prefer customCommissionRate / partnerIntroRatePercent.
    */
   @IsNumber()
   @Min(0)
@@ -211,4 +219,25 @@ export class CreateUserDto {
   @IsString()
   @IsOptional()
   operationalSupportRepresentativeCode?: string | null;
+
+  /** Per-shop Shop Intro % override (default 10). */
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  @IsOptional()
+  shopIntroductionFirstOrderRatePercent?: number | null;
+
+  /** Per-shop Partner Intro % override (default 5). */
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  @IsOptional()
+  partnerDevelopmentRatePercent?: number | null;
+
+  /** Per-shop Operational Support % override (default 10). */
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  @IsOptional()
+  operationalSupportRatePercent?: number | null;
 }

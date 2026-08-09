@@ -36,6 +36,9 @@ import { Request } from 'express';
 import { ForbiddenException } from '@nestjs/common';
 import { MailService } from 'src/mail/mail.service';
 import { GLOBAL_HUB_PARTNER_CODE, isGlobalHubAccount, isGlobalHubPartnerCode } from '../common/global-hub';
+import { UserActivityService } from '../user-activity/user-activity.service';
+import { UserActivityAction } from '../user-activity/entities/user-activity-log.entity';
+import { getRequestMeta } from '../user-activity/request-meta';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -47,12 +50,38 @@ export class UsersController {
     private readonly notificationsGateway: NotificationsGateway,
     private readonly chatService: ChatService,
     private readonly mailService: MailService,
+    private readonly userActivityService: UserActivityService,
   ) { }
 
   @Post()
   @Roles(UserRole.ADMIN)
-  create(@Body() createUserDto: CreateUserDto) {
-    return this.usersService.create(createUserDto);
+  async create(
+    @Body() createUserDto: CreateUserDto,
+    @Req() req: Request,
+    @GetUser() admin: UserDocument,
+  ) {
+    const user = await this.usersService.create(createUserDto);
+    const meta = getRequestMeta(req);
+    await this.userActivityService.log({
+      userId: (user as any)._id.toString(),
+      action: UserActivityAction.REGISTER,
+      actorId: admin?._id?.toString(),
+      portal: 'admin',
+      country: (user as any).country || createUserDto.country,
+      ...meta,
+      metadata: {
+        method: 'admin_create',
+        registrationType: 'admin',
+        role: (user as any).role,
+        email: (user as any).email,
+        country: (user as any).country || createUserDto.country,
+        partnerCode: (user as any).partnerCode,
+        status: (user as any).status,
+        actorEmail: admin?.email,
+        actorRole: admin?.role,
+      },
+    });
+    return user;
   }
 
   @Get('stats')

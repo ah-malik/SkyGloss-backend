@@ -396,6 +396,13 @@ export const ADMIN_APIS: ApiEndpointDef[] = [
     '/admin/user-activity',
     'List user login and action activity logs',
   ),
+  def(
+    'admin',
+    'User Activity',
+    'GET',
+    '/admin/user-activity/countries',
+    'List countries available for activity filter',
+  ),
 
   // Withdrawals
   def('admin', 'Withdrawals', 'GET', '/withdrawals/admin/pending', 'Pending withdrawals'),
