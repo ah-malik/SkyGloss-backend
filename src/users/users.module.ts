@@ -18,7 +18,7 @@ import { ProductGroup, ProductGroupSchema } from '../product-groups/entities/pro
       { name: ProductGroup.name, schema: ProductGroupSchema }
     ]),
     CloudinaryModule,
-    NotificationsModule,
+    forwardRef(() => NotificationsModule),
     forwardRef(() => ChatModule),
     MailModule,
   ],

@@ -15,7 +15,7 @@ import { WsAuthModule } from '../auth/ws-auth.module';
       { name: ChatMessage.name, schema: ChatMessageSchema },
     ]),
     forwardRef(() => UsersModule),
-    WsAuthModule,
+    forwardRef(() => WsAuthModule),
   ],
   controllers: [ChatController],
   providers: [ChatService, ChatGateway],

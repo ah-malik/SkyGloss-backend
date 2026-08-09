@@ -1,4 +1,4 @@
-import { Module, Global } from '@nestjs/common';
+import { Module, Global, forwardRef } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { NotificationsService } from './notifications.service';
 import { NotificationsGateway } from './notifications.gateway';
@@ -15,7 +15,7 @@ import { WsAuthModule } from '../auth/ws-auth.module';
     MongooseModule.forFeature([
       { name: Notification.name, schema: NotificationSchema },
     ]),
-    WsAuthModule,
+    forwardRef(() => WsAuthModule),
   ],
   controllers: [NotificationsController],
   providers: [NotificationsService, NotificationsGateway],

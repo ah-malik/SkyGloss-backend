@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { UsersModule } from '../users/users.module';
@@ -7,10 +7,13 @@ import { WsAuthService } from './ws-auth.service';
 /**
  * Lightweight JWT helper for Socket.IO gateways.
  * Kept separate from AuthModule to avoid circular imports with NotificationsModule.
+ *
+ * UsersModule is wrapped in forwardRef because of:
+ * UsersModule -> NotificationsModule -> WsAuthModule -> UsersModule
  */
 @Module({
   imports: [
-    UsersModule,
+    forwardRef(() => UsersModule),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
