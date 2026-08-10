@@ -1,9 +1,10 @@
 import { Injectable, NestMiddleware } from '@nestjs/common';
 import { Request, Response, NextFunction } from 'express';
 import {
-  ACCESS_TOKEN_COOKIE,
-  CSRF_TOKEN_COOKIE,
-  REFRESH_TOKEN_COOKIE,
+  readAccessTokenFromCookies,
+  readCsrfTokenFromCookies,
+  readRefreshTokenFromCookies,
+  resolveAuthCookieScope,
 } from './auth-cookies';
 
 /**
@@ -26,9 +27,11 @@ export class CsrfMiddleware implements NestMiddleware {
       return next();
     }
 
+    const scope = resolveAuthCookieScope(req);
     const cookies = (req as any).cookies || {};
     const hasAuthCookie = !!(
-      cookies[ACCESS_TOKEN_COOKIE] || cookies[REFRESH_TOKEN_COOKIE]
+      readAccessTokenFromCookies(cookies, scope) ||
+      readRefreshTokenFromCookies(cookies, scope)
     );
     if (!hasAuthCookie) {
       return next();
@@ -40,7 +43,7 @@ export class CsrfMiddleware implements NestMiddleware {
       return next();
     }
 
-    const csrfCookie = cookies[CSRF_TOKEN_COOKIE];
+    const csrfCookie = readCsrfTokenFromCookies(cookies, scope);
     const csrfHeader = req.headers['x-csrf-token'];
     if (
       !csrfCookie ||

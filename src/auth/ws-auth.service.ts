@@ -4,7 +4,11 @@ import { ConfigService } from '@nestjs/config';
 import { Socket } from 'socket.io';
 import { UsersService } from '../users/users.service';
 import { UserDocument, UserRole } from '../users/entities/user.entity';
-import { ACCESS_TOKEN_COOKIE } from './auth-cookies';
+import {
+  AuthCookieScope,
+  readAccessTokenFromCookies,
+  resolveCookieNames,
+} from './auth-cookies';
 import { isPartnerNetworkRole } from '../common/role-labels';
 
 export type WsAuthedUser = {
@@ -43,7 +47,8 @@ export class WsAuthService {
   }
 
   extractToken(client: Socket): string | null {
-    const authToken = (client.handshake.auth as any)?.token;
+    const auth = (client.handshake.auth as any) || {};
+    const authToken = auth?.token;
     if (typeof authToken === 'string' && authToken.trim()) {
       return authToken.trim();
     }
@@ -54,8 +59,17 @@ export class WsAuthService {
     }
 
     const cookies = this.parseCookies(client.handshake.headers?.cookie);
-    const fromCookie = cookies[ACCESS_TOKEN_COOKIE];
-    if (fromCookie) return fromCookie;
+    const clientApp = String(auth?.clientApp || '').toLowerCase();
+    const preferredScope: AuthCookieScope =
+      clientApp === 'admin' ? 'admin' : 'portal';
+    const preferred = readAccessTokenFromCookies(cookies, preferredScope);
+    if (preferred) return preferred;
+
+    // Fallback: other scoped cookie, then legacy (migration).
+    const otherScope: AuthCookieScope =
+      preferredScope === 'admin' ? 'portal' : 'admin';
+    const other = cookies[resolveCookieNames(otherScope).access];
+    if (typeof other === 'string' && other.length > 0) return other;
 
     const queryToken = client.handshake.query?.token;
     if (typeof queryToken === 'string' && queryToken.trim()) {

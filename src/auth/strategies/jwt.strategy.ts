@@ -4,13 +4,18 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
 import { UsersService } from '../../users/users.service';
-import { ACCESS_TOKEN_COOKIE } from '../auth-cookies';
+import {
+  readAccessTokenFromCookies,
+  resolveAuthCookieScope,
+} from '../auth-cookies';
 
 function extractAccessToken(req: Request): string | null {
-  const fromCookie = (req as any)?.cookies?.[ACCESS_TOKEN_COOKIE];
-  if (typeof fromCookie === 'string' && fromCookie.length > 0) {
-    return fromCookie;
-  }
+  const scope = resolveAuthCookieScope(req);
+  const fromCookie = readAccessTokenFromCookies(
+    (req as any)?.cookies,
+    scope,
+  );
+  if (fromCookie) return fromCookie;
   return ExtractJwt.fromAuthHeaderAsBearerToken()(req);
 }
 

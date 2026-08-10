@@ -29,10 +29,12 @@ import { UserRole } from '../users/entities/user.entity';
 import { getRequestMeta } from '../user-activity/request-meta';
 import * as crypto from 'crypto';
 import {
+  AuthCookieScope,
   clearAuthCookies,
-  CSRF_TOKEN_COOKIE,
   parseDurationToMs,
-  REFRESH_TOKEN_COOKIE,
+  readCsrfTokenFromCookies,
+  readRefreshTokenFromCookies,
+  resolveAuthCookieScope,
   setAuthCookies,
   setCsrfCookie,
 } from './auth-cookies';
@@ -41,14 +43,26 @@ import {
 export class AuthController {
   constructor(private readonly authService: AuthService) { }
 
-  private attachAuthCookies(res: Response, issued: IssuedAuthTokens) {
-    setAuthCookies(res, {
-      accessToken: issued.access_token,
-      refreshToken: issued.refresh_token,
-      csrfToken: issued.csrf_token,
-      accessMaxAgeMs: issued.accessMaxAgeMs,
-      refreshMaxAgeMs: issued.refreshMaxAgeMs,
-    });
+  private cookieScope(req: any): AuthCookieScope {
+    return resolveAuthCookieScope(req);
+  }
+
+  private attachAuthCookies(
+    res: Response,
+    issued: IssuedAuthTokens,
+    scope: AuthCookieScope,
+  ) {
+    setAuthCookies(
+      res,
+      {
+        accessToken: issued.access_token,
+        refreshToken: issued.refresh_token,
+        csrfToken: issued.csrf_token,
+        accessMaxAgeMs: issued.accessMaxAgeMs,
+        refreshMaxAgeMs: issued.refreshMaxAgeMs,
+      },
+      scope,
+    );
   }
 
   /**
@@ -72,6 +86,7 @@ export class AuthController {
     @Req() req: any,
     @Res({ passthrough: true }) res: Response,
   ) {
+    const scope = this.cookieScope(req);
     const user = await this.authService.validateUser(
       loginDto.email,
       loginDto.password,
@@ -91,7 +106,9 @@ export class AuthController {
     }
 
     const issued = result as IssuedAuthTokens;
-    this.attachAuthCookies(res, issued);
+    // Replace this portal's session only — do not touch the other portal's cookies.
+    clearAuthCookies(res, scope);
+    this.attachAuthCookies(res, issued, scope);
     return this.toClientAuthResponse(issued);
   }
 
@@ -102,6 +119,7 @@ export class AuthController {
     @Req() req: any,
     @Res({ passthrough: true }) res: Response,
   ) {
+    const scope = this.cookieScope(req);
     const meta = getRequestMeta(req);
     const result = await this.authService.loginWithAccessCode(
       loginAccessCodeDto,
@@ -116,7 +134,8 @@ export class AuthController {
     }
 
     const issued = result as IssuedAuthTokens;
-    this.attachAuthCookies(res, issued);
+    clearAuthCookies(res, scope);
+    this.attachAuthCookies(res, issued, scope);
     return this.toClientAuthResponse(issued);
   }
 
@@ -161,19 +180,20 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @Get('profile')
   getProfile(@Request() req, @Res({ passthrough: true }) res: Response) {
+    const scope = this.cookieScope(req);
     // Sync CSRF to SPA via exposed header (cross-origin cookies are not JS-readable).
     // Reuse existing cookie when present so other open tabs are not invalidated.
-    const existing = req.cookies?.[CSRF_TOKEN_COOKIE];
+    const existing = readCsrfTokenFromCookies(req.cookies, scope);
     const refreshMaxAgeMs = parseDurationToMs(
       process.env.JWT_REFRESH_EXPIRATION || '7d',
       7 * 86_400_000,
     );
     if (existing) {
       // Re-attach cookie + header so SPA can recover after localStorage/private-mode drift.
-      setCsrfCookie(res, existing, refreshMaxAgeMs);
+      setCsrfCookie(res, existing, refreshMaxAgeMs, scope);
     } else {
       const csrfToken = crypto.randomBytes(32).toString('hex');
-      setCsrfCookie(res, csrfToken, refreshMaxAgeMs);
+      setCsrfCookie(res, csrfToken, refreshMaxAgeMs, scope);
     }
     return req.user;
   }
@@ -232,10 +252,13 @@ export class AuthController {
     @Body('impersonation') impersonation: boolean | undefined,
     @Res({ passthrough: true }) res: Response,
   ) {
+    const scope = this.cookieScope(req);
     const issued = await this.authService.issueAuthTokens(req.user, {
       rotateRefresh: !impersonation,
     });
-    this.attachAuthCookies(res, issued);
+    // Portal-scoped cookies: admin refresh stays in sg_admin_* and cannot
+    // resurrect an admin identity on the shop/partner portal after access expiry.
+    this.attachAuthCookies(res, issued, scope);
     return this.toClientAuthResponse(issued);
   }
 
@@ -245,18 +268,19 @@ export class AuthController {
     @Req() req: any,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const refreshToken = req.cookies?.[REFRESH_TOKEN_COOKIE];
+    const scope = this.cookieScope(req);
+    const refreshToken = readRefreshTokenFromCookies(req.cookies, scope);
     if (!refreshToken) {
-      clearAuthCookies(res);
+      clearAuthCookies(res, scope);
       throw new UnauthorizedException('Refresh token missing');
     }
 
     try {
       const issued = await this.authService.refreshAuthTokens(refreshToken);
-      this.attachAuthCookies(res, issued);
+      this.attachAuthCookies(res, issued, scope);
       return this.toClientAuthResponse(issued);
     } catch (err) {
-      clearAuthCookies(res);
+      clearAuthCookies(res, scope);
       throw err;
     }
   }
@@ -268,23 +292,30 @@ export class AuthController {
     @Req() req: any,
     @Res({ passthrough: true }) res: Response,
   ) {
+    const scope = this.cookieScope(req);
     let userId: string | undefined =
       req.user?._id?.toString?.() ||
       req.user?.id ||
       undefined;
 
     if (!userId) {
-      const refreshToken = req.cookies?.[REFRESH_TOKEN_COOKIE];
+      const refreshToken = readRefreshTokenFromCookies(req.cookies, scope);
       if (refreshToken) {
         userId = this.authService.peekRefreshUserId(refreshToken) || undefined;
       }
     }
 
-    if (userId) {
-      await this.authService.revokeRefreshToken(userId);
+    // Only revoke when this portal held a refresh session for that user.
+    // Avoid killing the other portal's session for a different account.
+    const scopedRefresh = readRefreshTokenFromCookies(req.cookies, scope);
+    if (userId && scopedRefresh) {
+      const refreshUserId = this.authService.peekRefreshUserId(scopedRefresh);
+      if (refreshUserId && refreshUserId === userId) {
+        await this.authService.revokeRefreshToken(userId);
+      }
     }
 
-    clearAuthCookies(res);
+    clearAuthCookies(res, scope);
     return { message: 'Logged out successfully' };
   }
 }

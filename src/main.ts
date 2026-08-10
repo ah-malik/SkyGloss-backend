@@ -43,7 +43,8 @@ async function bootstrap() {
     .setDescription('The API documentation for the E-commerce platform')
     .setVersion('1.0')
     .addBearerAuth()
-    .addCookieAuth('sg_access_token')
+    .addCookieAuth('sg_portal_access_token')
+    .addCookieAuth('sg_admin_access_token')
     .build();
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);
