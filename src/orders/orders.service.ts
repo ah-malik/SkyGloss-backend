@@ -2211,7 +2211,10 @@ export class OrdersService implements OnModuleInit {
 
   /**
    * Resolve Shop Intro / Partner Intro % for a shop order.
-   * Priority: shop stamp → Shop Intro user custom → role defaults (10 / 5).
+   *
+   * Shop Intro: shop stamp → Shop Intro user customCommissionRate → default 10%
+   * Partner Intro: Shop Intro user partnerIntroRatePercent → default 5%
+   *   (never use Shop Intro % for Partner Intro — that caused 10% PI bugs)
    */
   private resolveCommissionRatesForShop(
     shopUser: {
@@ -2234,7 +2237,10 @@ export class OrdersService implements OnModuleInit {
           )
         : defaults.shopIntroductionRate;
 
-    const userPi =
+    // Partner Intro rate ONLY from Shop Intro user's partnerIntroRatePercent (or 5%).
+    // Do not use shop.partnerDevelopmentRatePercent stamps that may have been
+    // wrongly copied from Shop Intro 10%.
+    const partnerDevelopmentRate =
       shopIntroUser?.partnerIntroRatePercent != null &&
       !Number.isNaN(Number(shopIntroUser.partnerIntroRatePercent))
         ? Math.max(
@@ -2244,18 +2250,12 @@ export class OrdersService implements OnModuleInit {
         : defaults.partnerDevelopmentRate;
 
     const shopSi = shopUser.shopIntroductionFirstOrderRatePercent;
-    const shopPi = shopUser.partnerDevelopmentRatePercent;
 
     // Legacy unlinked SI default was 20% — treat as current default.
     const shopIntroductionRate =
       shopSi != null && !Number.isNaN(Number(shopSi)) && Number(shopSi) !== 20
         ? Math.max(0, Math.min(100, Number(shopSi)))
         : userSi;
-
-    const partnerDevelopmentRate =
-      shopPi != null && !Number.isNaN(Number(shopPi))
-        ? Math.max(0, Math.min(100, Number(shopPi)))
-        : userPi;
 
     return { shopIntroductionRate, partnerDevelopmentRate };
   }

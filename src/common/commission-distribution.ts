@@ -272,10 +272,13 @@ export interface CommissionOrderAmounts {
   convertedUsdAmount: number;
 }
 
-/** Order total in original currency + locked FX rate for USD credit. */
+/** Order total in original currency + locked FX rate for USD credit.
+ *  Commission base excludes shipping fees.
+ */
 export function resolveCommissionOrderAmounts(order: {
   totalAmount?: number;
   originalAmount?: number;
+  shippingFee?: number;
   originalCurrency?: string;
   currency?: string;
   exchangeRateAtOrderTime?: number;
@@ -286,7 +289,10 @@ export function resolveCommissionOrderAmounts(order: {
     order.currency ||
     SYSTEM_BASE_CURRENCY
   ).toUpperCase();
-  const orderAmount = roundMoney(order.originalAmount ?? order.totalAmount ?? 0);
+  const grossAmount = roundMoney(order.originalAmount ?? order.totalAmount ?? 0);
+  const shippingFee = roundMoney(Math.max(0, Number(order.shippingFee) || 0));
+  // Commission is on product/subtotal only — never on shipping.
+  const orderAmount = roundMoney(Math.max(0, grossAmount - shippingFee));
 
   if (orderCurrency === SYSTEM_BASE_CURRENCY) {
     return {
@@ -312,17 +318,17 @@ export function resolveCommissionOrderAmounts(order: {
 
   if (
     typeof order.baseCurrencyAmount === 'number' &&
-    orderAmount > 0 &&
+    grossAmount > 0 &&
     order.baseCurrencyAmount > 0
   ) {
     const exchangeRateToUsd = roundExchangeRate(
-      order.baseCurrencyAmount / orderAmount,
+      order.baseCurrencyAmount / grossAmount,
     );
     return {
       orderAmount,
       orderCurrency,
       exchangeRateToUsd,
-      convertedUsdAmount: roundMoney(order.baseCurrencyAmount),
+      convertedUsdAmount: roundMoney(orderAmount * exchangeRateToUsd),
     };
   }
 

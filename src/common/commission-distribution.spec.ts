@@ -40,6 +40,31 @@ describe('resolveCommissionOrderAmounts', () => {
       convertedUsdAmount: 100,
     });
   });
+
+  it('excludes shipping fee from commission base', () => {
+    const result = resolveCommissionOrderAmounts({
+      totalAmount: 120,
+      shippingFee: 20,
+      currency: 'USD',
+    });
+    expect(result).toEqual({
+      orderAmount: 100,
+      orderCurrency: 'USD',
+      exchangeRateToUsd: 1,
+      convertedUsdAmount: 100,
+    });
+  });
+
+  it('excludes shipping from non-USD commission base using FX', () => {
+    const result = resolveCommissionOrderAmounts({
+      originalAmount: 120,
+      shippingFee: 20,
+      originalCurrency: 'EUR',
+      exchangeRateAtOrderTime: 1.1,
+    });
+    expect(result.orderAmount).toBe(100);
+    expect(result.convertedUsdAmount).toBe(110);
+  });
 });
 
 describe('calculateRepresentativeCommissionEntries (10/5/10 of order $)', () => {
