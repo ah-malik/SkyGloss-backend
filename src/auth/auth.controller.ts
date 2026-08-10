@@ -169,7 +169,8 @@ export class AuthController {
       7 * 86_400_000,
     );
     if (existing) {
-      res.setHeader('X-CSRF-Token', existing);
+      // Re-attach cookie + header so SPA can recover after localStorage/private-mode drift.
+      setCsrfCookie(res, existing, refreshMaxAgeMs);
     } else {
       const csrfToken = crypto.randomBytes(32).toString('hex');
       setCsrfCookie(res, csrfToken, refreshMaxAgeMs);
