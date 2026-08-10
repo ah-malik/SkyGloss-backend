@@ -8,6 +8,7 @@ import {
   MinLength,
   MaxLength,
   IsBoolean,
+  IsArray,
   Min,
   Max,
 } from 'class-validator';
@@ -50,6 +51,12 @@ export class CreateUserDto {
   @IsString()
   @IsNotEmpty()
   country: string;
+
+  /** Hub territory countries (unique across Hubs). Required when creating a Hub. */
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  countries?: string[];
 
   @IsString()
   @IsOptional()

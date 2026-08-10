@@ -602,12 +602,15 @@ export class AuthService {
       createUserDto.hearAboutUs = hearAboutSource;
     }
 
+    const userEnteredPartnerId = !!partnerId;
+
     if (!partnerId) {
       if (!hearAboutSource) {
         throw new BadRequestException(
           `Please enter a valid ${NETWORK_REFERENCE_ID_LABEL} or select where you heard about us.`,
         );
       }
+      // Unassigned path: stamp GLOBALHUB as referrer (not a valid entered Partner ID).
       partnerId = GLOBAL_HUB_PARTNER_CODE;
     } else if (!PARTNER_CODE_REGEX.test(partnerId)) {
       throw new BadRequestException(
@@ -615,24 +618,50 @@ export class AuthService {
       );
     }
 
-    const partner = await (this.usersService as any).userModel.findOne({
-      partnerCode: partnerId,
-      role: {
-        $in: [
-          UserRole.MASTER_PARTNER,
-          UserRole.REGIONAL_PARTNER,
-          // UserRole.SUB_PROMOTER, // removed — migrated to Promoter
-          UserRole.DISTRIBUTOR,
-          UserRole.PARTNER,
-        ],
-      },
-      status: 'active',
-    });
+    let partner: any;
+    if (userEnteredPartnerId) {
+      // Entered Partner ID must be Representative or Promoter only (reject Hub/Distributor).
+      const candidate = await (this.usersService as any).userModel.findOne({
+        partnerCode: partnerId,
+        status: 'active',
+      });
 
-    if (!partner) {
-      throw new BadRequestException(
-        `Invalid ${NETWORK_REFERENCE_ID_LABEL}. Please check and try again.`,
-      );
+      if (!candidate) {
+        throw new BadRequestException(
+          `Invalid ${NETWORK_REFERENCE_ID_LABEL}. Please check and try again.`,
+        );
+      }
+
+      if (
+        candidate.role === UserRole.PARTNER ||
+        candidate.role === UserRole.DISTRIBUTOR
+      ) {
+        throw new BadRequestException(
+          `Hub and Distributor IDs are not valid Partner IDs. Enter a Representative or Promoter ID.`,
+        );
+      }
+
+      if (
+        candidate.role !== UserRole.MASTER_PARTNER &&
+        candidate.role !== UserRole.REGIONAL_PARTNER
+      ) {
+        throw new BadRequestException(
+          `Invalid ${NETWORK_REFERENCE_ID_LABEL}. Please check and try again.`,
+        );
+      }
+
+      partner = candidate;
+    } else {
+      partner = await (this.usersService as any).userModel.findOne({
+        partnerCode: partnerId,
+        role: UserRole.PARTNER,
+        status: 'active',
+      });
+      if (!partner) {
+        throw new BadRequestException(
+          `Unable to complete registration. Please try again or contact support.`,
+        );
+      }
     }
 
     createUserDto.referredByPartnerCode = partnerId;

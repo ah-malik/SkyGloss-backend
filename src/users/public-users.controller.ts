@@ -23,22 +23,13 @@ export class PublicUsersController {
     if (!partnerCode || !PARTNER_CODE_REGEX.test(partnerCode)) {
       return {
         valid: false,
-        message: `Hub, Distributor, Representative, or Promoter ID must be ${PARTNER_CODE_MIN_LENGTH}-${PARTNER_CODE_MAX_LENGTH} alphanumeric characters`,
+        message: `Representative or Promoter ID must be ${PARTNER_CODE_MIN_LENGTH}-${PARTNER_CODE_MAX_LENGTH} alphanumeric characters`,
       };
     }
 
     const partner = await this.userModel
       .findOne({
         partnerCode,
-        role: {
-          $in: [
-            UserRole.MASTER_PARTNER,
-            UserRole.REGIONAL_PARTNER,
-            // UserRole.SUB_PROMOTER, // removed
-            UserRole.DISTRIBUTOR,
-            UserRole.PARTNER,
-          ],
-        },
         status: 'active',
       })
       .select('partnerCode role firstName lastName')
@@ -47,7 +38,28 @@ export class PublicUsersController {
     if (!partner) {
       return {
         valid: false,
-        message: 'This ID was not found. Enter a valid Partner ID.',
+        message: 'This ID was not found. Enter a valid Representative or Promoter ID.',
+      };
+    }
+
+    if (
+      partner.role === UserRole.PARTNER ||
+      partner.role === UserRole.DISTRIBUTOR
+    ) {
+      return {
+        valid: false,
+        message:
+          'Hub and Distributor IDs are not valid Partner IDs. Enter a Representative or Promoter ID.',
+      };
+    }
+
+    if (
+      partner.role !== UserRole.MASTER_PARTNER &&
+      partner.role !== UserRole.REGIONAL_PARTNER
+    ) {
+      return {
+        valid: false,
+        message: 'This ID was not found. Enter a valid Representative or Promoter ID.',
       };
     }
 

@@ -57,6 +57,20 @@ export class User {
   @Prop({ required: true })
   country: string;
 
+  /**
+   * Hub territory — countries uniquely assigned to this Hub (role=partner).
+   * Used for Shop → Hub ownership (country-based hierarchy).
+   */
+  @Prop({ type: [String], default: [] })
+  countries?: string[];
+
+  /**
+   * Owning Hub partner code for shops (set from shop.country → Hub mapping).
+   * Independent of referredByPartnerCode (REP/Promoter partner link).
+   */
+  @Prop({ sparse: true })
+  hubPartnerCode?: string;
+
   @Prop()
   phoneNumber: string;
 
@@ -344,6 +358,8 @@ UserSchema.index(
 UserSchema.index({ role: 1, status: 1 });
 UserSchema.index({ role: 1, createdAt: -1 });
 UserSchema.index({ role: 1, country: 1 });
+UserSchema.index({ role: 1, countries: 1 });
+UserSchema.index({ hubPartnerCode: 1 });
 UserSchema.index({ operationalRepresentativeCodes: 1 });
 UserSchema.index({ operationalPromoterCodes: 1 });
 UserSchema.index({ isVisibleOnMap: 1, role: 1, status: 1 });

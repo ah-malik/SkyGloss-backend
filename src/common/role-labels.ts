@@ -10,7 +10,7 @@ export const PARTNER_NETWORK_ROLES = [
 
 export const HUB_ID_LABEL = 'Hub ID';
 export const NETWORK_REFERENCE_ID_LABEL =
-  'Hub, Distributor, Representative, or Promoter ID';
+  'Representative or Promoter ID';
 
 export function getNetworkIdLabel(role?: string): string {
   switch (role) {

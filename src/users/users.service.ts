@@ -39,6 +39,11 @@ import {
   isGlobalHubAccount,
   isGlobalHubPartnerCode,
 } from '../common/global-hub';
+import {
+  hubCountriesOverlapError,
+  normalizeCountryName,
+  normalizeHubCountries,
+} from '../common/hub-countries';
 import { emailEqualsQuery, normalizeEmail } from '../common/email';
 import { RedisCacheService } from '../redis/redis-cache.service';
 import { CacheKeys, CacheTtl } from '../redis/redis.constants';
@@ -144,8 +149,199 @@ export class UsersService implements OnModuleInit {
           `[UsersService] Normalized ${lowercased} user email(s) to lowercase.`,
         );
       }
+
+      await this.backfillHubCountriesAndShopHubCodes();
     } catch (err) {
       console.error('[UsersService] Database initialization failed:', err);
+    }
+  }
+
+  /**
+   * Backfill Hub.countries from HQ country, and shop.hubPartnerCode from country mapping.
+   */
+  private async backfillHubCountriesAndShopHubCodes(): Promise<void> {
+    const hubsMissingCountries = await this.userModel
+      .find({
+        role: UserRole.PARTNER,
+        $or: [
+          { countries: { $exists: false } },
+          { countries: null },
+          { countries: { $size: 0 } },
+        ],
+        country: { $exists: true, $nin: [null, ''] },
+      })
+      .select('_id country partnerCode')
+      .lean()
+      .exec();
+
+    let hubCountryBackfill = 0;
+    for (const hub of hubsMissingCountries) {
+      // GLOBALHUB is fallback-only — do not claim exclusive territory from HQ country.
+      if (isGlobalHubPartnerCode(hub.partnerCode)) continue;
+      const hq = normalizeCountryName(hub.country);
+      if (!hq) continue;
+      // Skip if another Hub already owns this country (avoid duplicate territory on migrate).
+      const alreadyOwned = await this.findHubByCountry(hq);
+      if (alreadyOwned) continue;
+      const result = await this.userModel.updateOne(
+        { _id: hub._id },
+        { $set: { countries: [hq] } },
+      );
+      if (result.modifiedCount > 0) hubCountryBackfill += 1;
+    }
+    if (hubCountryBackfill > 0) {
+      console.log(
+        `[UsersService] Backfilled countries[] for ${hubCountryBackfill} Hub(s).`,
+      );
+    }
+
+    const shopsMissingHub = await this.userModel
+      .find({
+        role: UserRole.CERTIFIED_SHOP,
+        $or: [
+          { hubPartnerCode: { $exists: false } },
+          { hubPartnerCode: null },
+          { hubPartnerCode: '' },
+        ],
+      })
+      .select('_id country')
+      .lean()
+      .exec();
+
+    let shopHubBackfill = 0;
+    for (const shop of shopsMissingHub) {
+      const hubCode = await this.resolveHubPartnerCodeForCountry(shop.country);
+      const result = await this.userModel.updateOne(
+        { _id: shop._id },
+        { $set: { hubPartnerCode: hubCode } },
+      );
+      if (result.modifiedCount > 0) shopHubBackfill += 1;
+    }
+    if (shopHubBackfill > 0) {
+      console.log(
+        `[UsersService] Backfilled hubPartnerCode for ${shopHubBackfill} shop(s).`,
+      );
+    }
+  }
+
+  /** Ensure no other Hub already owns any of the given countries (case-insensitive). */
+  async assertHubCountriesAvailable(
+    countries: string[],
+    excludeUserId?: string,
+  ): Promise<string[]> {
+    const normalized = normalizeHubCountries(countries);
+    if (normalized.length === 0) {
+      throw new BadRequestException(
+        'Assign at least one country to this Hub.',
+      );
+    }
+
+    const query: Record<string, unknown> = {
+      role: UserRole.PARTNER,
+      countries: { $exists: true, $ne: [] },
+    };
+    if (excludeUserId) {
+      query._id = { $ne: excludeUserId };
+    }
+
+    const otherHubs = await this.userModel
+      .find(query)
+      .select('partnerCode countries')
+      .lean()
+      .exec();
+
+    const takenLower = new Map<string, string>();
+    for (const hub of otherHubs) {
+      for (const c of normalizeHubCountries(hub.countries)) {
+        takenLower.set(c.toLowerCase(), c);
+      }
+    }
+
+    const firstDup = normalized.find((c) => takenLower.has(c.toLowerCase()));
+    if (firstDup) {
+      throw new BadRequestException(hubCountriesOverlapError(firstDup));
+    }
+
+    return normalized;
+  }
+
+  async findHubByCountry(country?: string | null): Promise<UserDocument | null> {
+    const name = normalizeCountryName(country);
+    if (!name) return null;
+
+    // Case-insensitive match against Hub.countries
+    const hub = await this.userModel
+      .findOne({
+        role: UserRole.PARTNER,
+        countries: {
+          $elemMatch: { $regex: `^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' },
+        },
+        partnerCode: {
+          $nin: [GLOBAL_HUB_PARTNER_CODE, 'GLOBAL77'],
+        },
+      })
+      .exec();
+
+    return hub;
+  }
+
+  async resolveHubPartnerCodeForCountry(
+    country?: string | null,
+  ): Promise<string> {
+    const hub = await this.findHubByCountry(country);
+    const code = normalizePartnerCode(hub?.partnerCode);
+    return code || GLOBAL_HUB_PARTNER_CODE;
+  }
+
+  /**
+   * Keep shop.hubPartnerCode aligned with Hub territory after create/update.
+   * - Shops in assigned countries → this Hub
+   * - Shops previously stamped to this Hub but country no longer owned → re-resolve
+   */
+  private async syncShopHubOwnershipForHub(
+    hubPartnerCode: string,
+    countries: string[],
+  ): Promise<void> {
+    const code = normalizePartnerCode(hubPartnerCode);
+    if (!code || isGlobalHubPartnerCode(code)) return;
+
+    const assigned = normalizeHubCountries(countries);
+    if (assigned.length > 0) {
+      const countryRegex = assigned.map(
+        (c) => new RegExp(`^${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
+      );
+      await this.userModel.updateMany(
+        {
+          role: UserRole.CERTIFIED_SHOP,
+          country: { $in: countryRegex },
+        },
+        { $set: { hubPartnerCode: code } },
+      );
+    }
+
+    // Shops still pointing at this Hub whose country is no longer in territory.
+    const staleShops = await this.userModel
+      .find({
+        role: UserRole.CERTIFIED_SHOP,
+        hubPartnerCode: code,
+      })
+      .select('_id country hubPartnerCode')
+      .lean()
+      .exec();
+
+    const assignedLower = new Set(assigned.map((c) => c.toLowerCase()));
+    for (const shop of staleShops) {
+      const shopCountry = normalizeCountryName(shop.country);
+      if (shopCountry && assignedLower.has(shopCountry.toLowerCase())) {
+        continue;
+      }
+      const nextHub = await this.resolveHubPartnerCodeForCountry(shop.country);
+      if (normalizePartnerCode(nextHub) !== code) {
+        await this.userModel.updateOne(
+          { _id: shop._id },
+          { $set: { hubPartnerCode: nextHub } },
+        );
+      }
     }
   }
 
@@ -314,9 +510,21 @@ export class UsersService implements OnModuleInit {
       delete userData.operationalSupportRatePercent;
     }
 
+    // hubPartnerCode is always server-resolved for shops — never trust client input.
+    delete userData.hubPartnerCode;
+
     if (userData.role === UserRole.PARTNER) {
       delete userData.referredByPartnerCode;
+      const assignedCountries = await this.assertHubCountriesAvailable(
+        userData.countries,
+      );
+      userData.countries = assignedCountries;
+      // Keep HQ country in sync when missing.
+      if (!normalizeCountryName(userData.country) && assignedCountries[0]) {
+        userData.country = assignedCountries[0];
+      }
     } else {
+      delete userData.countries;
       if (requiresParentLink(userData.role) && !userData.referredByPartnerCode?.trim()) {
         userData.referredByPartnerCode = GLOBAL_HUB_PARTNER_CODE;
       }
@@ -357,6 +565,13 @@ export class UsersService implements OnModuleInit {
     } else {
       // Clear partnerCode if NOT a partner role (optional but consistency is good)
       delete userData.partnerCode;
+    }
+
+    // Shop Hub ownership is country-based (not REP upline).
+    if (userData.role === UserRole.CERTIFIED_SHOP) {
+      userData.hubPartnerCode = await this.resolveHubPartnerCodeForCountry(
+        userData.country,
+      );
     }
 
     this.normalizeCustomCommissionRate(userData.role, userData);
@@ -426,6 +641,13 @@ export class UsersService implements OnModuleInit {
         shop = await this.assignShopPromoterNetworkEarnings(shop);
       }
       return shop;
+    }
+
+    if (savedUser.role === UserRole.PARTNER && savedUser.partnerCode) {
+      await this.syncShopHubOwnershipForHub(
+        savedUser.partnerCode,
+        savedUser.countries || [],
+      );
     }
 
     if (
@@ -2354,6 +2576,58 @@ export class UsersService implements OnModuleInit {
       }
     }
 
+    // Hub territory countries — unique across Hubs.
+    const roleAfterHierarchy =
+      (updatePayload.role ?? targetUserForHierarchy.role) as UserRole;
+    let hubCountriesChanged = false;
+    if (roleAfterHierarchy === UserRole.PARTNER) {
+      if (updatePayload.countries !== undefined) {
+        updatePayload.countries = await this.assertHubCountriesAvailable(
+          updatePayload.countries,
+          id,
+        );
+        hubCountriesChanged = true;
+        if (
+          !normalizeCountryName(updatePayload.country) &&
+          !normalizeCountryName(targetUserForHierarchy.country) &&
+          updatePayload.countries[0]
+        ) {
+          updatePayload.country = updatePayload.countries[0];
+        }
+      } else if (
+        updatePayload.role === UserRole.PARTNER &&
+        targetUserForHierarchy.role !== UserRole.PARTNER
+      ) {
+        // Promoting another role to Hub requires countries.
+        updatePayload.countries = await this.assertHubCountriesAvailable(
+          targetUserForHierarchy.countries?.length
+            ? targetUserForHierarchy.countries
+            : targetUserForHierarchy.country
+              ? [targetUserForHierarchy.country]
+              : [],
+          id,
+        );
+        hubCountriesChanged = true;
+      }
+    } else if (updatePayload.countries !== undefined) {
+      delete updatePayload.countries;
+    }
+
+    // Never accept client hubPartnerCode; re-resolve when shop country changes.
+    delete updatePayload.hubPartnerCode;
+    const countryChanged =
+      updatePayload.country !== undefined &&
+      normalizeCountryName(updatePayload.country) !==
+        normalizeCountryName(targetUserForHierarchy.country);
+    if (
+      roleAfterHierarchy === UserRole.CERTIFIED_SHOP &&
+      (countryChanged || targetUserForHierarchy.role !== UserRole.CERTIFIED_SHOP)
+    ) {
+      updatePayload.hubPartnerCode = await this.resolveHubPartnerCodeForCountry(
+        updatePayload.country ?? targetUserForHierarchy.country,
+      );
+    }
+
     // Auto-enable map visibility when a shop is certified
     if (updatePayload.isCertified === true) {
       updatePayload.isVisibleOnMap = true;
@@ -2421,6 +2695,18 @@ export class UsersService implements OnModuleInit {
     const updatedUser = await this.userModel
       .findByIdAndUpdate(id, updatePayload, { new: true })
       .exec();
+
+    if (
+      updatedUser &&
+      hubCountriesChanged &&
+      updatedUser.role === UserRole.PARTNER &&
+      updatedUser.partnerCode
+    ) {
+      await this.syncShopHubOwnershipForHub(
+        updatedUser.partnerCode,
+        updatedUser.countries || [],
+      );
+    }
 
     if (
       updatedUser &&
@@ -2803,8 +3089,41 @@ export class UsersService implements OnModuleInit {
     const shops = collected.filter((u) => u.role === UserRole.CERTIFIED_SHOP);
 
     if (viewer.role === UserRole.PARTNER) {
+      // Hub-owned shops are country-mapped (hubPartnerCode / Hub.countries), not REP-tree descendants.
+      const freshHub = await this.userModel
+        .findById(viewer._id)
+        .select('countries country partnerCode')
+        .lean();
+      const hubCountries = normalizeHubCountries(
+        freshHub?.countries?.length
+          ? freshHub.countries
+          : freshHub?.country
+            ? [freshHub.country]
+            : viewer.country
+              ? [viewer.country]
+              : [],
+      );
+      const countryMatchers = hubCountries.map(
+        (c) => new RegExp(`^${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
+      );
+      const shopQuery: Record<string, unknown> = {
+        role: UserRole.CERTIFIED_SHOP,
+        $or: [
+          { hubPartnerCode: partnerCode },
+          ...(countryMatchers.length
+            ? [{ country: { $in: countryMatchers } }]
+            : []),
+        ],
+      };
+      const countryShops = await this.userModel
+        .find(shopQuery)
+        .select(
+          '-password -refreshTokenHash -resetPasswordToken -resetPasswordExpires',
+        )
+        .exec();
+
       return {
-        shops,
+        shops: countryShops,
         promoters,
         subPromoters,
         distributors,
@@ -2908,12 +3227,36 @@ export class UsersService implements OnModuleInit {
     return all.some((u) => u._id.toString() === targetUserId);
   }
 
-  /** Walk upline to the owning Hub (PARTNER), with network-membership fallback. */
+  /**
+   * Resolve owning Hub partner(s).
+   * Shops: country-based via hubPartnerCode / Hub.countries (not REP upline).
+   * Other roles: walk referredByPartnerCode upline, then network fallback, then GLOBALHUB.
+   */
   async findOwningHubPartners(userId: string): Promise<UserDocument[]> {
     const user = await this.findOne(userId);
     if (!user || user.role === UserRole.PARTNER) return [];
 
     const hubs: UserDocument[] = [];
+
+    if (user.role === UserRole.CERTIFIED_SHOP) {
+      const storedHubCode = normalizePartnerCode(user.hubPartnerCode);
+      if (storedHubCode) {
+        const storedHub = await this.findByPartnerCode(storedHubCode);
+        if (storedHub?.role === UserRole.PARTNER) {
+          hubs.push(storedHub);
+        }
+      }
+      if (hubs.length === 0) {
+        const byCountry = await this.findHubByCountry(user.country);
+        if (byCountry) hubs.push(byCountry);
+      }
+      if (hubs.length === 0) {
+        const globalHub = await this.findByPartnerCode(GLOBAL_HUB_PARTNER_CODE);
+        if (globalHub) hubs.push(globalHub);
+      }
+      return hubs;
+    }
+
     const visited = new Set<string>();
     let current: UserDocument | null = user;
 
@@ -4134,18 +4477,17 @@ export class UsersService implements OnModuleInit {
 
   async assignPartner(shopId: string, partnerCode: string) {
     const normalizedCode = normalizePartnerCode(partnerCode);
-    // 1. Verify Partner exists
+    // 1. Verify Partner exists — shops may only be assigned to REP or Promoter
     const partner = await this.findByPartnerCode(normalizedCode);
     if (
       !partner ||
-      ![
-        UserRole.MASTER_PARTNER,
-        UserRole.REGIONAL_PARTNER,
-        UserRole.DISTRIBUTOR,
-        UserRole.PARTNER,
-      ].includes(partner.role as UserRole)
+      ![UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER].includes(
+        partner.role as UserRole,
+      )
     ) {
-      throw new BadRequestException('Invalid Partner Code');
+      throw new BadRequestException(
+        'Invalid Partner Code. Shop Partner ID must be a Representative or Promoter ID.',
+      );
     }
 
     const existing = await this.userModel.findById(shopId);
@@ -4342,6 +4684,14 @@ export class UsersService implements OnModuleInit {
     const code = referredByPartnerCode?.trim();
     if (!code) {
       throw new BadRequestException(`${getParentLinkLabel(role)} is required`);
+    }
+
+    // Hear-about-us / unassigned shops may keep GLOBALHUB as referredBy stamp.
+    if (
+      role === UserRole.CERTIFIED_SHOP &&
+      isGlobalHubPartnerCode(code)
+    ) {
+      return;
     }
 
     const parent = await this.findByPartnerCode(code);

@@ -164,12 +164,11 @@ export const HIERARCHY_PARENT_ROLES: Partial<Record<UserRole, UserRole[]>> = {
     UserRole.REGIONAL_PARTNER,
   ],
   // [UserRole.SUB_PROMOTER]: [UserRole.REGIONAL_PARTNER], // removed — use Promoter Network operational links
+  // Shop Partner ID = Representative or Promoter only (Hub/Distributor rejected).
+  // GLOBALHUB referredBy stamp is allowed separately in validateHierarchyLink.
   [UserRole.CERTIFIED_SHOP]: [
-    UserRole.PARTNER,
-    UserRole.DISTRIBUTOR,
     UserRole.MASTER_PARTNER,
     UserRole.REGIONAL_PARTNER,
-    // UserRole.SUB_PROMOTER, // removed
   ],
 };
 
@@ -193,7 +192,7 @@ export function getParentLinkLabel(childRole?: string): string {
     // case UserRole.SUB_PROMOTER:
     //   return 'Assigned Main Promoter';
     case UserRole.CERTIFIED_SHOP:
-      return 'Assigned Network User';
+      return 'Partner ID (Representative or Promoter)';
     default:
       return 'Parent Link';
   }
