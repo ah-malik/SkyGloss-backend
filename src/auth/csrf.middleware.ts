@@ -37,9 +37,28 @@ export class CsrfMiddleware implements NestMiddleware {
       return next();
     }
 
-    // Logout must always succeed so stale/broken CSRF cannot trap a session.
+    // Auth bootstrap / session teardown must not require a prior CSRF match.
+    // Stale access/refresh cookies are common when re-logging in from admin/portal;
+    // requiring the old CSRF token would block login forever.
     const path = ((req.originalUrl || req.url || '') as string).split('?')[0];
-    if (path === '/auth/logout' || path.endsWith('/auth/logout')) {
+    const csrfExemptExact = new Set([
+      '/auth/login',
+      '/auth/login/access-code',
+      '/auth/register',
+      '/auth/register-partner',
+      '/auth/register-shop',
+      '/auth/validate-shop-registration-coupon',
+      '/auth/forgot-password',
+      '/auth/reset-password',
+      '/auth/logout',
+      '/auth/refresh',
+      '/auth/establish-session',
+    ]);
+    const normalizedPath = path.endsWith('/') && path.length > 1 ? path.slice(0, -1) : path;
+    if (
+      csrfExemptExact.has(normalizedPath) ||
+      [...csrfExemptExact].some((p) => normalizedPath.endsWith(p))
+    ) {
       return next();
     }
 
