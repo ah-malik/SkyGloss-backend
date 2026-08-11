@@ -273,6 +273,16 @@ export class PdfService {
     });
   }
 
+  /**
+   * Count leaf pages in a PDF buffer (`/Type /Page`, not `/Pages`).
+   * Used by tests and local verification of invoice pagination.
+   */
+  countPdfPages(buffer: Buffer): number {
+    const text = buffer.toString('latin1');
+    const matches = text.match(/\/Type\s*\/Page(?!\s*s)\b/g);
+    return matches?.length ?? 0;
+  }
+
   async generateOrderDetails(order: Order): Promise<Buffer> {
     return new Promise((resolve) => {
       const doc = new PDFDocument({ margin: 50 });
@@ -293,6 +303,18 @@ export class PdfService {
 
       const currencyCode = this.getOrderCurrencyCode(order);
       const currencySymbol = this.getCurrencySymbol(currencyCode);
+
+      /**
+       * PDFKit page-breaks mid-row when absolute-Y `text()` overflows the bottom.
+       * That leaves each table cell on its own page. Always reserve space for the
+       * full row (or totals block) before drawing any column.
+       */
+      const ensureVerticalSpace = (neededHeight: number) => {
+        const bottom = doc.page.height - doc.page.margins.bottom;
+        if (doc.y + neededHeight > bottom) {
+          doc.addPage();
+        }
+      };
 
       // Header
       doc.fontSize(24).fillColor('#0EA0DC').font(fontBold).text(
@@ -353,8 +375,8 @@ export class PdfService {
         price: { x: 430, w: 55, align: 'right' as const },
         total: { x: 495, w: 55, align: 'right' as const },
       };
-      const tableLineGap = 8;
-      const tableRowPadding = 12;
+      const tableLineGap = 2;
+      const tableRowPadding = 8;
 
       const measureCellHeight = (text: string, width: number) =>
         doc.heightOfString(text || ' ', { width, lineGap: tableLineGap });
@@ -364,18 +386,27 @@ export class PdfService {
         values: Record<keyof typeof itemColumns, string>,
         fontName: string,
         fontSize: number,
+        rowHeight: number,
       ) => {
         doc.fontSize(fontSize).font(fontName);
         (Object.keys(itemColumns) as Array<keyof typeof itemColumns>).forEach((key) => {
           const col = itemColumns[key];
-          doc.text(values[key], col.x, y, {
+          // Explicit height keeps PDFKit from flowing a single cell onto a new page.
+          doc.text(values[key] || ' ', col.x, y, {
             width: col.w,
+            height: rowHeight,
             align: col.align,
             lineGap: tableLineGap,
+            ellipsis: true,
           });
         });
+        // Absolute-positioned text still advances doc.y — pin it after the row.
+        doc.x = doc.page.margins.left;
+        doc.y = y + rowHeight;
       };
 
+      const headerRowHeight = 16;
+      ensureVerticalSpace(headerRowHeight + 28);
       const headerY = doc.y;
       drawItemRow(
         headerY,
@@ -389,11 +420,11 @@ export class PdfService {
         },
         fontBold,
         10,
+        headerRowHeight,
       );
-      doc.y = headerY + 18;
-      doc.moveDown(0.75);
+      doc.moveDown(0.35);
       doc.lineWidth(1).moveTo(50, doc.y).lineTo(550, doc.y).stroke();
-      doc.moveDown(0.75);
+      doc.moveDown(0.5);
 
       console.log(
         `[PdfService] Generating PDF for order ${order.orderNumber}. currency=${order.currency} originalCurrency=${(order as any).originalCurrency} resolved=${currencyCode} symbol=${currencySymbol} unicodeFont=${!!unicodeFonts}`,
@@ -401,7 +432,6 @@ export class PdfService {
 
       doc.font(fontRegular);
       order.items.forEach((item) => {
-        const rowY = doc.y;
         const lineTotal = item.price * item.quantity;
         const rowValues = {
           item: formatOrderItemDisplayName(item).toUpperCase(),
@@ -417,16 +447,20 @@ export class PdfService {
           ...(Object.keys(itemColumns) as Array<keyof typeof itemColumns>).map((key) =>
             measureCellHeight(rowValues[key], itemColumns[key].w),
           ),
-          16,
+          14,
         );
 
-        drawItemRow(rowY, rowValues, fontRegular, 10);
+        ensureVerticalSpace(rowHeight + tableRowPadding);
+        const rowY = doc.y;
+        drawItemRow(rowY, rowValues, fontRegular, 10, rowHeight);
         doc.y = rowY + rowHeight + tableRowPadding;
       });
 
-      doc.moveDown();
+      // Reserve room for divider + subtotal/shipping/total (3–4 lines).
+      ensureVerticalSpace(78);
+      doc.moveDown(0.15);
       doc.lineWidth(1).moveTo(50, doc.y).lineTo(550, doc.y).stroke();
-      doc.moveDown();
+      doc.moveDown(0.5);
 
       const userCountry = (order.user as any)?.country;
       const { subtotal, shippingFee, discount, total } = getOrderTotalsBreakdown(
@@ -434,48 +468,55 @@ export class PdfService {
         userCountry,
       );
 
-      const totalsY = doc.y;
-      doc.fontSize(12).font(fontRegular);
-      doc.text('Subtotal', 50, totalsY, { width: 380, align: 'right' });
-      doc.text(this.formatMoney(subtotal, currencySymbol), 430, totalsY, {
-        width: 115,
-        align: 'right',
-      });
-      doc.moveDown(0.75);
+      const drawTotalsLine = (
+        label: string,
+        value: string,
+        fontName: string,
+        fontSize: number,
+      ) => {
+        ensureVerticalSpace(fontSize + 14);
+        const y = doc.y;
+        doc.fontSize(fontSize).font(fontName);
+        doc.text(label, 50, y, { width: 380, align: 'right', lineBreak: false });
+        doc.text(value, 430, y, { width: 115, align: 'right', lineBreak: false });
+        doc.x = doc.page.margins.left;
+        doc.y = y + fontSize + 10;
+      };
+
+      drawTotalsLine(
+        'Subtotal',
+        this.formatMoney(subtotal, currencySymbol),
+        fontRegular,
+        12,
+      );
 
       if (discount > 0.01) {
-        const discountY = doc.y;
         const discountLabel = getDiscountDisplayLabel(order as any);
-        doc.text(discountLabel, 50, discountY, { width: 380, align: 'right' });
-        doc.text(`-${this.formatMoney(discount, currencySymbol)}`, 430, discountY, {
-          width: 115,
-          align: 'right',
-        });
-        doc.moveDown(0.75);
+        drawTotalsLine(
+          discountLabel,
+          `-${this.formatMoney(discount, currencySymbol)}`,
+          fontRegular,
+          12,
+        );
       }
 
       if (!registrationOrder) {
-        const shippingY = doc.y;
-        if (shippingFee > 0.01) {
-          doc.text('Shipping', 50, shippingY, { width: 380, align: 'right' });
-          doc.text(this.formatMoney(shippingFee, currencySymbol), 430, shippingY, {
-            width: 115,
-            align: 'right',
-          });
-        } else {
-          doc.text('Shipping', 50, shippingY, { width: 380, align: 'right' });
-          doc.text('FREE', 430, shippingY, { width: 115, align: 'right' });
-        }
-        doc.moveDown(0.75);
+        drawTotalsLine(
+          'Shipping',
+          shippingFee > 0.01
+            ? this.formatMoney(shippingFee, currencySymbol)
+            : 'FREE',
+          fontRegular,
+          12,
+        );
       }
 
-      const totalY = doc.y;
-      doc.fontSize(16).font(fontBold);
-      doc.text('Total Amount', 50, totalY, { width: 380, align: 'right' });
-      doc.text(this.formatMoney(total, currencySymbol), 430, totalY, {
-        width: 115,
-        align: 'right',
-      });
+      drawTotalsLine(
+        'Total Amount',
+        this.formatMoney(total, currencySymbol),
+        fontBold,
+        16,
+      );
 
       doc.end();
     });

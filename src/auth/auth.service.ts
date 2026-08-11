@@ -620,7 +620,7 @@ export class AuthService {
 
     let partner: any;
     if (userEnteredPartnerId) {
-      // Entered Partner ID must be Representative or Promoter only (reject Hub/Distributor).
+      // Entered Partner ID may be Distributor, Representative, or Promoter (reject Hub only).
       const candidate = await (this.usersService as any).userModel.findOne({
         partnerCode: partnerId,
         status: 'active',
@@ -632,16 +632,14 @@ export class AuthService {
         );
       }
 
-      if (
-        candidate.role === UserRole.PARTNER ||
-        candidate.role === UserRole.DISTRIBUTOR
-      ) {
+      if (candidate.role === UserRole.PARTNER) {
         throw new BadRequestException(
-          `Hub and Distributor IDs are not valid Partner IDs. Enter a Representative or Promoter ID.`,
+          `Hub IDs are not valid Partner IDs. Enter a Distributor, Representative, or Promoter ID.`,
         );
       }
 
       if (
+        candidate.role !== UserRole.DISTRIBUTOR &&
         candidate.role !== UserRole.MASTER_PARTNER &&
         candidate.role !== UserRole.REGIONAL_PARTNER
       ) {

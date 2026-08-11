@@ -4477,16 +4477,18 @@ export class UsersService implements OnModuleInit {
 
   async assignPartner(shopId: string, partnerCode: string) {
     const normalizedCode = normalizePartnerCode(partnerCode);
-    // 1. Verify Partner exists — shops may only be assigned to REP or Promoter
+    // 1. Verify Partner exists — shops may be assigned to Distributor, REP, or Promoter
     const partner = await this.findByPartnerCode(normalizedCode);
     if (
       !partner ||
-      ![UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER].includes(
-        partner.role as UserRole,
-      )
+      ![
+        UserRole.DISTRIBUTOR,
+        UserRole.MASTER_PARTNER,
+        UserRole.REGIONAL_PARTNER,
+      ].includes(partner.role as UserRole)
     ) {
       throw new BadRequestException(
-        'Invalid Partner Code. Shop Partner ID must be a Representative or Promoter ID.',
+        'Invalid Partner Code. Shop Partner ID must be a Distributor, Representative, or Promoter ID.',
       );
     }
 
