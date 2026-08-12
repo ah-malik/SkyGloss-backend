@@ -1003,6 +1003,70 @@ export class OrdersService implements OnModuleInit {
     }
   }
 
+  /**
+   * If the user created another checkout after paying, stripeSessionId may
+   * point at an unpaid/expired session. Search recent sessions for a paid
+   * shop/partner registration checkout belonging to this user.
+   */
+  private async findPaidRegistrationCheckoutSession(
+    userId: string,
+    country?: string,
+  ): Promise<Stripe.Checkout.Session | null> {
+    const isUsaUser = this.isUsaCountry(country || '');
+    const primary = this.getStripeForUsaUser(isUsaUser);
+    const secondary =
+      isUsaUser && this.stripe
+        ? this.stripe
+        : !isUsaUser && this.usaStripe
+          ? this.usaStripe
+          : null;
+
+    const candidates = [primary, secondary].filter(
+      (stripeInstance, index, arr): stripeInstance is Stripe =>
+        !!stripeInstance && arr.indexOf(stripeInstance) === index,
+    );
+
+    for (const stripeInstance of candidates) {
+      try {
+        const listed = await stripeInstance.checkout.sessions.list({
+          limit: 100,
+        });
+
+        const paid = listed.data
+          .filter((session) => {
+            const meta = session.metadata || {};
+            const matchesUser =
+              session.client_reference_id === userId ||
+              meta.userId === userId;
+            const isRegistration =
+              meta.type === 'shop_registration' ||
+              meta.type === 'partner_registration' ||
+              meta.type === 'distributor_registration';
+            return (
+              matchesUser &&
+              isRegistration &&
+              session.payment_status === 'paid'
+            );
+          })
+          .sort((a, b) => (b.created || 0) - (a.created || 0));
+
+        if (paid[0]) {
+          console.log(
+            `[Manual Verify] Found paid registration session ${paid[0].id} for user ${userId}`,
+          );
+          return paid[0];
+        }
+      } catch (err) {
+        console.error(
+          `[Manual Verify] Failed listing checkout sessions while searching paid registration:`,
+          (err as Error)?.message || err,
+        );
+      }
+    }
+
+    return null;
+  }
+
   async verifyRegistrationPayment(userId: string): Promise<any> {
     const user = await this.usersService.findOne(userId);
     if (!user) throw new NotFoundException('User not found');
@@ -1021,10 +1085,26 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException('No registration payment session found for this user.');
     }
 
-    const session = await this.retrieveRegistrationCheckoutSession(
+    let session = await this.retrieveRegistrationCheckoutSession(
       user.stripeSessionId,
       user.country,
     );
+
+    if (session.payment_status !== 'paid') {
+      const paidSession = await this.findPaidRegistrationCheckoutSession(
+        userId,
+        user.country,
+      );
+      if (paidSession) {
+        session = paidSession;
+        // Keep the paid session id so future verifies hit the correct checkout.
+        await this.usersService.update(
+          userId,
+          { stripeSessionId: paidSession.id } as any,
+          { role: UserRole.ADMIN } as any,
+        );
+      }
+    }
 
     if (session.payment_status === 'paid') {
       console.log(`[Manual Verify] Payment confirmed for user ${userId}. Activating...`);
@@ -1234,6 +1314,112 @@ export class OrdersService implements OnModuleInit {
       }
     }
 
+    // USA shops also pay registration fees on the USA Stripe account.
+    if (
+      event.type === 'checkout.session.completed' &&
+      metadata?.type === 'shop_registration'
+    ) {
+      const userId = session.client_reference_id || metadata.userId;
+      const partnerCode = metadata.referredByPartnerCode;
+      console.log(
+        `[USA Stripe Webhook] Processing shop_registration for userId: ${userId}, referredBy: ${partnerCode}`,
+      );
+
+      const existingShop = await this.usersService.findOne(userId).catch(() => null);
+      if (existingShop?.isPartnerPaid) {
+        console.log(
+          `[USA Stripe Webhook] Shop ${userId} already paid. Skipping duplicate activation/emails.`,
+        );
+        return { received: true };
+      }
+
+      const updatedUser = await this.usersService.update(
+        userId,
+        {
+          status: UserStatus.ACTIVE,
+          isPartnerPaid: true,
+        } as any,
+        { role: UserRole.ADMIN } as any,
+      );
+
+      if (updatedUser) {
+        console.log(`[USA Stripe Webhook] Shop ${userId} activated.`);
+
+        let invoiceBuffer: Buffer | undefined;
+        let orderNumber: string | undefined;
+        try {
+          const regOrder = await this.createRegistrationOrder(
+            updatedUser,
+            session,
+            updatedUser.couponCode
+              ? { couponCode: updatedUser.couponCode }
+              : undefined,
+          );
+          invoiceBuffer = await this.generateInvoicePdf(regOrder);
+          orderNumber = regOrder.orderNumber;
+        } catch (orderErr) {
+          console.error(
+            '[USA Stripe Webhook] Failed to create registration order:',
+            orderErr,
+          );
+        }
+
+        await this.mailService.sendDistributorPaymentCompletedAdminNotification(
+          [],
+          updatedUser,
+        );
+
+        if (updatedUser.email) {
+          const partnerContact =
+            await this.usersService.getPartnerContactForShop(updatedUser);
+          await this.mailService.sendDistributorPaymentConfirmation(
+            updatedUser.email,
+            updatedUser,
+            invoiceBuffer,
+            orderNumber,
+            partnerContact,
+          );
+        }
+
+        if (partnerCode) {
+          const partner = await (this.usersService as any).userModel.findOne({
+            partnerCode,
+          });
+          if (partner) {
+            const partnerNotification = await this.notificationsService.create({
+              type: NotificationType.ORDER_PAID,
+              title: 'New Shop Referral Active',
+              message: `Shop "${updatedUser.firstName} ${updatedUser.lastName}" has completed registration and is now part of your network.`,
+              metadata: {
+                shopId: updatedUser._id,
+                shopName: `${updatedUser.firstName} ${updatedUser.lastName}`,
+              },
+              user: partner._id,
+              triggeredBy: updatedUser._id as any,
+              link: `/dashboard/partner/network`,
+            });
+            this.notificationsGateway.broadcastNotification(partnerNotification);
+          }
+        }
+
+        const notification = await this.notificationsService.create({
+          type: NotificationType.ORDER_PAID,
+          title: 'Shop Registration Paid',
+          message: `Shop ${updatedUser.firstName} ${updatedUser.lastName} has paid the registration fee and is now active.`,
+          metadata: { userId: updatedUser._id },
+          user: updatedUser._id as any,
+          triggeredBy: updatedUser._id as any,
+          link: `/dashboard/shop`,
+        });
+        this.notificationsGateway.broadcastNotification(notification);
+      } else {
+        console.error(
+          `[USA Stripe Webhook] CRITICAL: Could not find/update shop ${userId} for shop_registration type.`,
+        );
+      }
+      return { received: true };
+    }
+
     return { received: true };
   }
 
@@ -1265,6 +1451,14 @@ export class OrdersService implements OnModuleInit {
       if (metadata && (metadata.type === 'partner_registration' || metadata.type === 'distributor_registration')) {
         const userId = session.client_reference_id || metadata.userId;
         console.log(`[Stripe Webhook] Processing partner_registration for userId: ${userId}`);
+
+        const existingPartner = await this.usersService.findOne(userId).catch(() => null);
+        if (existingPartner?.isPartnerPaid) {
+          console.log(
+            `[Stripe Webhook] Partner ${userId} already paid. Skipping duplicate activation/emails.`,
+          );
+          return { received: true };
+        }
 
         const updatedUser = await this.usersService.update(userId, {
           status: UserStatus.ACTIVE,
@@ -1329,6 +1523,14 @@ export class OrdersService implements OnModuleInit {
         const userId = session.client_reference_id || metadata.userId;
         const partnerCode = metadata.referredByPartnerCode;
         console.log(`[Stripe Webhook] Processing shop_registration for userId: ${userId}, referredBy: ${partnerCode}`);
+
+        const existingShop = await this.usersService.findOne(userId).catch(() => null);
+        if (existingShop?.isPartnerPaid) {
+          console.log(
+            `[Stripe Webhook] Shop ${userId} already paid. Skipping duplicate activation/emails.`,
+          );
+          return { received: true };
+        }
 
         const updatedUser = await this.usersService.update(userId, {
           status: UserStatus.ACTIVE,

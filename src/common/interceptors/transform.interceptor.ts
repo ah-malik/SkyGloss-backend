@@ -29,6 +29,18 @@ export class TransformInterceptor<T>
       return next.handle();
     }
 
+    // Stripe expects a simple acknowledgment body
+    if (
+      path === '/orders/webhook' ||
+      path === '/orders/webhook-usa' ||
+      path === '/stripe/webhook' ||
+      path.endsWith('/orders/webhook') ||
+      path.endsWith('/orders/webhook-usa') ||
+      path.endsWith('/stripe/webhook')
+    ) {
+      return next.handle();
+    }
+
     return next.handle().pipe(
       map((data) => ({
         data,
