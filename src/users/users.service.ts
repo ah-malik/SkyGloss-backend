@@ -314,6 +314,26 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
+   * Resolve Hub partner code for a shop.
+   * Missing/deleted Hub → GLOBALHUB fallback (Hub-only; other roles unchanged).
+   */
+  async resolveValidHubPartnerCodeOrGlobal(
+    code?: string | null,
+  ): Promise<string> {
+    const normalized = normalizePartnerCode(code || undefined);
+    if (normalized) {
+      const hub = await this.findByPartnerCode(normalized);
+      if (
+        hub?.role === UserRole.PARTNER &&
+        (!hub.status || hub.status === UserStatus.ACTIVE)
+      ) {
+        return normalizePartnerCode(hub.partnerCode) || normalized;
+      }
+    }
+    return GLOBAL_HUB_PARTNER_CODE;
+  }
+
+  /**
    * Keep shop.hubPartnerCode aligned with Hub territory after create/update.
    * - Shops in assigned countries → this Hub
    * - Shops previously stamped to this Hub but country no longer owned → re-resolve
@@ -590,11 +610,11 @@ export class UsersService implements OnModuleInit {
     }
 
     // Shop Hub ownership — prefer explicit admin Parent Link, else country mapping.
+    // Missing/deleted Hub codes fall back to GLOBALHUB.
     if (userData.role === UserRole.CERTIFIED_SHOP) {
       if (userData.hubPartnerCode?.trim()) {
-        userData.hubPartnerCode = await this.assertValidHubPartnerCode(
-          userData.hubPartnerCode,
-        );
+        userData.hubPartnerCode =
+          await this.resolveValidHubPartnerCodeOrGlobal(userData.hubPartnerCode);
       } else {
         userData.hubPartnerCode = await this.resolveHubPartnerCodeForCountry(
           userData.country,
@@ -2661,9 +2681,9 @@ export class UsersService implements OnModuleInit {
         requestedHubPartnerCode !== undefined &&
         String(requestedHubPartnerCode || '').trim()
       ) {
-        updatePayload.hubPartnerCode = await this.assertValidHubPartnerCode(
-          requestedHubPartnerCode,
-        );
+        // Missing/deleted Hub → GLOBALHUB (do not keep orphan hubPartnerCode).
+        updatePayload.hubPartnerCode =
+          await this.resolveValidHubPartnerCodeOrGlobal(requestedHubPartnerCode);
       } else if (countryChanged || becameShop) {
         updatePayload.hubPartnerCode = await this.resolveHubPartnerCodeForCountry(
           updatePayload.country ?? targetUserForHierarchy.country,
@@ -2675,6 +2695,23 @@ export class UsersService implements OnModuleInit {
         updatePayload.hubPartnerCode = await this.resolveHubPartnerCodeForCountry(
           updatePayload.country ?? targetUserForHierarchy.country,
         );
+      } else {
+        // Repair orphan stamped Hub even when admin did not touch hubPartnerCode.
+        const currentHubCode = normalizePartnerCode(
+          targetUserForHierarchy.hubPartnerCode,
+        );
+        if (currentHubCode) {
+          const repaired =
+            await this.resolveValidHubPartnerCodeOrGlobal(currentHubCode);
+          if (repaired !== currentHubCode) {
+            updatePayload.hubPartnerCode = repaired;
+          }
+        } else {
+          updatePayload.hubPartnerCode =
+            await this.resolveHubPartnerCodeForCountry(
+              updatePayload.country ?? targetUserForHierarchy.country,
+            );
+        }
       }
     }
 
