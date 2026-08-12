@@ -22,3 +22,22 @@ export function normalizeHubCountries(countries?: string[] | null): string[] {
 export function hubCountriesOverlapError(country: string): string {
   return `${country} is already assigned to another HUB. One country can only be assigned to one HUB.`;
 }
+
+/** Case-insensitive check: is `country` in the Hub's assigned countries list? */
+export function hubOwnsCountry(
+  countries: string[] | null | undefined,
+  country?: string | null,
+): boolean {
+  const target = normalizeCountryName(country).toLowerCase();
+  if (!target) return false;
+  return normalizeHubCountries(countries).some(
+    (assigned) => assigned.toLowerCase() === target,
+  );
+}
+
+export function hubCountryMismatchError(
+  hubCode: string,
+  country: string,
+): string {
+  return `Hub ID ${hubCode} is not assigned to ${country}. Select a country from this Hub's assigned countries, or enter a different Partner ID.`;
+}

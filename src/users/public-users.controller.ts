@@ -1,4 +1,4 @@
-import { Controller, Get, Param } from '@nestjs/common';
+import { Controller, Get, Param, Query } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { User, UserDocument, UserRole } from './entities/user.entity';
@@ -9,6 +9,12 @@ import {
   PARTNER_CODE_MIN_LENGTH,
   PARTNER_CODE_REGEX,
 } from '../common/partner-code';
+import {
+  hubCountryMismatchError,
+  hubOwnsCountry,
+  normalizeCountryName,
+  normalizeHubCountries,
+} from '../common/hub-countries';
 
 @Controller('public')
 export class PublicUsersController {
@@ -17,7 +23,10 @@ export class PublicUsersController {
   ) {}
 
   @Get('validate-network-id/:code')
-  async validateNetworkId(@Param('code') code: string) {
+  async validateNetworkId(
+    @Param('code') code: string,
+    @Query('country') country?: string,
+  ) {
     const partnerCode = code?.trim().toUpperCase();
 
     if (!partnerCode || !PARTNER_CODE_REGEX.test(partnerCode)) {
@@ -32,35 +41,56 @@ export class PublicUsersController {
         partnerCode,
         status: 'active',
       })
-      .select('partnerCode role firstName lastName')
+      .select('partnerCode role firstName lastName countries country')
       .lean();
 
     if (!partner) {
       return {
         valid: false,
         message:
-          'This ID was not found. Enter a valid Distributor, Representative, or Promoter ID.',
+          'This ID was not found. Enter a valid Distributor, Representative, Promoter, or Hub ID.',
       };
     }
 
+    const allowedRoles = [
+      UserRole.DISTRIBUTOR,
+      UserRole.MASTER_PARTNER,
+      UserRole.REGIONAL_PARTNER,
+      UserRole.PARTNER,
+    ];
+
+    if (!allowedRoles.includes(partner.role as UserRole)) {
+      return {
+        valid: false,
+        message:
+          'This ID was not found. Enter a valid Distributor, Representative, Promoter, or Hub ID.',
+      };
+    }
+
+    // Hub IDs require the selected country to be in the Hub's assigned countries.
     if (partner.role === UserRole.PARTNER) {
-      return {
-        valid: false,
-        message:
-          'Hub IDs are not valid Partner IDs. Enter a Distributor, Representative, or Promoter ID.',
-      };
-    }
+      const selectedCountry = normalizeCountryName(country);
+      if (!selectedCountry) {
+        return {
+          valid: false,
+          message:
+            'Select a country first to verify this Hub ID against its assigned countries.',
+        };
+      }
 
-    if (
-      partner.role !== UserRole.DISTRIBUTOR &&
-      partner.role !== UserRole.MASTER_PARTNER &&
-      partner.role !== UserRole.REGIONAL_PARTNER
-    ) {
-      return {
-        valid: false,
-        message:
-          'This ID was not found. Enter a valid Distributor, Representative, or Promoter ID.',
-      };
+      const assignedCountries = normalizeHubCountries(partner.countries);
+      if (!hubOwnsCountry(assignedCountries, selectedCountry)) {
+        return {
+          valid: false,
+          message: hubCountryMismatchError(
+            partner.partnerCode || partnerCode,
+            selectedCountry,
+          ),
+          role: partner.role,
+          roleLabel: formatRoleLabel(partner.role),
+          assignedCountries,
+        };
+      }
     }
 
     return {

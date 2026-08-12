@@ -40,6 +40,11 @@ import {
   PARTNER_CODE_MIN_LENGTH,
   PARTNER_CODE_REGEX,
 } from '../common/partner-code';
+import {
+  hubCountryMismatchError,
+  hubOwnsCountry,
+  normalizeCountryName,
+} from '../common/hub-countries';
 import { UserActivityService } from '../user-activity/user-activity.service';
 import { UserActivityAction } from '../user-activity/entities/user-activity-log.entity';
 import { parseDurationToMs } from './auth-cookies';
@@ -620,7 +625,8 @@ export class AuthService {
 
     let partner: any;
     if (userEnteredPartnerId) {
-      // Entered Partner ID may be Distributor, Representative, or Promoter (reject Hub only).
+      // Entered ID may be Distributor, Representative, Promoter, or Hub.
+      // Hub IDs additionally require selected country ∈ Hub.countries.
       const candidate = await (this.usersService as any).userModel.findOne({
         partnerCode: partnerId,
         status: 'active',
@@ -632,20 +638,29 @@ export class AuthService {
         );
       }
 
-      if (candidate.role === UserRole.PARTNER) {
-        throw new BadRequestException(
-          `Hub IDs are not valid Partner IDs. Enter a Distributor, Representative, or Promoter ID.`,
-        );
-      }
-
       if (
         candidate.role !== UserRole.DISTRIBUTOR &&
         candidate.role !== UserRole.MASTER_PARTNER &&
-        candidate.role !== UserRole.REGIONAL_PARTNER
+        candidate.role !== UserRole.REGIONAL_PARTNER &&
+        candidate.role !== UserRole.PARTNER
       ) {
         throw new BadRequestException(
           `Invalid ${NETWORK_REFERENCE_ID_LABEL}. Please check and try again.`,
         );
+      }
+
+      if (candidate.role === UserRole.PARTNER) {
+        const selectedCountry = normalizeCountryName(createUserDto.country);
+        if (!selectedCountry) {
+          throw new BadRequestException(
+            'Select a country to register with this Hub ID.',
+          );
+        }
+        if (!hubOwnsCountry(candidate.countries, selectedCountry)) {
+          throw new BadRequestException(
+            hubCountryMismatchError(candidate.partnerCode, selectedCountry),
+          );
+        }
       }
 
       partner = candidate;
