@@ -114,6 +114,11 @@ export class CreateUserDto {
   @IsOptional()
   partnerCode?: string;
 
+  /** Shop Parent Link (Hub). Admin may set; otherwise resolved from country. */
+  @IsString()
+  @IsOptional()
+  hubPartnerCode?: string;
+
   @IsString()
   @IsOptional()
   referredByPartnerCode?: string;

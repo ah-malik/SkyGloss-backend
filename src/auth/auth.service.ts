@@ -656,7 +656,12 @@ export class AuthService {
             'Select a country to register with this Hub ID.',
           );
         }
-        if (!hubOwnsCountry(candidate.countries, selectedCountry)) {
+        const hubCountries = candidate.countries?.length
+          ? candidate.countries
+          : candidate.country
+            ? [candidate.country]
+            : [];
+        if (!hubOwnsCountry(hubCountries, selectedCountry)) {
           throw new BadRequestException(
             hubCountryMismatchError(candidate.partnerCode, selectedCountry),
           );

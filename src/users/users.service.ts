@@ -293,6 +293,26 @@ export class UsersService implements OnModuleInit {
     return code || GLOBAL_HUB_PARTNER_CODE;
   }
 
+  /** Validate an explicit Parent Link (Hub) partner code. */
+  async assertValidHubPartnerCode(code?: string | null): Promise<string> {
+    const normalized = normalizePartnerCode(code || undefined);
+    if (!normalized) {
+      throw new BadRequestException('Parent Link (Hub) is required.');
+    }
+    const hub = await this.findByPartnerCode(normalized);
+    if (!hub || hub.role !== UserRole.PARTNER) {
+      throw new BadRequestException(
+        'Select a valid Hub user for Parent Link (Hub).',
+      );
+    }
+    if (hub.status && hub.status !== UserStatus.ACTIVE) {
+      throw new BadRequestException(
+        'Selected Hub must be active to assign as Parent Link.',
+      );
+    }
+    return normalized;
+  }
+
   /**
    * Keep shop.hubPartnerCode aligned with Hub territory after create/update.
    * - Shops in assigned countries → this Hub
@@ -510,8 +530,10 @@ export class UsersService implements OnModuleInit {
       delete userData.operationalSupportRatePercent;
     }
 
-    // hubPartnerCode is always server-resolved for shops — never trust client input.
-    delete userData.hubPartnerCode;
+    // hubPartnerCode: admin may set for shops; otherwise resolve from country.
+    if (userData.role !== UserRole.CERTIFIED_SHOP) {
+      delete userData.hubPartnerCode;
+    }
 
     if (userData.role === UserRole.PARTNER) {
       delete userData.referredByPartnerCode;
@@ -567,11 +589,17 @@ export class UsersService implements OnModuleInit {
       delete userData.partnerCode;
     }
 
-    // Shop Hub ownership is country-based (not REP upline).
+    // Shop Hub ownership — prefer explicit admin Parent Link, else country mapping.
     if (userData.role === UserRole.CERTIFIED_SHOP) {
-      userData.hubPartnerCode = await this.resolveHubPartnerCodeForCountry(
-        userData.country,
-      );
+      if (userData.hubPartnerCode?.trim()) {
+        userData.hubPartnerCode = await this.assertValidHubPartnerCode(
+          userData.hubPartnerCode,
+        );
+      } else {
+        userData.hubPartnerCode = await this.resolveHubPartnerCodeForCountry(
+          userData.country,
+        );
+      }
     }
 
     this.normalizeCustomCommissionRate(userData.role, userData);
@@ -2613,19 +2641,41 @@ export class UsersService implements OnModuleInit {
       delete updatePayload.countries;
     }
 
-    // Never accept client hubPartnerCode; re-resolve when shop country changes.
+    // Shop Parent Link (Hub): accept admin override, else re-resolve on country/role change.
+    const requestedHubPartnerCode =
+      updatePayload.hubPartnerCode !== undefined
+        ? updatePayload.hubPartnerCode
+        : undefined;
     delete updatePayload.hubPartnerCode;
+
     const countryChanged =
       updatePayload.country !== undefined &&
       normalizeCountryName(updatePayload.country) !==
         normalizeCountryName(targetUserForHierarchy.country);
-    if (
+    const becameShop =
       roleAfterHierarchy === UserRole.CERTIFIED_SHOP &&
-      (countryChanged || targetUserForHierarchy.role !== UserRole.CERTIFIED_SHOP)
-    ) {
-      updatePayload.hubPartnerCode = await this.resolveHubPartnerCodeForCountry(
-        updatePayload.country ?? targetUserForHierarchy.country,
-      );
+      targetUserForHierarchy.role !== UserRole.CERTIFIED_SHOP;
+
+    if (roleAfterHierarchy === UserRole.CERTIFIED_SHOP) {
+      if (
+        requestedHubPartnerCode !== undefined &&
+        String(requestedHubPartnerCode || '').trim()
+      ) {
+        updatePayload.hubPartnerCode = await this.assertValidHubPartnerCode(
+          requestedHubPartnerCode,
+        );
+      } else if (countryChanged || becameShop) {
+        updatePayload.hubPartnerCode = await this.resolveHubPartnerCodeForCountry(
+          updatePayload.country ?? targetUserForHierarchy.country,
+        );
+      } else if (
+        requestedHubPartnerCode !== undefined &&
+        !String(requestedHubPartnerCode || '').trim()
+      ) {
+        updatePayload.hubPartnerCode = await this.resolveHubPartnerCodeForCountry(
+          updatePayload.country ?? targetUserForHierarchy.country,
+        );
+      }
     }
 
     // Auto-enable map visibility when a shop is certified
@@ -4689,6 +4739,7 @@ export class UsersService implements OnModuleInit {
     }
 
     // Hear-about-us / unassigned shops may keep GLOBALHUB as referredBy stamp.
+    // Entered Hub Partner IDs are also allowed (country match enforced at registration).
     if (
       role === UserRole.CERTIFIED_SHOP &&
       isGlobalHubPartnerCode(code)
@@ -4701,6 +4752,14 @@ export class UsersService implements OnModuleInit {
       throw new BadRequestException(
         `${getParentLinkLabel(role)} is invalid: partner code not found`,
       );
+    }
+
+    // Shop may link to any active Hub via Partner ID (not only GLOBALHUB).
+    if (
+      role === UserRole.CERTIFIED_SHOP &&
+      parent.role === UserRole.PARTNER
+    ) {
+      return;
     }
 
     const roleError = validateParentRole(role, parent.role);

@@ -78,7 +78,13 @@ export class PublicUsersController {
         };
       }
 
-      const assignedCountries = normalizeHubCountries(partner.countries);
+      const assignedCountries = normalizeHubCountries(
+        partner.countries?.length
+          ? partner.countries
+          : partner.country
+            ? [partner.country]
+            : [],
+      );
       if (!hubOwnsCountry(assignedCountries, selectedCountry)) {
         return {
           valid: false,
