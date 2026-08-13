@@ -33,6 +33,12 @@ export class WithdrawalsController {
     return { available: balance, currency: 'USD' };
   }
 
+  @Get('hubs')
+  @Roles(...WITHDRAWAL_ELIGIBLE_ROLES)
+  listWithdrawalHubs(@GetUser('_id') userId: string) {
+    return this.withdrawalsService.listWithdrawalHubs(userId);
+  }
+
   @Post()
   @Roles(...WITHDRAWAL_ELIGIBLE_ROLES)
   submit(@GetUser('_id') userId: string, @Body() dto: CreateWithdrawalDto) {

@@ -58,6 +58,13 @@ export class WithdrawalRequest {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'BankDetails' })
   bankDetailsId?: Types.ObjectId;
 
+  /** Hub whose shop commissions this withdrawal is drawn from. */
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', index: true })
+  sourceHubId?: Types.ObjectId;
+
+  @Prop()
+  sourceHubPartnerCode?: string;
+
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
   hubReviewerId?: Types.ObjectId;
 

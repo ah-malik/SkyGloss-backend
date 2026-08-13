@@ -29,6 +29,7 @@ import {
   TransactionHistorySchema,
 } from './entities/transaction-history.entity';
 import { Order, OrderSchema } from '../orders/entities/order.entity';
+import { User, UserSchema } from '../users/entities/user.entity';
 import { CommissionsService } from './services/commissions.service';
 import { WithdrawalsService } from './services/withdrawals.service';
 import { WalletsService } from './services/wallets.service';
@@ -55,6 +56,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
       { name: ApprovalHistory.name, schema: ApprovalHistorySchema },
       { name: TransactionHistory.name, schema: TransactionHistorySchema },
       { name: Order.name, schema: OrderSchema },
+      { name: User.name, schema: UserSchema },
     ]),
     UsersModule,
     NotificationsModule,

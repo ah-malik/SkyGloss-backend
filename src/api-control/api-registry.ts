@@ -207,6 +207,13 @@ export const FRONTEND_APIS: ApiEndpointDef[] = [
     '/withdrawals/available-balance',
     'Available balance',
   ),
+  def(
+    'frontend',
+    'Withdrawals',
+    'GET',
+    '/withdrawals/hubs',
+    'Hubs available for withdrawal',
+  ),
   def('frontend', 'Withdrawals', 'POST', '/withdrawals', 'Submit withdrawal'),
   def('frontend', 'Withdrawals', 'GET', '/withdrawals/my', 'My withdrawals'),
   def('frontend', 'Withdrawals', 'GET', '/withdrawals/hub/pending', 'Hub pending withdrawals'),

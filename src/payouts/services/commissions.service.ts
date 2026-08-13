@@ -12,6 +12,21 @@ import { ApprovalAction, AuditService } from './audit.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { NotificationsGateway } from '../../notifications/notifications.gateway';
 import { NotificationType } from '../../notifications/entities/notification.entity';
+import { User, UserDocument, UserRole } from '../../users/entities/user.entity';
+import { UsersService } from '../../users/users.service';
+import { normalizePartnerCode } from '../../common/partner-code';
+import { GLOBAL_HUB_PARTNER_CODE } from '../../common/global-hub';
+import { normalizeHubCountries } from '../../common/hub-countries';
+
+export type WithdrawalHubBalance = {
+  hubId: string;
+  hubPartnerCode: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  countries: string[];
+  available: number;
+};
 
 @Injectable()
 export class CommissionsService {
@@ -22,6 +37,9 @@ export class CommissionsService {
     private commissionModel: Model<CommissionRecordDocument>,
     @InjectModel(Order.name)
     private orderModel: Model<OrderDocument>,
+    @InjectModel(User.name)
+    private userModel: Model<UserDocument>,
+    private usersService: UsersService,
     private auditService: AuditService,
     private notificationsService: NotificationsService,
     private notificationsGateway: NotificationsGateway,
@@ -256,6 +274,211 @@ export class CommissionsService {
     return summary;
   }
 
+  /**
+   * Hubs that have shops (or available commissions) for this recipient.
+   * Used only by Withdraw Fund — does not change combined summary totals.
+   */
+  async getAvailableByHub(userId: string): Promise<{
+    hubs: WithdrawalHubBalance[];
+    currency: string;
+  }> {
+    await this.releaseAvailableCommissions();
+
+    const user = await this.usersService.findOne(userId);
+    if (!user) return { hubs: [], currency: 'USD' };
+
+    const partnerCode = normalizePartnerCode(user.partnerCode);
+    const uid = new Types.ObjectId(userId);
+
+    const shopOr: Record<string, unknown>[] = [];
+    if (partnerCode) {
+      const codeRegex = new RegExp(
+        `^${partnerCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+        'i',
+      );
+      shopOr.push(
+        { referredByPartnerCode: codeRegex },
+        { shopIntroductionRepresentativeCode: codeRegex },
+        { partnerDevelopmentRepresentativeCode: codeRegex },
+        { shopIntroductionPromoterCode: codeRegex },
+        { partnerDevelopmentPromoterCode: codeRegex },
+      );
+    }
+
+    const [linkedShops, availableRecords] = await Promise.all([
+      shopOr.length
+        ? this.userModel
+            .find({ role: UserRole.CERTIFIED_SHOP, $or: shopOr })
+            .select('_id hubPartnerCode country')
+            .lean()
+        : Promise.resolve([]),
+      this.commissionModel
+        .find({
+          recipientUserId: uid,
+          status: CommissionLifecycleStatus.AVAILABLE,
+        })
+        .select('_id amount shopUserId orderId')
+        .lean(),
+    ]);
+
+    const recordHubMap = await this.resolveHubCodesForRecords(availableRecords);
+    const availableByHub = new Map<string, number>();
+    for (const record of availableRecords) {
+      const code =
+        recordHubMap.get(String(record._id)) || GLOBAL_HUB_PARTNER_CODE;
+      availableByHub.set(
+        code,
+        Math.round(((availableByHub.get(code) || 0) + record.amount) * 100) /
+          100,
+      );
+    }
+
+    const hubCodes = new Set<string>(availableByHub.keys());
+    const linkedShopHubs = await this.resolveHubCodesForShops(linkedShops);
+    for (const code of linkedShopHubs.values()) {
+      if (code) hubCodes.add(code);
+    }
+
+    const hubsById = new Map<string, WithdrawalHubBalance>();
+    for (const code of hubCodes) {
+      const hub = await this.usersService.findByPartnerCode(code);
+      if (!hub || hub.role !== UserRole.PARTNER) continue;
+      const hubId = hub._id.toString();
+      const amount = Math.round((availableByHub.get(code) || 0) * 100) / 100;
+      const existing = hubsById.get(hubId);
+      if (existing) {
+        existing.available = Math.round((existing.available + amount) * 100) / 100;
+        continue;
+      }
+      const countries = normalizeHubCountries(
+        hub.countries?.length
+          ? hub.countries
+          : hub.country
+            ? [hub.country]
+            : [],
+      );
+      hubsById.set(hubId, {
+        hubId,
+        hubPartnerCode: normalizePartnerCode(hub.partnerCode) || code,
+        email: hub.email || '',
+        firstName: hub.firstName || '',
+        lastName: hub.lastName || '',
+        countries,
+        available: amount,
+      });
+    }
+
+    const hubs = Array.from(hubsById.values());
+    hubs.sort((a, b) => {
+      if (b.available !== a.available) return b.available - a.available;
+      return (a.email || a.hubPartnerCode).localeCompare(
+        b.email || b.hubPartnerCode,
+      );
+    });
+
+    return { hubs, currency: 'USD' };
+  }
+
+  private async resolveHubCodesForShops(
+    shops: Array<{ _id?: unknown; hubPartnerCode?: string; country?: string }>,
+  ): Promise<Map<string, string>> {
+    const map = new Map<string, string>();
+    const cache = new Map<string, string>();
+
+    for (const shop of shops) {
+      const shopId = (shop._id as { toString(): string })?.toString?.();
+      if (!shopId) continue;
+
+      const stored = normalizePartnerCode(shop.hubPartnerCode);
+      const cacheKey = stored
+        ? `code:${stored}`
+        : `country:${(shop.country || '').trim().toLowerCase()}`;
+
+      if (!cache.has(cacheKey)) {
+        cache.set(
+          cacheKey,
+          stored
+            ? await this.usersService.resolveValidHubPartnerCodeOrGlobal(stored)
+            : await this.usersService.resolveHubPartnerCodeForCountry(
+                shop.country,
+              ),
+        );
+      }
+      map.set(shopId, cache.get(cacheKey) || GLOBAL_HUB_PARTNER_CODE);
+    }
+
+    return map;
+  }
+
+  private async resolveHubCodesForRecords(
+    records: Array<{
+      _id?: unknown;
+      shopUserId?: Types.ObjectId;
+      orderId?: Types.ObjectId;
+    }>,
+  ): Promise<Map<string, string>> {
+    const result = new Map<string, string>();
+    if (!records.length) return result;
+
+    const shopIds = new Set<string>();
+    const ordersNeedingShop: Array<{ recordId: string; orderId: string }> = [];
+
+    for (const record of records) {
+      const recordId = (record._id as { toString(): string })?.toString?.();
+      if (!recordId) continue;
+      if (record.shopUserId) {
+        shopIds.add(record.shopUserId.toString());
+      } else if (record.orderId) {
+        ordersNeedingShop.push({
+          recordId,
+          orderId: record.orderId.toString(),
+        });
+      }
+    }
+
+    const orderShopMap = new Map<string, string>();
+    if (ordersNeedingShop.length) {
+      const orders = await this.orderModel
+        .find({
+          _id: { $in: ordersNeedingShop.map((o) => o.orderId) },
+        })
+        .select('user')
+        .lean();
+      for (const order of orders) {
+        const shopId =
+          (order.user as { _id?: { toString(): string } })?._id?.toString?.() ||
+          String(order.user || '');
+        if (shopId) {
+          orderShopMap.set(String(order._id), shopId);
+          shopIds.add(shopId);
+        }
+      }
+    }
+
+    const shops = shopIds.size
+      ? await this.userModel
+          .find({ _id: { $in: Array.from(shopIds) } })
+          .select('hubPartnerCode country')
+          .lean()
+      : [];
+    const shopHubMap = await this.resolveHubCodesForShops(shops);
+
+    for (const record of records) {
+      const recordId = (record._id as { toString(): string })?.toString?.();
+      if (!recordId) continue;
+      let shopId = record.shopUserId?.toString();
+      if (!shopId && record.orderId) {
+        shopId = orderShopMap.get(record.orderId.toString());
+      }
+      result.set(
+        recordId,
+        shopHubMap.get(shopId || '') || GLOBAL_HUB_PARTNER_CODE,
+      );
+    }
+
+    return result;
+  }
+
   async listForUser(
     userId: string,
     filters?: { status?: string; page?: number; limit?: number },
@@ -287,6 +510,7 @@ export class CommissionsService {
   async lockCommissionsForWithdrawal(
     userId: string,
     amount: number,
+    hubPartnerCode?: string,
   ): Promise<{ recordIds: Types.ObjectId[]; total: number }> {
     const available = await this.commissionModel
       .find({
@@ -294,6 +518,15 @@ export class CommissionsService {
         status: CommissionLifecycleStatus.AVAILABLE,
       })
       .sort({ availableAt: 1 });
+
+    let eligible = available;
+    const targetHub = normalizePartnerCode(hubPartnerCode);
+    if (targetHub) {
+      const hubMap = await this.resolveHubCodesForRecords(available);
+      eligible = available.filter(
+        (record) => hubMap.get(record._id.toString()) === targetHub,
+      );
+    }
 
     const target = Math.round(amount * 100) / 100;
     if (target <= 0) {
@@ -307,7 +540,7 @@ export class CommissionsService {
       lockAmount?: number;
     }> = [];
 
-    for (const record of available) {
+    for (const record of eligible) {
       if (runningTotal >= target) break;
 
       const recordAmount = Math.round(record.amount * 100) / 100;

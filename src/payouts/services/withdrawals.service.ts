@@ -98,6 +98,10 @@ export class WithdrawalsService {
     return summary.available;
   }
 
+  async listWithdrawalHubs(userId: string) {
+    return this.commissionsService.getAvailableByHub(userId);
+  }
+
   async submitWithdrawal(userId: string, dto: CreateWithdrawalDto) {
     const user = await this.usersService.findOne(userId);
     if (!user) throw new NotFoundException('User not found');
@@ -116,7 +120,34 @@ export class WithdrawalsService {
       );
     }
 
-    const available = await this.getAvailableBalance(userId);
+    const hubBalances = await this.commissionsService.getAvailableByHub(userId);
+    const hubsWithBalance = hubBalances.hubs.filter((h) => h.available > 0);
+    if (hubsWithBalance.length > 1 && !dto.hubId) {
+      throw new BadRequestException(
+        'Please select a hub. Withdrawals cannot combine commissions from different hubs.',
+      );
+    }
+
+    let sourceHub: {
+      hubId: string;
+      hubPartnerCode: string;
+    } | null = null;
+    let available = await this.getAvailableBalance(userId);
+
+    if (dto.hubId) {
+      const selected = hubBalances.hubs.find((h) => h.hubId === dto.hubId);
+      if (!selected) {
+        throw new BadRequestException(
+          'Selected hub is not available for withdrawal.',
+        );
+      }
+      sourceHub = {
+        hubId: selected.hubId,
+        hubPartnerCode: selected.hubPartnerCode,
+      };
+      available = selected.available;
+    }
+
     const amount = Math.round(dto.amount * 100) / 100;
     if (amount <= 0 || amount > available) {
       throw new BadRequestException(
@@ -136,6 +167,7 @@ export class WithdrawalsService {
       const locked = await this.commissionsService.lockCommissionsForWithdrawal(
         userId,
         amount,
+        sourceHub?.hubPartnerCode,
       );
       recordIds = locked.recordIds;
       lockedTotal = locked.total;
@@ -155,6 +187,12 @@ export class WithdrawalsService {
       status: initialStatus,
       commissionRecordIds: recordIds,
       bankDetailsId: bank?._id,
+      ...(sourceHub
+        ? {
+            sourceHubId: new Types.ObjectId(sourceHub.hubId),
+            sourceHubPartnerCode: sourceHub.hubPartnerCode,
+          }
+        : {}),
     });
 
     await this.commissionModel.updateMany(
@@ -214,8 +252,9 @@ export class WithdrawalsService {
         ? ' (awaiting bank details from requester)'
         : '';
 
-    const hubUsers = await this.usersService.findOwningHubPartners(
+    const hubUsers = await this.resolveReviewHubs(
       user._id.toString(),
+      request.sourceHubId?.toString(),
     );
     for (const hub of hubUsers) {
       await this.pushNotification({
@@ -272,6 +311,7 @@ export class WithdrawalsService {
     const items = await this.withdrawalModel
       .find({ userId: new Types.ObjectId(userId) })
       .sort({ createdAt: -1 })
+      .populate('sourceHubId', 'email partnerCode firstName lastName countries country')
       .lean();
     return items.map((w) => this.formatWithdrawal(w));
   }
@@ -331,12 +371,40 @@ export class WithdrawalsService {
     return owners.some((o) => o._id.toString() === hubId);
   }
 
+  private resolveSourceHubId(w: Record<string, any>): string {
+    const source = w.sourceHubId;
+    if (!source) return '';
+    if (typeof source === 'string') return source;
+    if (source._id) return source._id.toString();
+    if (typeof source.toString === 'function') {
+      const asString = source.toString();
+      if (asString && asString !== '[object Object]') return asString;
+    }
+    return String(source);
+  }
+
+  private async resolveReviewHubs(
+    requesterId: string,
+    sourceHubId?: string,
+  ) {
+    if (sourceHubId) {
+      const hub = await this.usersService.findOne(sourceHubId);
+      return hub?.role === UserRole.PARTNER ? [hub] : [];
+    }
+    return this.usersService.findOwningHubPartners(requesterId);
+  }
+
   private async filterWithdrawalsForHub(
     hubId: string,
     withdrawals: Record<string, any>[],
   ): Promise<Record<string, any>[]> {
     const items: Record<string, any>[] = [];
     for (const w of withdrawals) {
+      const sourceHubId = this.resolveSourceHubId(w);
+      if (sourceHubId) {
+        if (sourceHubId === hubId) items.push(w);
+        continue;
+      }
       const requesterId = this.resolveRequesterId(w);
       if (!requesterId) continue;
       if (await this.isHubOwnerOfRequester(hubId, requesterId)) {
@@ -396,7 +464,10 @@ export class WithdrawalsService {
     if (!requestId) return;
 
     const requesterId = requester?._id?.toString?.() || String(request.userId || '');
-    const owners = await this.usersService.findOwningHubPartners(requesterId);
+    const owners = await this.resolveReviewHubs(
+      requesterId,
+      this.resolveSourceHubId(request),
+    );
     const label = this.requesterLabel(requester as any);
     const amount = Number(request.requestedAmount || 0).toFixed(2);
 
@@ -470,12 +541,19 @@ export class WithdrawalsService {
       throw new ForbiddenException();
     }
 
-    const inNetwork = await this.isHubOwnerOfRequester(
-      hubId,
-      request.userId.toString(),
-    );
-    if (!inNetwork && request.userId.toString() !== hubId) {
-      throw new ForbiddenException('User is not in your network');
+    const sourceHubId = request.sourceHubId?.toString();
+    if (sourceHubId) {
+      if (sourceHubId !== hubId) {
+        throw new ForbiddenException('This withdrawal belongs to a different hub');
+      }
+    } else {
+      const inNetwork = await this.isHubOwnerOfRequester(
+        hubId,
+        request.userId.toString(),
+      );
+      if (!inNetwork && request.userId.toString() !== hubId) {
+        throw new ForbiddenException('User is not in your network');
+      }
     }
 
     if (action === 'reject') {
