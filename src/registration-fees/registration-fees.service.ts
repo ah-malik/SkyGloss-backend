@@ -3,6 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { RegistrationFeeGroup, RegistrationFeeGroupDocument } from './entities/registration-fee-group.entity';
 import { CreateRegistrationFeeGroupDto, UpdateRegistrationFeeGroupDto } from './dto/registration-fee-group.dto';
+import { countriesMatch } from '../common/country-match';
 
 @Injectable()
 export class RegistrationFeesService {
@@ -45,17 +46,14 @@ export class RegistrationFeesService {
   }
 
   async findByCountry(country: string): Promise<RegistrationFeeGroup | null> {
-    const normalizedCountry = country.toLowerCase().trim();
     const groups = await this.feeGroupModel.find({ isActive: true }).exec();
-    
-    // Exact match in countries array
-    const match = groups.find(g => 
-      g.countries.map(c => c.toLowerCase().trim()).includes(normalizedCountry)
+
+    const match = groups.find((g) =>
+      (g.countries || []).some((listed) => countriesMatch(listed, country)),
     );
 
     if (match) return match;
 
-    // Fallback to default group
-    return groups.find(g => g.isDefault) || null;
+    return groups.find((g) => g.isDefault) || null;
   }
 }

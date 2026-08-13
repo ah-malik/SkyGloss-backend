@@ -402,6 +402,13 @@ export class OrdersService implements OnModuleInit {
       currency = feeGroup.currency.toLowerCase();
       unit_amount = Math.round(feeGroup.feeAmount * 100);
       tax_amount = Math.round((feeGroup.taxAmount || 0) * 100);
+      console.log(
+        `[Stripe Registration] Fee group="${feeGroup.name}" currency=${currency} amount=${unit_amount} tax=${tax_amount} country="${country}" default=${!!feeGroup.isDefault}`,
+      );
+    } else {
+      console.log(
+        `[Stripe Registration] No fee group matched country="${country}"; using hardcoded USD $250 fallback`,
+      );
     }
 
     const totalBeforeDiscount = unit_amount + tax_amount;
