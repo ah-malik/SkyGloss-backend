@@ -103,7 +103,7 @@ export const FRONTEND_APIS: ApiEndpointDef[] = [
     'Users',
     'GET',
     '/users/me/local-representative',
-    'Get local representative',
+    'Get shop local representative and Hub/Distributor parent link',
   ),
   def('frontend', 'Users', 'PATCH', '/users/:id/transfer-shop', 'Transfer shop'),
   def('frontend', 'Users', 'PATCH', '/users/:id', 'Update user'),

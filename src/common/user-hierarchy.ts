@@ -40,9 +40,62 @@ export function shouldIncludeViewerInNetworkOrders(viewerRole?: string): boolean
   return viewerRole === UserRole.PARTNER;
 }
 
-/** Hub and Representative may update status for orders in their network. */
+/** Roles Admin may assign as Shop Parent Link (Hub dropdown). */
+export const SHOP_PARENT_LINK_ROLES = [
+  UserRole.PARTNER,
+  UserRole.DISTRIBUTOR,
+] as const;
+
+export function isShopParentLinkRole(role?: string): boolean {
+  return (
+    role === UserRole.PARTNER ||
+    role === UserRole.DISTRIBUTOR ||
+    role === 'partner' ||
+    role === 'distributor'
+  );
+}
+
+/**
+ * Whether this role can update network order status at all.
+ * Distributor only acts on shops whose Parent Link is that Distributor
+ * (enforced by canViewerManageShopOrderStatus).
+ */
 export function canManageNetworkOrderStatus(role?: string): boolean {
-  return role === UserRole.PARTNER || role === UserRole.MASTER_PARTNER;
+  return (
+    role === UserRole.PARTNER ||
+    role === UserRole.DISTRIBUTOR
+  );
+}
+
+/**
+ * Shop-scoped order actions:
+ * - Representative: view only (cannot mark Paid / Shipped).
+ * - Distributor: only shops whose Parent Link is this Distributor.
+ * - Hub: view-only when Parent Link was reassigned to a Distributor.
+ */
+export function canViewerManageShopOrderStatus(params: {
+  viewerRole?: string;
+  viewerPartnerCode?: string;
+  shopHubPartnerCode?: string;
+  shopParentRole?: string;
+}): boolean {
+  const viewerRole = params.viewerRole;
+  const viewerCode = (params.viewerPartnerCode || '').trim().toUpperCase();
+  const shopParentCode = (params.shopHubPartnerCode || '').trim().toUpperCase();
+  const shopParentRole = params.shopParentRole;
+
+  if (viewerRole === UserRole.DISTRIBUTOR || viewerRole === 'distributor') {
+    return !!viewerCode && !!shopParentCode && viewerCode === shopParentCode;
+  }
+
+  if (viewerRole === UserRole.PARTNER || viewerRole === 'partner') {
+    return (
+      shopParentRole !== UserRole.DISTRIBUTOR &&
+      shopParentRole !== 'distributor'
+    );
+  }
+
+  return false;
 }
 
 export type CommissionLike = {

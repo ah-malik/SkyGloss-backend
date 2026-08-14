@@ -223,7 +223,7 @@ export class UsersController {
 
   @Get('me/local-representative')
   getLocalRepresentative(@GetUser() user: UserDocument) {
-    return this.usersService.getLocalRepresentativeForShop(user);
+    return this.usersService.getShopProfileNetworkContacts(user);
   }
 
   @Get(':id')

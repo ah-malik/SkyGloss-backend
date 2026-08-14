@@ -65,7 +65,9 @@ export class User {
   countries?: string[];
 
   /**
-   * Owning Hub partner code for shops (set from shop.country → Hub mapping).
+   * Shop Parent Link — Hub or Distributor partner code.
+   * Default is country → Hub mapping. Admin may assign a Distributor, who then
+   * receives Hub action permissions for this shop; the territory Hub stays view-only.
    * Independent of referredByPartnerCode (REP/Promoter partner link).
    */
   @Prop({ sparse: true })

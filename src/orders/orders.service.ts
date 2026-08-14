@@ -630,7 +630,7 @@ export class OrdersService implements OnModuleInit {
   async getOrderById(id: string, viewer?: UserDocument): Promise<Order> {
     const order = await this.orderModel
       .findById(id)
-      .populate('user', 'firstName lastName email role country shopName')
+      .populate('user', 'firstName lastName email role country shopName hubPartnerCode')
       .lean();
     if (!order) {
       throw new NotFoundException('Order not found');
@@ -669,11 +669,30 @@ export class OrdersService implements OnModuleInit {
         orderUserId,
       );
       if (inNetwork) {
-        return order;
+        return this.withOrderManagementFlag(order as any, viewer);
       }
     }
 
     throw new ForbiddenException('You do not have access to this order');
+  }
+
+  private async withOrderManagementFlag(
+    order: Record<string, any>,
+    viewer: UserDocument,
+  ): Promise<any> {
+    const shop = (order.user || {}) as { hubPartnerCode?: string };
+    const parentRoles = await this.usersService.getShopParentLinkRolesByCode([
+      shop.hubPartnerCode,
+    ]);
+    const parentCode = normalizePartnerCode(shop.hubPartnerCode);
+    return {
+      ...order,
+      canManageOrderStatus: this.usersService.canViewerManageShopOrder(
+        viewer,
+        shop,
+        parentCode ? parentRoles.get(parentCode) : undefined,
+      ),
+    };
   }
 
   async createPaymentSessionForOrder(
@@ -1750,17 +1769,17 @@ export class OrdersService implements OnModuleInit {
       .find({ user: { $in: userIds } } as any)
       .populate(
         'user',
-        'firstName lastName email shopName role couponCode partnerCode referredByPartnerCode shopIntroductionRepresentativeCode city country',
+        'firstName lastName email shopName role couponCode partnerCode referredByPartnerCode shopIntroductionRepresentativeCode city country hubPartnerCode',
       )
       .sort({ createdAt: -1 })
       .lean()
       .exec();
 
-    return orders
-      .filter((order) => {
+    const visible = orders.filter((order) => {
         const orderUser = order.user as {
           _id?: unknown;
           role?: string;
+          hubPartnerCode?: string;
         } | null;
         if (!orderUser) return false;
 
@@ -1781,14 +1800,26 @@ export class OrdersService implements OnModuleInit {
         }
 
         return canViewerSeeOrderPlacerRole(viewer.role, orderUser.role);
-      })
-      .map((order) => {
+      });
+
+    const parentRoles = await this.usersService.getShopParentLinkRolesByCode(
+      visible.map((order) => (order.user as { hubPartnerCode?: string })?.hubPartnerCode),
+    );
+
+    return visible.map((order) => {
         const plain = { ...(order as any) };
         type CommissionEntry = NonNullable<Order['commissions']>[number];
         plain.commissions = filterCommissionsForViewerWithSplitContext<CommissionEntry>(
           plain.commissions,
           viewer.role,
           viewer.partnerCode,
+        );
+        const shop = (order.user || {}) as { hubPartnerCode?: string };
+        const parentCode = normalizePartnerCode(shop.hubPartnerCode);
+        plain.canManageOrderStatus = this.usersService.canViewerManageShopOrder(
+          viewer,
+          shop,
+          parentCode ? parentRoles.get(parentCode) : undefined,
         );
         return plain;
       });
@@ -2715,10 +2746,11 @@ export class OrdersService implements OnModuleInit {
     const order = await this.orderModel.findById(id).populate('user');
     if (!order) throw new NotFoundException('Order not found');
 
-    // Hub and Representative may update status only for orders in their network.
+    // Hub and acting-Hub Distributor may update status only for orders in
+    // their network (Distributor: Parent Link shops only). Representative is view-only.
     if (
       actor?.role === UserRole.PARTNER ||
-      actor?.role === UserRole.MASTER_PARTNER
+      actor?.role === UserRole.DISTRIBUTOR
     ) {
       const orderUserId =
         typeof order.user === 'object' && order.user !== null && '_id' in (order.user as object)
@@ -2731,6 +2763,24 @@ export class OrdersService implements OnModuleInit {
       if (!inNetwork) {
         throw new ForbiddenException(
           'You can only update orders from users in your network',
+        );
+      }
+
+      const shop = (order.user || {}) as { hubPartnerCode?: string };
+      const parentRoles = await this.usersService.getShopParentLinkRolesByCode([
+        shop.hubPartnerCode,
+      ]);
+      const parentCode = normalizePartnerCode(shop.hubPartnerCode);
+      const canManage = this.usersService.canViewerManageShopOrder(
+        actor,
+        shop,
+        parentCode ? parentRoles.get(parentCode) : undefined,
+      );
+      if (!canManage) {
+        throw new ForbiddenException(
+          actor.role === UserRole.PARTNER
+            ? 'This shop was assigned to a Distributor. Hub access is view-only.'
+            : 'You can only update orders for shops assigned to you as Parent Link.',
         );
       }
     }

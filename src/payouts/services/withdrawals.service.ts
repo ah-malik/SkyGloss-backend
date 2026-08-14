@@ -24,6 +24,7 @@ import { NotificationsGateway } from '../../notifications/notifications.gateway'
 import { NotificationType } from '../../notifications/entities/notification.entity';
 import { CommissionRecord, CommissionRecordDocument } from '../entities/commission-record.entity';
 import { WITHDRAWAL_ELIGIBLE_ROLES } from '../payout-roles';
+import { isShopParentLinkRole } from '../../common/user-hierarchy';
 
 @Injectable()
 export class WithdrawalsService {
@@ -256,7 +257,18 @@ export class WithdrawalsService {
       user._id.toString(),
       request.sourceHubId?.toString(),
     );
-    for (const hub of hubUsers) {
+    const shopIds = await this.getWithdrawalShopIds(request);
+    const actingDistributors =
+      await this.usersService.findActingDistributorParentsForShopIds(shopIds);
+    const reviewers = [...hubUsers];
+    const seen = new Set(hubUsers.map((h) => h._id.toString()));
+    for (const dist of actingDistributors) {
+      const id = dist._id.toString();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      reviewers.push(dist);
+    }
+    for (const hub of reviewers) {
       await this.pushNotification({
         type: NotificationType.WITHDRAWAL_SUBMITTED,
         title: 'Withdrawal Review Required',
@@ -311,7 +323,7 @@ export class WithdrawalsService {
     const items = await this.withdrawalModel
       .find({ userId: new Types.ObjectId(userId) })
       .sort({ createdAt: -1 })
-      .populate('sourceHubId', 'email partnerCode firstName lastName countries country')
+      .populate('sourceHubId', 'email partnerCode firstName lastName countries country role')
       .lean();
     return items.map((w) => this.formatWithdrawal(w));
   }
@@ -332,8 +344,11 @@ export class WithdrawalsService {
     const isHub =
       viewerRole === UserRole.PARTNER &&
       (await this.isHubOwnerOfRequester(viewerIdStr, requesterId));
+    const isActingDistributor =
+      viewerRole === UserRole.DISTRIBUTOR &&
+      (await this.canDistributorReviewWithdrawal(viewerIdStr, request));
 
-    if (!isOwner && !isAdmin && !isHub) {
+    if (!isOwner && !isAdmin && !isHub && !isActingDistributor) {
       throw new ForbiddenException();
     }
 
@@ -389,7 +404,7 @@ export class WithdrawalsService {
   ) {
     if (sourceHubId) {
       const hub = await this.usersService.findOne(sourceHubId);
-      return hub?.role === UserRole.PARTNER ? [hub] : [];
+      return hub && isShopParentLinkRole(hub.role) ? [hub] : [];
     }
     return this.usersService.findOwningHubPartners(requesterId);
   }
@@ -402,7 +417,20 @@ export class WithdrawalsService {
     for (const w of withdrawals) {
       const sourceHubId = this.resolveSourceHubId(w);
       if (sourceHubId) {
-        if (sourceHubId === hubId) items.push(w);
+        if (sourceHubId === hubId) {
+          items.push(w);
+          continue;
+        }
+        const sourceUser = await this.usersService.findOne(sourceHubId);
+        if (sourceUser?.role === UserRole.DISTRIBUTOR) {
+          const requesterId = this.resolveRequesterId(w);
+          if (
+            requesterId &&
+            (await this.isHubOwnerOfRequester(hubId, requesterId))
+          ) {
+            items.push(w);
+          }
+        }
         continue;
       }
       const requesterId = this.resolveRequesterId(w);
@@ -417,7 +445,10 @@ export class WithdrawalsService {
   async listHubNetworkWithdrawals(hubUserId: string) {
     const hubId = String(hubUserId?.toString?.() ?? hubUserId);
     const hub = await this.usersService.findOne(hubId);
-    if (!hub || hub.role !== UserRole.PARTNER) {
+    if (
+      !hub ||
+      (hub.role !== UserRole.PARTNER && hub.role !== UserRole.DISTRIBUTOR)
+    ) {
       throw new ForbiddenException('Hub access only');
     }
 
@@ -428,14 +459,22 @@ export class WithdrawalsService {
       .populate('hubReviewerId', 'firstName lastName email partnerCode')
       .lean();
 
-    const items = await this.filterWithdrawalsForHub(hubId, all);
-    return items.map((w) => this.formatWithdrawal(w));
+    const items =
+      hub.role === UserRole.DISTRIBUTOR
+        ? await this.filterWithdrawalsForActingDistributor(hubId, all)
+        : await this.filterWithdrawalsForHub(hubId, all);
+    return Promise.all(
+      items.map((w) => this.formatWithdrawalWithReviewAccess(w, hub)),
+    );
   }
 
   async listHubPending(hubUserId: string) {
     const hubId = String(hubUserId?.toString?.() ?? hubUserId);
     const hub = await this.usersService.findOne(hubId);
-    if (!hub || hub.role !== UserRole.PARTNER) {
+    if (
+      !hub ||
+      (hub.role !== UserRole.PARTNER && hub.role !== UserRole.DISTRIBUTOR)
+    ) {
       throw new ForbiddenException('Hub access only');
     }
 
@@ -445,7 +484,10 @@ export class WithdrawalsService {
       .populate('userId', 'firstName lastName email partnerCode role')
       .lean();
 
-    const items = await this.filterWithdrawalsForHub(hubId, allPending);
+    const items =
+      hub.role === UserRole.DISTRIBUTOR
+        ? await this.filterWithdrawalsForActingDistributor(hubId, allPending)
+        : await this.filterWithdrawalsForHub(hubId, allPending);
     for (const w of items) {
       await this.ensureHubNotifiedForPending(
         w,
@@ -453,7 +495,9 @@ export class WithdrawalsService {
       );
     }
 
-    return items.map((w) => this.formatWithdrawal(w));
+    return Promise.all(
+      items.map((w) => this.formatWithdrawalWithReviewAccess(w, hub)),
+    );
   }
 
   private async ensureHubNotifiedForPending(
@@ -468,10 +512,21 @@ export class WithdrawalsService {
       requesterId,
       this.resolveSourceHubId(request),
     );
+    const shopIds = await this.getWithdrawalShopIds(request);
+    const actingDistributors =
+      await this.usersService.findActingDistributorParentsForShopIds(shopIds);
+    const recipients = [...owners];
+    const seen = new Set(owners.map((h) => h._id.toString()));
+    for (const dist of actingDistributors) {
+      const id = dist._id.toString();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      recipients.push(dist);
+    }
     const label = this.requesterLabel(requester as any);
     const amount = Number(request.requestedAmount || 0).toFixed(2);
 
-    for (const hub of owners) {
+    for (const hub of recipients) {
       const hubId = hub._id.toString();
       const exists = await this.notificationsService.existsWithdrawalNotification(
         requestId,
@@ -537,14 +592,28 @@ export class WithdrawalsService {
     }
 
     const hub = await this.usersService.findOne(hubId);
-    if (!hub || hub.role !== UserRole.PARTNER) {
+    if (
+      !hub ||
+      (hub.role !== UserRole.PARTNER && hub.role !== UserRole.DISTRIBUTOR)
+    ) {
       throw new ForbiddenException();
     }
 
     const sourceHubId = request.sourceHubId?.toString();
-    if (sourceHubId) {
+    if (hub.role === UserRole.DISTRIBUTOR) {
+      const canReview = await this.canDistributorReviewWithdrawal(hubId, request);
+      if (!canReview) {
+        throw new ForbiddenException('This withdrawal is not assigned to you as Parent Link.');
+      }
+    } else if (sourceHubId) {
       if (sourceHubId !== hubId) {
         throw new ForbiddenException('This withdrawal belongs to a different hub');
+      }
+      const shopIds = await this.getWithdrawalShopIds(request);
+      if (await this.usersService.areAllShopsDelegatedToDistributor(shopIds)) {
+        throw new ForbiddenException(
+          'This shop was assigned to a Distributor. Hub access is view-only.',
+        );
       }
     } else {
       const inNetwork = await this.isHubOwnerOfRequester(
@@ -553,6 +622,12 @@ export class WithdrawalsService {
       );
       if (!inNetwork && request.userId.toString() !== hubId) {
         throw new ForbiddenException('User is not in your network');
+      }
+      const shopIds = await this.getWithdrawalShopIds(request);
+      if (await this.usersService.areAllShopsDelegatedToDistributor(shopIds)) {
+        throw new ForbiddenException(
+          'This shop was assigned to a Distributor. Hub access is view-only.',
+        );
       }
     }
 
@@ -776,6 +851,76 @@ export class WithdrawalsService {
       id: w._id?.toString?.() || w.id,
       statusLabel: this.statusLabel(w.status),
     };
+  }
+
+  private async getWithdrawalShopIds(
+    w: Record<string, any>,
+  ): Promise<string[]> {
+    const recordIds = w.commissionRecordIds || [];
+    const shopIds = new Set<string>();
+    if (recordIds.length) {
+      const records = await this.commissionModel
+        .find({ _id: { $in: recordIds } })
+        .select('shopUserId')
+        .lean();
+      for (const record of records) {
+        if (record.shopUserId) shopIds.add(String(record.shopUserId));
+      }
+    }
+    const requesterId = this.resolveRequesterId(w);
+    if (requesterId) {
+      const requester = await this.usersService.findOne(requesterId);
+      if (requester?.role === UserRole.CERTIFIED_SHOP) {
+        shopIds.add(requester._id.toString());
+      }
+    }
+    return Array.from(shopIds);
+  }
+
+  private async canDistributorReviewWithdrawal(
+    distributorId: string,
+    w: Record<string, any>,
+  ): Promise<boolean> {
+    if (this.resolveRequesterId(w) === distributorId) return false;
+    const sourceHubId = this.resolveSourceHubId(w);
+    if (sourceHubId && sourceHubId === distributorId) return true;
+    const shopIds = await this.getWithdrawalShopIds(w);
+    const acting =
+      await this.usersService.findActingDistributorParentsForShopIds(shopIds);
+    return acting.some((d) => d._id.toString() === distributorId);
+  }
+
+  private async filterWithdrawalsForActingDistributor(
+    distributorId: string,
+    withdrawals: Record<string, any>[],
+  ): Promise<Record<string, any>[]> {
+    const items: Record<string, any>[] = [];
+    for (const w of withdrawals) {
+      if (await this.canDistributorReviewWithdrawal(distributorId, w)) {
+        items.push(w);
+      }
+    }
+    return items;
+  }
+
+  private async formatWithdrawalWithReviewAccess(
+    w: Record<string, any>,
+    viewer: { _id?: { toString(): string }; role?: UserRole },
+  ) {
+    const formatted = this.formatWithdrawal(w);
+    let canReview = true;
+    if (viewer.role === UserRole.DISTRIBUTOR) {
+      canReview = await this.canDistributorReviewWithdrawal(
+        String(viewer._id),
+        w,
+      );
+    } else if (viewer.role === UserRole.PARTNER) {
+      const shopIds = await this.getWithdrawalShopIds(w);
+      canReview = !(await this.usersService.areAllShopsDelegatedToDistributor(
+        shopIds,
+      ));
+    }
+    return { ...formatted, canReview };
   }
 
   private statusLabel(status: WithdrawalStatus): string {

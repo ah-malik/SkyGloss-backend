@@ -52,13 +52,13 @@ export class WithdrawalsController {
   }
 
   @Get('hub/network')
-  @Roles(UserRole.PARTNER)
+  @Roles(UserRole.PARTNER, UserRole.DISTRIBUTOR)
   listHubNetwork(@GetUser('_id') userId: string) {
     return this.withdrawalsService.listHubNetworkWithdrawals(userId);
   }
 
   @Get('hub/pending')
-  @Roles(UserRole.PARTNER)
+  @Roles(UserRole.PARTNER, UserRole.DISTRIBUTOR)
   listHubPending(@GetUser('_id') userId: string) {
     return this.withdrawalsService.listHubPending(userId);
   }
@@ -86,7 +86,7 @@ export class WithdrawalsController {
   }
 
   @Patch(':id/hub-review')
-  @Roles(UserRole.PARTNER)
+  @Roles(UserRole.PARTNER, UserRole.DISTRIBUTOR)
   hubReview(
     @Param('id') id: string,
     @GetUser('_id') userId: string,

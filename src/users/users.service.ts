@@ -20,7 +20,9 @@ import {
 import {
   canTraverseNetwork,
   canCertifyShops,
+  canViewerManageShopOrderStatus,
   getParentLinkLabel,
+  isShopParentLinkRole,
   requiresParentLink,
   validateParentRole,
 } from '../common/user-hierarchy';
@@ -293,29 +295,29 @@ export class UsersService implements OnModuleInit {
     return code || GLOBAL_HUB_PARTNER_CODE;
   }
 
-  /** Validate an explicit Parent Link (Hub) partner code. */
+  /** Validate an explicit Parent Link partner code (Hub or Distributor). */
   async assertValidHubPartnerCode(code?: string | null): Promise<string> {
     const normalized = normalizePartnerCode(code || undefined);
     if (!normalized) {
       throw new BadRequestException('Parent Link (Hub) is required.');
     }
-    const hub = await this.findByPartnerCode(normalized);
-    if (!hub || hub.role !== UserRole.PARTNER) {
+    const parent = await this.findByPartnerCode(normalized);
+    if (!parent || !isShopParentLinkRole(parent.role)) {
       throw new BadRequestException(
-        'Select a valid Hub user for Parent Link (Hub).',
+        'Select a valid Hub or Distributor for Parent Link (Hub).',
       );
     }
-    if (hub.status && hub.status !== UserStatus.ACTIVE) {
+    if (parent.status && parent.status !== UserStatus.ACTIVE) {
       throw new BadRequestException(
-        'Selected Hub must be active to assign as Parent Link.',
+        'Selected Parent Link user must be active.',
       );
     }
-    return normalized;
+    return normalizePartnerCode(parent.partnerCode) || normalized;
   }
 
   /**
-   * Resolve Hub partner code for a shop.
-   * Missing/deleted Hub → GLOBALHUB fallback (Hub-only; other roles unchanged).
+   * Resolve Hub partner code for a shop (Hub-only).
+   * Missing/deleted Hub → GLOBALHUB fallback (used for territory / commissions).
    */
   async resolveValidHubPartnerCodeOrGlobal(
     code?: string | null,
@@ -334,8 +336,114 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
+   * Resolve Shop Parent Link (Hub or Distributor).
+   * Missing/deleted parent → GLOBALHUB fallback.
+   */
+  async resolveValidShopParentLinkOrGlobal(
+    code?: string | null,
+  ): Promise<string> {
+    const normalized = normalizePartnerCode(code || undefined);
+    if (normalized) {
+      const parent = await this.findByPartnerCode(normalized);
+      if (
+        parent &&
+        isShopParentLinkRole(parent.role) &&
+        (!parent.status || parent.status === UserStatus.ACTIVE)
+      ) {
+        return normalizePartnerCode(parent.partnerCode) || normalized;
+      }
+    }
+    return GLOBAL_HUB_PARTNER_CODE;
+  }
+
+  /**
+   * Territory Hub for commissions / payouts grouping.
+   * Distributor Parent Link does not become the commission hub — country Hub does.
+   */
+  async resolveTerritoryHubPartnerCodeForShop(shop: {
+    hubPartnerCode?: string | null;
+    country?: string | null;
+  }): Promise<string> {
+    const stored = normalizePartnerCode(shop.hubPartnerCode || undefined);
+    if (stored) {
+      const parent = await this.findByPartnerCode(stored);
+      if (
+        parent?.role === UserRole.PARTNER &&
+        (!parent.status || parent.status === UserStatus.ACTIVE)
+      ) {
+        return normalizePartnerCode(parent.partnerCode) || stored;
+      }
+    }
+    return this.resolveHubPartnerCodeForCountry(shop.country);
+  }
+
+  /**
+   * Acting Parent Link for Withdraw Funds routing (Hub or Distributor).
+   * When Admin assigns a Distributor, withdrawals should target that Distributor.
+   */
+  async resolveActingParentPartnerCodeForShop(shop: {
+    hubPartnerCode?: string | null;
+    country?: string | null;
+  }): Promise<string> {
+    const stored = normalizePartnerCode(shop.hubPartnerCode || undefined);
+    if (stored) {
+      const parent = await this.findByPartnerCode(stored);
+      if (
+        parent &&
+        isShopParentLinkRole(parent.role) &&
+        (!parent.status || parent.status === UserStatus.ACTIVE)
+      ) {
+        return normalizePartnerCode(parent.partnerCode) || stored;
+      }
+    }
+    return this.resolveHubPartnerCodeForCountry(shop.country);
+  }
+
+  async getShopParentLinkRolesByCode(
+    codes: Array<string | null | undefined>,
+  ): Promise<Map<string, string>> {
+    const unique = [
+      ...new Set(
+        codes.map((c) => normalizePartnerCode(c || undefined)).filter(Boolean),
+      ),
+    ];
+    const map = new Map<string, string>();
+    if (unique.length === 0) return map;
+    const parents = await this.userModel
+      .find({
+        $or: unique.map((code) => ({
+          partnerCode: {
+            $regex: `^${code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+            $options: 'i',
+          },
+        })),
+      })
+      .select('partnerCode role')
+      .lean()
+      .exec();
+    for (const parent of parents) {
+      const code = normalizePartnerCode(parent.partnerCode);
+      if (code) map.set(code, parent.role);
+    }
+    return map;
+  }
+
+  canViewerManageShopOrder(
+    viewer: { role?: string; partnerCode?: string },
+    shop: { hubPartnerCode?: string | null },
+    shopParentRole?: string,
+  ): boolean {
+    return canViewerManageShopOrderStatus({
+      viewerRole: viewer.role,
+      viewerPartnerCode: viewer.partnerCode,
+      shopHubPartnerCode: shop.hubPartnerCode || undefined,
+      shopParentRole,
+    });
+  }
+
+  /**
    * Keep shop.hubPartnerCode aligned with Hub territory after create/update.
-   * - Shops in assigned countries → this Hub
+   * - Shops in assigned countries → this Hub (unless Parent Link is a Distributor)
    * - Shops previously stamped to this Hub but country no longer owned → re-resolve
    */
   private async syncShopHubOwnershipForHub(
@@ -350,13 +458,31 @@ export class UsersService implements OnModuleInit {
       const countryRegex = assigned.map(
         (c) => new RegExp(`^${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
       );
-      await this.userModel.updateMany(
-        {
+      const countryShops = await this.userModel
+        .find({
           role: UserRole.CERTIFIED_SHOP,
           country: { $in: countryRegex },
-        },
-        { $set: { hubPartnerCode: code } },
+        })
+        .select('_id hubPartnerCode')
+        .lean()
+        .exec();
+      const parentRoles = await this.getShopParentLinkRolesByCode(
+        countryShops.map((s) => s.hubPartnerCode),
       );
+      const idsToStamp: string[] = [];
+      for (const shop of countryShops) {
+        const stored = normalizePartnerCode(shop.hubPartnerCode);
+        if (stored && parentRoles.get(stored) === UserRole.DISTRIBUTOR) {
+          continue;
+        }
+        idsToStamp.push(String(shop._id));
+      }
+      if (idsToStamp.length > 0) {
+        await this.userModel.updateMany(
+          { _id: { $in: idsToStamp } },
+          { $set: { hubPartnerCode: code } },
+        );
+      }
     }
 
     // Shops still pointing at this Hub whose country is no longer in territory.
@@ -609,12 +735,12 @@ export class UsersService implements OnModuleInit {
       delete userData.partnerCode;
     }
 
-    // Shop Hub ownership — prefer explicit admin Parent Link, else country mapping.
-    // Missing/deleted Hub codes fall back to GLOBALHUB.
+    // Shop Hub ownership — prefer explicit admin Parent Link (Hub or Distributor),
+    // else country mapping. Missing/deleted codes fall back to GLOBALHUB.
     if (userData.role === UserRole.CERTIFIED_SHOP) {
       if (userData.hubPartnerCode?.trim()) {
         userData.hubPartnerCode =
-          await this.resolveValidHubPartnerCodeOrGlobal(userData.hubPartnerCode);
+          await this.resolveValidShopParentLinkOrGlobal(userData.hubPartnerCode);
       } else {
         userData.hubPartnerCode = await this.resolveHubPartnerCodeForCountry(
           userData.country,
@@ -2385,7 +2511,56 @@ export class UsersService implements OnModuleInit {
       phoneNumber: rep.phoneNumber || null,
       partnerCode: rep.partnerCode,
       profileImage: rep.profileImage || null,
+      role: rep.role,
     };
+  }
+
+  private toPublicNetworkContact(user: {
+    firstName?: string;
+    lastName?: string;
+    email?: string;
+    phoneNumber?: string;
+    partnerCode?: string;
+    profileImage?: string;
+    role?: string;
+  }) {
+    const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ').trim();
+    return {
+      firstName: user.firstName,
+      lastName: user.lastName,
+      fullName: fullName || user.partnerCode || '',
+      email: user.email || null,
+      phoneNumber: user.phoneNumber || null,
+      partnerCode: user.partnerCode,
+      profileImage: user.profileImage || null,
+      role: user.role,
+    };
+  }
+
+  /** Shop Profile Settings: Local Representative plus Hub or acting Distributor. */
+  async getShopProfileNetworkContacts(user: UserDocument) {
+    if (user.role !== UserRole.CERTIFIED_SHOP) {
+      return { representative: null, parentLink: null };
+    }
+
+    const representative = await this.getLocalRepresentativeForShop(user);
+
+    let parentLink = null;
+    const actingCode = await this.resolveActingParentPartnerCodeForShop({
+      hubPartnerCode: user.hubPartnerCode,
+      country: user.country,
+    });
+    const parent = actingCode ? await this.findByPartnerCode(actingCode) : null;
+    if (parent && isShopParentLinkRole(parent.role)) {
+      parentLink = this.toPublicNetworkContact(parent);
+      const repCode = normalizePartnerCode(representative?.partnerCode);
+      const parentCode = normalizePartnerCode(parentLink.partnerCode);
+      if (repCode && parentCode && repCode === parentCode) {
+        parentLink = null;
+      }
+    }
+
+    return { representative, parentLink };
   }
 
   async update(
@@ -2661,7 +2836,7 @@ export class UsersService implements OnModuleInit {
       delete updatePayload.countries;
     }
 
-    // Shop Parent Link (Hub): accept admin override, else re-resolve on country/role change.
+    // Shop Parent Link (Hub or Distributor): accept admin override, else re-resolve on country/role change.
     const requestedHubPartnerCode =
       updatePayload.hubPartnerCode !== undefined
         ? updatePayload.hubPartnerCode
@@ -2681,9 +2856,9 @@ export class UsersService implements OnModuleInit {
         requestedHubPartnerCode !== undefined &&
         String(requestedHubPartnerCode || '').trim()
       ) {
-        // Missing/deleted Hub → GLOBALHUB (do not keep orphan hubPartnerCode).
+        // Missing/deleted Parent Link → GLOBALHUB (do not keep orphan hubPartnerCode).
         updatePayload.hubPartnerCode =
-          await this.resolveValidHubPartnerCodeOrGlobal(requestedHubPartnerCode);
+          await this.resolveValidShopParentLinkOrGlobal(requestedHubPartnerCode);
       } else if (countryChanged || becameShop) {
         updatePayload.hubPartnerCode = await this.resolveHubPartnerCodeForCountry(
           updatePayload.country ?? targetUserForHierarchy.country,
@@ -2696,15 +2871,18 @@ export class UsersService implements OnModuleInit {
           updatePayload.country ?? targetUserForHierarchy.country,
         );
       } else {
-        // Repair orphan stamped Hub even when admin did not touch hubPartnerCode.
+        // Repair orphan stamped Parent Link even when admin did not touch hubPartnerCode.
         const currentHubCode = normalizePartnerCode(
           targetUserForHierarchy.hubPartnerCode,
         );
         if (currentHubCode) {
           const repaired =
-            await this.resolveValidHubPartnerCodeOrGlobal(currentHubCode);
+            await this.resolveValidShopParentLinkOrGlobal(currentHubCode);
           if (repaired !== currentHubCode) {
-            updatePayload.hubPartnerCode = repaired;
+            updatePayload.hubPartnerCode =
+              await this.resolveHubPartnerCodeForCountry(
+                updatePayload.country ?? targetUserForHierarchy.country,
+              );
           }
         } else {
           updatePayload.hubPartnerCode =
@@ -3222,8 +3400,25 @@ export class UsersService implements OnModuleInit {
     }
 
     if (viewer.role === UserRole.DISTRIBUTOR) {
+      const parentLinkShops = await this.userModel
+        .find({
+          role: UserRole.CERTIFIED_SHOP,
+          hubPartnerCode: {
+            $regex: `^${String(partnerCode).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+            $options: 'i',
+          },
+        })
+        .select(
+          '-password -refreshTokenHash -resetPasswordToken -resetPasswordExpires',
+        )
+        .exec();
+      const shopIds = new Set(shops.map((s) => s._id.toString()));
+      const mergedShops = [
+        ...shops,
+        ...parentLinkShops.filter((s) => !shopIds.has(s._id.toString())),
+      ];
       return {
-        shops,
+        shops: mergedShops,
         promoters,
         subPromoters,
         distributors: [],
@@ -3393,6 +3588,62 @@ export class UsersService implements OnModuleInit {
       if (seen.has(id)) return false;
       seen.add(id);
       return true;
+    });
+  }
+
+  /** Distributors assigned as Shop Parent Link for the given shops. */
+  async findActingDistributorParentsForShopIds(
+    shopIds: string[],
+  ): Promise<UserDocument[]> {
+    const ids = shopIds.filter(Boolean);
+    if (!ids.length) return [];
+    const shops = await this.userModel
+      .find({
+        _id: { $in: ids },
+        role: UserRole.CERTIFIED_SHOP,
+      })
+      .select('hubPartnerCode')
+      .lean()
+      .exec();
+    const codes = [
+      ...new Set(
+        shops
+          .map((s) => normalizePartnerCode(s.hubPartnerCode))
+          .filter(Boolean),
+      ),
+    ];
+    if (!codes.length) return [];
+    return this.userModel
+      .find({
+        partnerCode: { $in: codes },
+        role: UserRole.DISTRIBUTOR,
+      })
+      .select('-password -refreshTokenHash -resetPasswordToken -resetPasswordExpires')
+      .exec();
+  }
+
+  /**
+   * True when every listed shop has a Distributor Parent Link
+   * (Hub is view-only for those shops' commission actions).
+   */
+  async areAllShopsDelegatedToDistributor(shopIds: string[]): Promise<boolean> {
+    const ids = shopIds.filter(Boolean);
+    if (!ids.length) return false;
+    const shops = await this.userModel
+      .find({
+        _id: { $in: ids },
+        role: UserRole.CERTIFIED_SHOP,
+      })
+      .select('hubPartnerCode')
+      .lean()
+      .exec();
+    if (!shops.length) return false;
+    const roles = await this.getShopParentLinkRolesByCode(
+      shops.map((s) => s.hubPartnerCode),
+    );
+    return shops.every((shop) => {
+      const code = normalizePartnerCode(shop.hubPartnerCode);
+      return !!code && roles.get(code) === UserRole.DISTRIBUTOR;
     });
   }
 

@@ -17,6 +17,7 @@ import { UsersService } from '../../users/users.service';
 import { normalizePartnerCode } from '../../common/partner-code';
 import { GLOBAL_HUB_PARTNER_CODE } from '../../common/global-hub';
 import { normalizeHubCountries } from '../../common/hub-countries';
+import { isShopParentLinkRole } from '../../common/user-hierarchy';
 
 export type WithdrawalHubBalance = {
   hubId: string;
@@ -26,6 +27,7 @@ export type WithdrawalHubBalance = {
   lastName: string;
   countries: string[];
   available: number;
+  role: string;
 };
 
 @Injectable()
@@ -342,7 +344,7 @@ export class CommissionsService {
     const hubsById = new Map<string, WithdrawalHubBalance>();
     for (const code of hubCodes) {
       const hub = await this.usersService.findByPartnerCode(code);
-      if (!hub || hub.role !== UserRole.PARTNER) continue;
+      if (!hub || !isShopParentLinkRole(hub.role)) continue;
       const hubId = hub._id.toString();
       const amount = Math.round((availableByHub.get(code) || 0) * 100) / 100;
       const existing = hubsById.get(hubId);
@@ -365,6 +367,7 @@ export class CommissionsService {
         lastName: hub.lastName || '',
         countries,
         available: amount,
+        role: hub.role,
       });
     }
 
@@ -397,11 +400,10 @@ export class CommissionsService {
       if (!cache.has(cacheKey)) {
         cache.set(
           cacheKey,
-          stored
-            ? await this.usersService.resolveValidHubPartnerCodeOrGlobal(stored)
-            : await this.usersService.resolveHubPartnerCodeForCountry(
-                shop.country,
-              ),
+          await this.usersService.resolveActingParentPartnerCodeForShop({
+            hubPartnerCode: stored,
+            country: shop.country,
+          }),
         );
       }
       map.set(shopId, cache.get(cacheKey) || GLOBAL_HUB_PARTNER_CODE);
