@@ -2545,7 +2545,8 @@ export class UsersService implements OnModuleInit {
 
     const representative = await this.getLocalRepresentativeForShop(user);
 
-    let parentLink = null;
+    let parentLink: ReturnType<UsersService['toPublicNetworkContact']> | null =
+      null;
     const actingCode = await this.resolveActingParentPartnerCodeForShop({
       hubPartnerCode: user.hubPartnerCode,
       country: user.country,
