@@ -142,6 +142,13 @@ export class Order {
   @Prop()
   shippingCompany: string;
 
+  /**
+   * Parent Link (Hub or Distributor) at order creation.
+   * Locked so later Parent Link changes do not move historical order management.
+   */
+  @Prop()
+  actingParentPartnerCode?: string;
+
   /** Set when order is first marked SHIPPED (30-day commission hold starts). */
   @Prop()
   shippedAt?: Date;

@@ -66,12 +66,24 @@ export class User {
 
   /**
    * Shop Parent Link — Hub or Distributor partner code.
-   * Default is country → Hub mapping. Admin may assign a Distributor, who then
-   * receives Hub action permissions for this shop; the territory Hub stays view-only.
+   * Default is country → Hub mapping. Admin may assign a Distributor as current
+   * Parent Link. Order/commission *management* still follows the Parent Link
+   * that owned the shop when each record was created.
    * Independent of referredByPartnerCode (REP/Promoter partner link).
    */
   @Prop({ sparse: true })
   hubPartnerCode?: string;
+
+  /**
+   * When Admin last changed this shop's Parent Link (Hub ↔ Distributor).
+   * Used to keep pre-change orders/commissions under the previous parent.
+   */
+  @Prop()
+  parentLinkAssignedAt?: Date;
+
+  /** Parent Link partner code before the last Admin change (Hub ↔ Distributor). */
+  @Prop()
+  previousParentPartnerCode?: string;
 
   @Prop()
   phoneNumber: string;

@@ -102,22 +102,49 @@ describe('user-hierarchy visibility', () => {
     ).toBe(false);
   });
 
-  it('makes Hub view-only when Parent Link is a Distributor', () => {
+  it('keeps historical Hub orders with Hub after Parent Link moves to Distributor', () => {
     expect(
       canViewerManageShopOrderStatus({
         viewerRole: 'partner',
         viewerPartnerCode: 'HUB01',
-        shopHubPartnerCode: 'DIST01',
-        shopParentRole: 'distributor',
+        actingParentPartnerCode: 'HUB01',
+        actingParentRole: 'partner',
+      }),
+    ).toBe(true);
+    expect(
+      canViewerManageShopOrderStatus({
+        viewerRole: 'distributor',
+        viewerPartnerCode: 'DIST01',
+        actingParentPartnerCode: 'HUB01',
+        actingParentRole: 'partner',
       }),
     ).toBe(false);
     expect(
       canViewerManageShopOrderStatus({
-        viewerRole: 'partner',
-        viewerPartnerCode: 'HUB01',
-        shopHubPartnerCode: 'HUB01',
-        shopParentRole: 'partner',
+        viewerRole: 'distributor',
+        viewerPartnerCode: 'DIST01',
+        actingParentPartnerCode: 'DIST01',
+        actingParentRole: 'distributor',
       }),
     ).toBe(true);
+    expect(
+      canViewerManageShopOrderStatus({
+        viewerRole: 'partner',
+        viewerPartnerCode: 'HUB01',
+        actingParentPartnerCode: 'DIST01',
+        actingParentRole: 'distributor',
+      }),
+    ).toBe(false);
+  });
+
+  it('does not let Hub manage its own non-shop orders', () => {
+    expect(
+      canViewerManageShopOrderStatus({
+        viewerRole: 'partner',
+        viewerPartnerCode: 'HUB01',
+        actingParentPartnerCode: 'HUB01',
+        orderPlacerRole: 'partner',
+      }),
+    ).toBe(false);
   });
 });

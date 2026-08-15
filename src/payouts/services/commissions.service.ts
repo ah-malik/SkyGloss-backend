@@ -12,7 +12,7 @@ import { ApprovalAction, AuditService } from './audit.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { NotificationsGateway } from '../../notifications/notifications.gateway';
 import { NotificationType } from '../../notifications/entities/notification.entity';
-import { User, UserDocument, UserRole } from '../../users/entities/user.entity';
+import { User, UserDocument } from '../../users/entities/user.entity';
 import { UsersService } from '../../users/users.service';
 import { normalizePartnerCode } from '../../common/partner-code';
 import { GLOBAL_HUB_PARTNER_CODE } from '../../common/global-hub';
@@ -48,8 +48,31 @@ export class CommissionsService {
   ) {}
 
   async syncFromShippedOrder(orderId: string, shippedAt: Date): Promise<void> {
-    const order = await this.orderModel.findById(orderId);
+    const order = await this.orderModel
+      .findById(orderId)
+      .populate(
+        'user',
+        'hubPartnerCode country parentLinkAssignedAt previousParentPartnerCode role',
+      );
     if (!order?.commissions?.length) return;
+
+    const actingParentPartnerCode =
+      await this.usersService.resolveActingParentForOrder({
+        actingParentPartnerCode: (order as any).actingParentPartnerCode,
+        createdAt: (order as any).createdAt,
+        user: order.user as {
+          hubPartnerCode?: string;
+          country?: string;
+          parentLinkAssignedAt?: Date;
+          previousParentPartnerCode?: string;
+        },
+      });
+    if (
+      actingParentPartnerCode &&
+      !normalizePartnerCode((order as any).actingParentPartnerCode)
+    ) {
+      (order as any).actingParentPartnerCode = actingParentPartnerCode;
+    }
 
     const availableAt = computeCommissionAvailableAt(shippedAt);
 
@@ -76,10 +99,22 @@ export class CommissionsService {
           existing.originalCurrency = entry.originalCurrency;
           existing.exchangeRate = entry.exchangeRate;
           existing.convertedUsdAmount = entry.convertedUsdAmount;
+          if (
+            !existing.actingParentPartnerCode &&
+            actingParentPartnerCode
+          ) {
+            existing.actingParentPartnerCode = actingParentPartnerCode;
+          }
           await existing.save();
           this.logger.log(
             `Updated PENDING_HOLD commission ${existing._id} for order ${order.orderNumber}: ${entry.percentage}% / $${entry.amount}`,
           );
+        } else if (
+          !existing.actingParentPartnerCode &&
+          actingParentPartnerCode
+        ) {
+          existing.actingParentPartnerCode = actingParentPartnerCode;
+          await existing.save();
         }
         continue;
       }
@@ -98,6 +133,7 @@ export class CommissionsService {
         shippedAt,
         availableAt,
         shopUserId: entry.shopId ? new Types.ObjectId(entry.shopId) : undefined,
+        actingParentPartnerCode,
         originalCurrency: entry.originalCurrency,
         exchangeRate: entry.exchangeRate,
         convertedUsdAmount: entry.convertedUsdAmount,
@@ -277,8 +313,9 @@ export class CommissionsService {
   }
 
   /**
-   * Hubs that have shops (or available commissions) for this recipient.
-   * Used only by Withdraw Fund — does not change combined summary totals.
+   * Withdraw Funds picker: group available commissions by the Parent Link
+   * that owned the shop when that commission was earned — never the shop's
+   * current Parent Link. Existing balances are not moved on Parent Link change.
    */
   async getAvailableByHub(userId: string): Promise<{
     hubs: WithdrawalHubBalance[];
@@ -286,42 +323,14 @@ export class CommissionsService {
   }> {
     await this.releaseAvailableCommissions();
 
-    const user = await this.usersService.findOne(userId);
-    if (!user) return { hubs: [], currency: 'USD' };
-
-    const partnerCode = normalizePartnerCode(user.partnerCode);
     const uid = new Types.ObjectId(userId);
-
-    const shopOr: Record<string, unknown>[] = [];
-    if (partnerCode) {
-      const codeRegex = new RegExp(
-        `^${partnerCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
-        'i',
-      );
-      shopOr.push(
-        { referredByPartnerCode: codeRegex },
-        { shopIntroductionRepresentativeCode: codeRegex },
-        { partnerDevelopmentRepresentativeCode: codeRegex },
-        { shopIntroductionPromoterCode: codeRegex },
-        { partnerDevelopmentPromoterCode: codeRegex },
-      );
-    }
-
-    const [linkedShops, availableRecords] = await Promise.all([
-      shopOr.length
-        ? this.userModel
-            .find({ role: UserRole.CERTIFIED_SHOP, $or: shopOr })
-            .select('_id hubPartnerCode country')
-            .lean()
-        : Promise.resolve([]),
-      this.commissionModel
-        .find({
-          recipientUserId: uid,
-          status: CommissionLifecycleStatus.AVAILABLE,
-        })
-        .select('_id amount shopUserId orderId')
-        .lean(),
-    ]);
+    const availableRecords = await this.commissionModel
+      .find({
+        recipientUserId: uid,
+        status: CommissionLifecycleStatus.AVAILABLE,
+      })
+      .select('_id amount shopUserId orderId actingParentPartnerCode')
+      .lean();
 
     const recordHubMap = await this.resolveHubCodesForRecords(availableRecords);
     const availableByHub = new Map<string, number>();
@@ -335,21 +344,16 @@ export class CommissionsService {
       );
     }
 
-    const hubCodes = new Set<string>(availableByHub.keys());
-    const linkedShopHubs = await this.resolveHubCodesForShops(linkedShops);
-    for (const code of linkedShopHubs.values()) {
-      if (code) hubCodes.add(code);
-    }
-
     const hubsById = new Map<string, WithdrawalHubBalance>();
-    for (const code of hubCodes) {
+    for (const [code, amount] of availableByHub.entries()) {
+      if (amount <= 0) continue;
       const hub = await this.usersService.findByPartnerCode(code);
       if (!hub || !isShopParentLinkRole(hub.role)) continue;
       const hubId = hub._id.toString();
-      const amount = Math.round((availableByHub.get(code) || 0) * 100) / 100;
       const existing = hubsById.get(hubId);
       if (existing) {
-        existing.available = Math.round((existing.available + amount) * 100) / 100;
+        existing.available =
+          Math.round((existing.available + amount) * 100) / 100;
         continue;
       }
       const countries = normalizeHubCountries(
@@ -366,7 +370,7 @@ export class CommissionsService {
         firstName: hub.firstName || '',
         lastName: hub.lastName || '',
         countries,
-        available: amount,
+        available: Math.round(amount * 100) / 100,
         role: hub.role,
       });
     }
@@ -382,34 +386,15 @@ export class CommissionsService {
     return { hubs, currency: 'USD' };
   }
 
-  private async resolveHubCodesForShops(
-    shops: Array<{ _id?: unknown; hubPartnerCode?: string; country?: string }>,
+  async resolveActingParentCodesForRecords(
+    records: Array<{
+      _id?: unknown;
+      shopUserId?: Types.ObjectId;
+      orderId?: Types.ObjectId;
+      actingParentPartnerCode?: string;
+    }>,
   ): Promise<Map<string, string>> {
-    const map = new Map<string, string>();
-    const cache = new Map<string, string>();
-
-    for (const shop of shops) {
-      const shopId = (shop._id as { toString(): string })?.toString?.();
-      if (!shopId) continue;
-
-      const stored = normalizePartnerCode(shop.hubPartnerCode);
-      const cacheKey = stored
-        ? `code:${stored}`
-        : `country:${(shop.country || '').trim().toLowerCase()}`;
-
-      if (!cache.has(cacheKey)) {
-        cache.set(
-          cacheKey,
-          await this.usersService.resolveActingParentPartnerCodeForShop({
-            hubPartnerCode: stored,
-            country: shop.country,
-          }),
-        );
-      }
-      map.set(shopId, cache.get(cacheKey) || GLOBAL_HUB_PARTNER_CODE);
-    }
-
-    return map;
+    return this.resolveHubCodesForRecords(records);
   }
 
   private async resolveHubCodesForRecords(
@@ -417,65 +402,110 @@ export class CommissionsService {
       _id?: unknown;
       shopUserId?: Types.ObjectId;
       orderId?: Types.ObjectId;
+      actingParentPartnerCode?: string;
     }>,
   ): Promise<Map<string, string>> {
     const result = new Map<string, string>();
     if (!records.length) return result;
 
-    const shopIds = new Set<string>();
-    const ordersNeedingShop: Array<{ recordId: string; orderId: string }> = [];
+    const unresolved: Array<{
+      recordId: string;
+      shopUserId?: string;
+      orderId?: string;
+    }> = [];
 
     for (const record of records) {
       const recordId = (record._id as { toString(): string })?.toString?.();
       if (!recordId) continue;
-      if (record.shopUserId) {
-        shopIds.add(record.shopUserId.toString());
-      } else if (record.orderId) {
-        ordersNeedingShop.push({
-          recordId,
-          orderId: record.orderId.toString(),
-        });
+      const stamped = normalizePartnerCode(record.actingParentPartnerCode);
+      if (stamped) {
+        result.set(recordId, stamped);
+        continue;
       }
+      unresolved.push({
+        recordId,
+        shopUserId: record.shopUserId?.toString(),
+        orderId: record.orderId?.toString(),
+      });
     }
 
-    const orderShopMap = new Map<string, string>();
-    if (ordersNeedingShop.length) {
-      const orders = await this.orderModel
-        .find({
-          _id: { $in: ordersNeedingShop.map((o) => o.orderId) },
-        })
-        .select('user')
-        .lean();
-      for (const order of orders) {
-        const shopId =
-          (order.user as { _id?: { toString(): string } })?._id?.toString?.() ||
-          String(order.user || '');
-        if (shopId) {
-          orderShopMap.set(String(order._id), shopId);
-          shopIds.add(shopId);
-        }
-      }
+    if (!unresolved.length) return result;
+
+    const orderIds = [
+      ...new Set(unresolved.map((r) => r.orderId).filter(Boolean)),
+    ] as string[];
+    const orders = orderIds.length
+      ? await this.orderModel
+          .find({ _id: { $in: orderIds } })
+          .select('actingParentPartnerCode createdAt user')
+          .populate(
+            'user',
+            'hubPartnerCode country parentLinkAssignedAt previousParentPartnerCode',
+          )
+          .lean()
+      : [];
+    const orderById = new Map(orders.map((order) => [String(order._id), order]));
+
+    const shopIds = new Set<string>();
+    for (const item of unresolved) {
+      if (item.shopUserId) shopIds.add(item.shopUserId);
+      const order = item.orderId ? orderById.get(item.orderId) : undefined;
+      const orderUser = order?.user as
+        | { _id?: { toString(): string } }
+        | string
+        | undefined;
+      const orderShopId =
+        typeof orderUser === 'object' && orderUser?._id
+          ? String(orderUser._id)
+          : orderUser
+            ? String(orderUser)
+            : '';
+      if (orderShopId) shopIds.add(orderShopId);
     }
 
     const shops = shopIds.size
       ? await this.userModel
           .find({ _id: { $in: Array.from(shopIds) } })
-          .select('hubPartnerCode country')
+          .select(
+            'hubPartnerCode country parentLinkAssignedAt previousParentPartnerCode',
+          )
           .lean()
       : [];
-    const shopHubMap = await this.resolveHubCodesForShops(shops);
+    const shopById = new Map(
+      shops.map((shop) => [String(shop._id), shop]),
+    );
 
-    for (const record of records) {
-      const recordId = (record._id as { toString(): string })?.toString?.();
-      if (!recordId) continue;
-      let shopId = record.shopUserId?.toString();
-      if (!shopId && record.orderId) {
-        shopId = orderShopMap.get(record.orderId.toString());
-      }
-      result.set(
-        recordId,
-        shopHubMap.get(shopId || '') || GLOBAL_HUB_PARTNER_CODE,
-      );
+    for (const item of unresolved) {
+      const order = item.orderId ? orderById.get(item.orderId) : undefined;
+      const orderUser = order?.user as
+        | {
+            _id?: { toString(): string };
+            hubPartnerCode?: string;
+            country?: string;
+            parentLinkAssignedAt?: Date;
+            previousParentPartnerCode?: string;
+          }
+        | string
+        | undefined;
+      const shopId =
+        item.shopUserId ||
+        (typeof orderUser === 'object' && orderUser?._id
+          ? String(orderUser._id)
+          : orderUser
+            ? String(orderUser)
+            : '');
+      const shop =
+        typeof orderUser === 'object'
+          ? orderUser
+          : shopById.get(shopId);
+
+      const code = await this.usersService.resolveActingParentForOrder({
+        actingParentPartnerCode: (order as { actingParentPartnerCode?: string })
+          ?.actingParentPartnerCode,
+        createdAt: (order as { createdAt?: Date })?.createdAt,
+        user: shop,
+      });
+      result.set(item.recordId, code || GLOBAL_HUB_PARTNER_CODE);
     }
 
     return result;
@@ -522,12 +552,19 @@ export class CommissionsService {
       .sort({ availableAt: 1 });
 
     let eligible = available;
+    const hubMap = await this.resolveHubCodesForRecords(available);
     const targetHub = normalizePartnerCode(hubPartnerCode);
     if (targetHub) {
-      const hubMap = await this.resolveHubCodesForRecords(available);
       eligible = available.filter(
         (record) => hubMap.get(record._id.toString()) === targetHub,
       );
+    }
+
+    for (const record of eligible) {
+      const resolved = hubMap.get(record._id.toString());
+      if (resolved && !normalizePartnerCode(record.actingParentPartnerCode)) {
+        record.actingParentPartnerCode = resolved;
+      }
     }
 
     const target = Math.round(amount * 100) / 100;
@@ -623,6 +660,7 @@ export class CommissionsService {
       availableAt: record.availableAt,
       availableConfirmedAt: record.availableConfirmedAt,
       shopUserId: record.shopUserId,
+      actingParentPartnerCode: record.actingParentPartnerCode,
       originalCurrency: record.originalCurrency,
       exchangeRate: record.exchangeRate,
       convertedUsdAmount: record.convertedUsdAmount,

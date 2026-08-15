@@ -123,23 +123,26 @@ export class WithdrawalsService {
 
     const hubBalances = await this.commissionsService.getAvailableByHub(userId);
     const hubsWithBalance = hubBalances.hubs.filter((h) => h.available > 0);
+    if (hubsWithBalance.length === 0) {
+      throw new BadRequestException('No available commission to withdraw.');
+    }
     if (hubsWithBalance.length > 1 && !dto.hubId) {
       throw new BadRequestException(
-        'Please select a hub. Withdrawals cannot combine commissions from different hubs.',
+        'Please select a Hub or Distributor. Withdrawals cannot combine commissions earned under different Parent Links.',
       );
     }
 
     let sourceHub: {
       hubId: string;
       hubPartnerCode: string;
-    } | null = null;
-    let available = await this.getAvailableBalance(userId);
+    };
+    let available: number;
 
     if (dto.hubId) {
       const selected = hubBalances.hubs.find((h) => h.hubId === dto.hubId);
-      if (!selected) {
+      if (!selected || selected.available <= 0) {
         throw new BadRequestException(
-          'Selected hub is not available for withdrawal.',
+          'Selected Hub or Distributor has no available commission from that Parent Link.',
         );
       }
       sourceHub = {
@@ -147,6 +150,12 @@ export class WithdrawalsService {
         hubPartnerCode: selected.hubPartnerCode,
       };
       available = selected.available;
+    } else {
+      sourceHub = {
+        hubId: hubsWithBalance[0].hubId,
+        hubPartnerCode: hubsWithBalance[0].hubPartnerCode,
+      };
+      available = hubsWithBalance[0].available;
     }
 
     const amount = Math.round(dto.amount * 100) / 100;
@@ -168,7 +177,7 @@ export class WithdrawalsService {
       const locked = await this.commissionsService.lockCommissionsForWithdrawal(
         userId,
         amount,
-        sourceHub?.hubPartnerCode,
+        sourceHub.hubPartnerCode,
       );
       recordIds = locked.recordIds;
       lockedTotal = locked.total;
@@ -188,12 +197,8 @@ export class WithdrawalsService {
       status: initialStatus,
       commissionRecordIds: recordIds,
       bankDetailsId: bank?._id,
-      ...(sourceHub
-        ? {
-            sourceHubId: new Types.ObjectId(sourceHub.hubId),
-            sourceHubPartnerCode: sourceHub.hubPartnerCode,
-          }
-        : {}),
+      sourceHubId: new Types.ObjectId(sourceHub.hubId),
+      sourceHubPartnerCode: sourceHub.hubPartnerCode,
     });
 
     await this.commissionModel.updateMany(
@@ -257,18 +262,7 @@ export class WithdrawalsService {
       user._id.toString(),
       request.sourceHubId?.toString(),
     );
-    const shopIds = await this.getWithdrawalShopIds(request);
-    const actingDistributors =
-      await this.usersService.findActingDistributorParentsForShopIds(shopIds);
-    const reviewers = [...hubUsers];
-    const seen = new Set(hubUsers.map((h) => h._id.toString()));
-    for (const dist of actingDistributors) {
-      const id = dist._id.toString();
-      if (seen.has(id)) continue;
-      seen.add(id);
-      reviewers.push(dist);
-    }
-    for (const hub of reviewers) {
+    for (const hub of hubUsers) {
       await this.pushNotification({
         type: NotificationType.WITHDRAWAL_SUBMITTED,
         title: 'Withdrawal Review Required',
@@ -512,17 +506,7 @@ export class WithdrawalsService {
       requesterId,
       this.resolveSourceHubId(request),
     );
-    const shopIds = await this.getWithdrawalShopIds(request);
-    const actingDistributors =
-      await this.usersService.findActingDistributorParentsForShopIds(shopIds);
     const recipients = [...owners];
-    const seen = new Set(owners.map((h) => h._id.toString()));
-    for (const dist of actingDistributors) {
-      const id = dist._id.toString();
-      if (seen.has(id)) continue;
-      seen.add(id);
-      recipients.push(dist);
-    }
     const label = this.requesterLabel(requester as any);
     const amount = Number(request.requestedAmount || 0).toFixed(2);
 
@@ -609,12 +593,6 @@ export class WithdrawalsService {
       if (sourceHubId !== hubId) {
         throw new ForbiddenException('This withdrawal belongs to a different hub');
       }
-      const shopIds = await this.getWithdrawalShopIds(request);
-      if (await this.usersService.areAllShopsDelegatedToDistributor(shopIds)) {
-        throw new ForbiddenException(
-          'This shop was assigned to a Distributor. Hub access is view-only.',
-        );
-      }
     } else {
       const inNetwork = await this.isHubOwnerOfRequester(
         hubId,
@@ -623,10 +601,9 @@ export class WithdrawalsService {
       if (!inNetwork && request.userId.toString() !== hubId) {
         throw new ForbiddenException('User is not in your network');
       }
-      const shopIds = await this.getWithdrawalShopIds(request);
-      if (await this.usersService.areAllShopsDelegatedToDistributor(shopIds)) {
+      if (!(await this.canViewerReviewWithdrawal(hubId, request))) {
         throw new ForbiddenException(
-          'This shop was assigned to a Distributor. Hub access is view-only.',
+          'This withdrawal was created after Parent Link moved. Hub access is view-only.',
         );
       }
     }
@@ -877,17 +854,44 @@ export class WithdrawalsService {
     return Array.from(shopIds);
   }
 
+  private async getWithdrawalActingParentUserIds(
+    w: Record<string, any>,
+  ): Promise<string[]> {
+    const recordIds = w.commissionRecordIds || [];
+    if (!recordIds.length) return [];
+    const records = await this.commissionModel
+      .find({ _id: { $in: recordIds } })
+      .select('actingParentPartnerCode shopUserId orderId')
+      .lean();
+    const codeMap =
+      await this.commissionsService.resolveActingParentCodesForRecords(records);
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const code of codeMap.values()) {
+      if (!code || seen.has(code)) continue;
+      seen.add(code);
+      const parent = await this.usersService.findByPartnerCode(code);
+      if (parent) ids.push(parent._id.toString());
+    }
+    return ids;
+  }
+
+  private async canViewerReviewWithdrawal(
+    viewerId: string,
+    w: Record<string, any>,
+  ): Promise<boolean> {
+    const sourceHubId = this.resolveSourceHubId(w);
+    if (sourceHubId) return sourceHubId === viewerId;
+    const parentIds = await this.getWithdrawalActingParentUserIds(w);
+    return parentIds.includes(viewerId);
+  }
+
   private async canDistributorReviewWithdrawal(
     distributorId: string,
     w: Record<string, any>,
   ): Promise<boolean> {
     if (this.resolveRequesterId(w) === distributorId) return false;
-    const sourceHubId = this.resolveSourceHubId(w);
-    if (sourceHubId && sourceHubId === distributorId) return true;
-    const shopIds = await this.getWithdrawalShopIds(w);
-    const acting =
-      await this.usersService.findActingDistributorParentsForShopIds(shopIds);
-    return acting.some((d) => d._id.toString() === distributorId);
+    return this.canViewerReviewWithdrawal(distributorId, w);
   }
 
   private async filterWithdrawalsForActingDistributor(
@@ -909,16 +913,8 @@ export class WithdrawalsService {
   ) {
     const formatted = this.formatWithdrawal(w);
     let canReview = true;
-    if (viewer.role === UserRole.DISTRIBUTOR) {
-      canReview = await this.canDistributorReviewWithdrawal(
-        String(viewer._id),
-        w,
-      );
-    } else if (viewer.role === UserRole.PARTNER) {
-      const shopIds = await this.getWithdrawalShopIds(w);
-      canReview = !(await this.usersService.areAllShopsDelegatedToDistributor(
-        shopIds,
-      ));
+    if (viewer.role === UserRole.DISTRIBUTOR || viewer.role === UserRole.PARTNER) {
+      canReview = await this.canViewerReviewWithdrawal(String(viewer._id), w);
     }
     return { ...formatted, canReview };
   }

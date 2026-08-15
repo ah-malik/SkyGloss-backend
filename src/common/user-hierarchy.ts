@@ -57,7 +57,7 @@ export function isShopParentLinkRole(role?: string): boolean {
 
 /**
  * Whether this role can update network order status at all.
- * Distributor only acts on shops whose Parent Link is that Distributor
+ * Hub/Distributor only manage records stamped to their own partner code
  * (enforced by canViewerManageShopOrderStatus).
  */
 export function canManageNetworkOrderStatus(role?: string): boolean {
@@ -68,34 +68,42 @@ export function canManageNetworkOrderStatus(role?: string): boolean {
 }
 
 /**
- * Shop-scoped order actions:
- * - Representative: view only (cannot mark Paid / Shipped).
- * - Distributor: only shops whose Parent Link is this Distributor.
- * - Hub: view-only when Parent Link was reassigned to a Distributor.
+ * Order/commission actions follow the Parent Link that owned the shop
+ * when that order was created — not the shop's current Parent Link.
+ * Hub and Distributor only manage records stamped to their own partner code.
  */
 export function canViewerManageShopOrderStatus(params: {
   viewerRole?: string;
   viewerPartnerCode?: string;
+  actingParentPartnerCode?: string;
+  actingParentRole?: string;
   shopHubPartnerCode?: string;
   shopParentRole?: string;
+  orderPlacerRole?: string;
 }): boolean {
+  if (
+    params.orderPlacerRole &&
+    params.orderPlacerRole !== UserRole.CERTIFIED_SHOP &&
+    params.orderPlacerRole !== 'certified_shop'
+  ) {
+    return false;
+  }
+
   const viewerRole = params.viewerRole;
   const viewerCode = (params.viewerPartnerCode || '').trim().toUpperCase();
-  const shopParentCode = (params.shopHubPartnerCode || '').trim().toUpperCase();
-  const shopParentRole = params.shopParentRole;
+  const actingCode = (
+    params.actingParentPartnerCode ||
+    params.shopHubPartnerCode ||
+    ''
+  )
+    .trim()
+    .toUpperCase();
 
-  if (viewerRole === UserRole.DISTRIBUTOR || viewerRole === 'distributor') {
-    return !!viewerCode && !!shopParentCode && viewerCode === shopParentCode;
+  if (!isShopParentLinkRole(viewerRole) || !viewerCode || !actingCode) {
+    return false;
   }
 
-  if (viewerRole === UserRole.PARTNER || viewerRole === 'partner') {
-    return (
-      shopParentRole !== UserRole.DISTRIBUTOR &&
-      shopParentRole !== 'distributor'
-    );
-  }
-
-  return false;
+  return viewerCode === actingCode;
 }
 
 export type CommissionLike = {

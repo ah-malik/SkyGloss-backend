@@ -65,6 +65,10 @@ export class CommissionRecord {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
   shopUserId?: Types.ObjectId;
 
+  /** Parent Link that owned this commission when the order was created. */
+  @Prop()
+  actingParentPartnerCode?: string;
+
   @Prop()
   originalCurrency?: string;
 

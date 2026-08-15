@@ -595,16 +595,13 @@ export class AuthService {
   ) {
     let partnerId = createUserDto.referredByPartnerCode?.trim().toUpperCase() || '';
     let hearAboutSource = createUserDto.hearAboutUs?.trim() || '';
+    const hearAboutDetails = createUserDto.hearAboutUsOther?.trim() || '';
 
-    if (hearAboutSource === 'Other') {
-      const otherText = createUserDto.hearAboutUsOther?.trim();
-      if (!otherText) {
-        throw new BadRequestException('Please specify how you heard about us.');
-      }
-      hearAboutSource = otherText;
-      createUserDto.hearAboutUs = otherText;
-    } else if (hearAboutSource) {
-      createUserDto.hearAboutUs = hearAboutSource;
+    if (hearAboutSource) {
+      createUserDto.hearAboutUs = hearAboutDetails
+        ? `${hearAboutSource}: ${hearAboutDetails}`
+        : hearAboutSource;
+      hearAboutSource = createUserDto.hearAboutUs;
     }
 
     const userEnteredPartnerId = !!partnerId;

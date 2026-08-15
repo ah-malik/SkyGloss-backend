@@ -378,8 +378,8 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
-   * Acting Parent Link for Withdraw Funds routing (Hub or Distributor).
-   * When Admin assigns a Distributor, withdrawals should target that Distributor.
+   * Current Parent Link (Hub or Distributor). Used to stamp *new* orders.
+   * Historical order/commission management uses resolveActingParentForOrder.
    */
   async resolveActingParentPartnerCodeForShop(shop: {
     hubPartnerCode?: string | null;
@@ -430,15 +430,78 @@ export class UsersService implements OnModuleInit {
 
   canViewerManageShopOrder(
     viewer: { role?: string; partnerCode?: string },
-    shop: { hubPartnerCode?: string | null },
-    shopParentRole?: string,
+    parent: {
+      actingParentPartnerCode?: string | null;
+      hubPartnerCode?: string | null;
+    },
+    parentRole?: string,
+    orderPlacerRole?: string,
   ): boolean {
     return canViewerManageShopOrderStatus({
       viewerRole: viewer.role,
       viewerPartnerCode: viewer.partnerCode,
-      shopHubPartnerCode: shop.hubPartnerCode || undefined,
-      shopParentRole,
+      actingParentPartnerCode: parent.actingParentPartnerCode || undefined,
+      actingParentRole: parentRole,
+      shopHubPartnerCode: parent.hubPartnerCode || undefined,
+      shopParentRole: parentRole,
+      orderPlacerRole,
     });
+  }
+
+  /**
+   * Parent Link that owns this order for management (Paid/Shipped, commission routing).
+   * 1) Locked stamp on the order (set at creation)
+   * 2) Unstamped order created before Parent Link change → previous parent / territory Hub
+   * 3) Unstamped order on a Distributor shop without a change timestamp → territory Hub
+   *    (legacy Hub → Distributor switches from before this stamp existed)
+   * 4) Otherwise the shop's current Parent Link
+   */
+  async resolveActingParentForOrder(order: {
+    actingParentPartnerCode?: string | null;
+    createdAt?: Date | string;
+    user?: {
+      hubPartnerCode?: string | null;
+      country?: string | null;
+      parentLinkAssignedAt?: Date | string;
+      previousParentPartnerCode?: string | null;
+    } | null;
+  }): Promise<string> {
+    const stamped = normalizePartnerCode(order.actingParentPartnerCode || undefined);
+    if (stamped) return stamped;
+
+    const shop = order.user || {};
+    const currentActing = await this.resolveActingParentPartnerCodeForShop({
+      hubPartnerCode: shop.hubPartnerCode,
+      country: shop.country,
+    });
+    const roles = await this.getShopParentLinkRolesByCode([currentActing]);
+    const currentRole = roles.get(currentActing);
+
+    const assignedAt = shop.parentLinkAssignedAt
+      ? new Date(shop.parentLinkAssignedAt)
+      : null;
+    const createdAt = order.createdAt ? new Date(order.createdAt) : null;
+    const createdBeforeChange =
+      !!assignedAt &&
+      !!createdAt &&
+      !Number.isNaN(assignedAt.getTime()) &&
+      !Number.isNaN(createdAt.getTime()) &&
+      createdAt < assignedAt;
+    const legacyDistributorShop =
+      currentRole === UserRole.DISTRIBUTOR && !assignedAt;
+
+    if (createdBeforeChange || legacyDistributorShop) {
+      const previous = normalizePartnerCode(
+        shop.previousParentPartnerCode || undefined,
+      );
+      if (createdBeforeChange && previous) return previous;
+      return this.resolveTerritoryHubPartnerCodeForShop({
+        hubPartnerCode: shop.hubPartnerCode,
+        country: shop.country,
+      });
+    }
+
+    return currentActing;
   }
 
   /**
@@ -745,6 +808,13 @@ export class UsersService implements OnModuleInit {
         userData.hubPartnerCode = await this.resolveHubPartnerCodeForCountry(
           userData.country,
         );
+      }
+      const initialParent = normalizePartnerCode(userData.hubPartnerCode);
+      const initialRoles = await this.getShopParentLinkRolesByCode([
+        initialParent,
+      ]);
+      if (initialParent && initialRoles.get(initialParent) === UserRole.DISTRIBUTOR) {
+        userData.parentLinkAssignedAt = new Date();
       }
     }
 
@@ -2860,6 +2930,16 @@ export class UsersService implements OnModuleInit {
         // Missing/deleted Parent Link → GLOBALHUB (do not keep orphan hubPartnerCode).
         updatePayload.hubPartnerCode =
           await this.resolveValidShopParentLinkOrGlobal(requestedHubPartnerCode);
+        const previous = normalizePartnerCode(
+          targetUserForHierarchy.hubPartnerCode,
+        );
+        const next = normalizePartnerCode(updatePayload.hubPartnerCode);
+        if (next && previous !== next) {
+          updatePayload.parentLinkAssignedAt = new Date();
+          if (previous) {
+            updatePayload.previousParentPartnerCode = previous;
+          }
+        }
       } else if (countryChanged || becameShop) {
         updatePayload.hubPartnerCode = await this.resolveHubPartnerCodeForCountry(
           updatePayload.country ?? targetUserForHierarchy.country,
@@ -3624,8 +3704,8 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
-   * True when every listed shop has a Distributor Parent Link
-   * (Hub is view-only for those shops' commission actions).
+   * True when every listed shop currently has a Distributor Parent Link.
+   * Historical order/commission review uses acting parent, not this helper.
    */
   async areAllShopsDelegatedToDistributor(shopIds: string[]): Promise<boolean> {
     const ids = shopIds.filter(Boolean);

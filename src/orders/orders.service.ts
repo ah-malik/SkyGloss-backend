@@ -566,6 +566,7 @@ export class OrdersService implements OnModuleInit {
           paymentReminderCount: 0,
           discount,
           couponCode: appliedCouponCode,
+          ...(await this.actingParentStampForUser(userId)),
           ...monetary,
         });
         await order.save();
@@ -630,7 +631,7 @@ export class OrdersService implements OnModuleInit {
   async getOrderById(id: string, viewer?: UserDocument): Promise<Order> {
     const order = await this.orderModel
       .findById(id)
-      .populate('user', 'firstName lastName email role country shopName hubPartnerCode')
+      .populate('user', 'firstName lastName email role country shopName hubPartnerCode parentLinkAssignedAt previousParentPartnerCode')
       .lean();
     if (!order) {
       throw new NotFoundException('Order not found');
@@ -680,19 +681,45 @@ export class OrdersService implements OnModuleInit {
     order: Record<string, any>,
     viewer: UserDocument,
   ): Promise<any> {
-    const shop = (order.user || {}) as { hubPartnerCode?: string };
+    const shop = (order.user || {}) as {
+      hubPartnerCode?: string;
+      country?: string;
+      role?: string;
+      parentLinkAssignedAt?: Date;
+      previousParentPartnerCode?: string;
+    };
+    const actingCode = await this.usersService.resolveActingParentForOrder({
+      actingParentPartnerCode: order.actingParentPartnerCode,
+      createdAt: order.createdAt,
+      user: shop,
+    });
     const parentRoles = await this.usersService.getShopParentLinkRolesByCode([
-      shop.hubPartnerCode,
+      actingCode,
     ]);
-    const parentCode = normalizePartnerCode(shop.hubPartnerCode);
     return {
       ...order,
       canManageOrderStatus: this.usersService.canViewerManageShopOrder(
         viewer,
-        shop,
-        parentCode ? parentRoles.get(parentCode) : undefined,
+        {
+          actingParentPartnerCode: actingCode,
+          hubPartnerCode: shop.hubPartnerCode,
+        },
+        actingCode ? parentRoles.get(actingCode) : undefined,
+        shop.role,
       ),
     };
+  }
+
+  private async actingParentStampForUser(
+    userId: string,
+  ): Promise<{ actingParentPartnerCode?: string }> {
+    const shop = await this.usersService.findOne(String(userId));
+    if (!shop || shop.role !== UserRole.CERTIFIED_SHOP) return {};
+    const code = await this.usersService.resolveActingParentPartnerCodeForShop({
+      hubPartnerCode: shop.hubPartnerCode,
+      country: shop.country,
+    });
+    return code ? { actingParentPartnerCode: code } : {};
   }
 
   async createPaymentSessionForOrder(
@@ -994,6 +1021,7 @@ export class OrdersService implements OnModuleInit {
       status: OrderStatus.PAID,
       orderNumber,
       stripeSessionId,
+      ...(await this.actingParentStampForUser(String(user._id))),
       ...monetary,
     });
 
@@ -1769,7 +1797,7 @@ export class OrdersService implements OnModuleInit {
       .find({ user: { $in: userIds } } as any)
       .populate(
         'user',
-        'firstName lastName email shopName role couponCode partnerCode referredByPartnerCode shopIntroductionRepresentativeCode city country hubPartnerCode',
+        'firstName lastName email shopName role couponCode partnerCode referredByPartnerCode shopIntroductionRepresentativeCode city country hubPartnerCode parentLinkAssignedAt previousParentPartnerCode',
       )
       .sort({ createdAt: -1 })
       .lean()
@@ -1802,11 +1830,25 @@ export class OrdersService implements OnModuleInit {
         return canViewerSeeOrderPlacerRole(viewer.role, orderUser.role);
       });
 
+    const actingCodes = await Promise.all(
+      visible.map((order) =>
+        this.usersService.resolveActingParentForOrder({
+          actingParentPartnerCode: (order as any).actingParentPartnerCode,
+          createdAt: (order as any).createdAt,
+          user: order.user as {
+            hubPartnerCode?: string;
+            country?: string;
+            parentLinkAssignedAt?: Date;
+            previousParentPartnerCode?: string;
+          },
+        }),
+      ),
+    );
     const parentRoles = await this.usersService.getShopParentLinkRolesByCode(
-      visible.map((order) => (order.user as { hubPartnerCode?: string })?.hubPartnerCode),
+      actingCodes,
     );
 
-    return visible.map((order) => {
+    return visible.map((order, index) => {
         const plain = { ...(order as any) };
         type CommissionEntry = NonNullable<Order['commissions']>[number];
         plain.commissions = filterCommissionsForViewerWithSplitContext<CommissionEntry>(
@@ -1814,12 +1856,16 @@ export class OrdersService implements OnModuleInit {
           viewer.role,
           viewer.partnerCode,
         );
-        const shop = (order.user || {}) as { hubPartnerCode?: string };
-        const parentCode = normalizePartnerCode(shop.hubPartnerCode);
+        const shop = (order.user || {}) as { hubPartnerCode?: string; role?: string };
+        const actingCode = actingCodes[index];
         plain.canManageOrderStatus = this.usersService.canViewerManageShopOrder(
           viewer,
-          shop,
-          parentCode ? parentRoles.get(parentCode) : undefined,
+          {
+            actingParentPartnerCode: actingCode,
+            hubPartnerCode: shop.hubPartnerCode,
+          },
+          actingCode ? parentRoles.get(actingCode) : undefined,
+          shop.role,
         );
         return plain;
       });
@@ -2766,21 +2812,38 @@ export class OrdersService implements OnModuleInit {
         );
       }
 
-      const shop = (order.user || {}) as { hubPartnerCode?: string };
+      const shop = (order.user || {}) as {
+        hubPartnerCode?: string;
+        country?: string;
+        role?: string;
+        parentLinkAssignedAt?: Date;
+        previousParentPartnerCode?: string;
+      };
+      const actingCode = await this.usersService.resolveActingParentForOrder({
+        actingParentPartnerCode: (order as any).actingParentPartnerCode,
+        createdAt: (order as any).createdAt,
+        user: shop,
+      });
       const parentRoles = await this.usersService.getShopParentLinkRolesByCode([
-        shop.hubPartnerCode,
+        actingCode,
       ]);
-      const parentCode = normalizePartnerCode(shop.hubPartnerCode);
       const canManage = this.usersService.canViewerManageShopOrder(
         actor,
-        shop,
-        parentCode ? parentRoles.get(parentCode) : undefined,
+        {
+          actingParentPartnerCode: actingCode,
+          hubPartnerCode: shop.hubPartnerCode,
+        },
+        actingCode ? parentRoles.get(actingCode) : undefined,
+        shop.role,
       );
       if (!canManage) {
+        const actingRole = actingCode ? parentRoles.get(actingCode) : undefined;
         throw new ForbiddenException(
           actor.role === UserRole.PARTNER
-            ? 'This shop was assigned to a Distributor. Hub access is view-only.'
-            : 'You can only update orders for shops assigned to you as Parent Link.',
+            ? actingRole === UserRole.DISTRIBUTOR
+              ? 'This order was created after Parent Link moved to a Distributor. Hub access is view-only.'
+              : 'You can only update orders created under your Hub.'
+            : 'You can only update orders created after this shop was assigned to you as Parent Link.',
         );
       }
     }
@@ -2895,7 +2958,14 @@ export class OrdersService implements OnModuleInit {
       await this.recordCouponUsageIfApplicable(updatedOrder.couponCode);
     }
 
-    return updatedOrder;
+    return actor
+      ? this.withOrderManagementFlag(
+          (updatedOrder as any).toObject
+            ? (updatedOrder as any).toObject()
+            : updatedOrder,
+          actor,
+        )
+      : updatedOrder;
   }
 
   async createOrderRequest(userId: string, createOrderDto: CreateOrderDto) {
@@ -2957,6 +3027,7 @@ export class OrdersService implements OnModuleInit {
             orderFlow: 'request',
             discount,
             couponCode: appliedCouponCode,
+            ...(await this.actingParentStampForUser(userId)),
             ...monetary,
           });
           savedOrder = await order.save();
@@ -3118,6 +3189,7 @@ export class OrdersService implements OnModuleInit {
           orderNumber,
           orderFlow: 'request',
           discount: 0,
+          ...(await this.actingParentStampForUser(String(shop._id))),
           ...monetary,
         });
         savedOrder = await order.save();
