@@ -2607,19 +2607,37 @@ export class UsersService implements OnModuleInit {
     };
   }
 
-  /** Shop Profile Settings: Local Representative plus Hub or acting Distributor. */
-  async getShopProfileNetworkContacts(user: UserDocument) {
+  /** Shop Profile Settings: Operational Support Partner (REP), not Shop Intro. */
+  async getOperationalSupportPartnerForShop(user: UserDocument) {
     if (user.role !== UserRole.CERTIFIED_SHOP) {
+      return null;
+    }
+
+    const osCode = normalizePartnerCode(user.operationalSupportRepresentativeCode);
+    if (!osCode) return null;
+
+    const osRep = await this.findByPartnerCode(osCode);
+    if (!osRep || osRep.role !== UserRole.MASTER_PARTNER) {
+      return null;
+    }
+
+    return this.toPublicNetworkContact(osRep);
+  }
+
+  /** Shop Profile Settings: Operational Support Partner plus Hub or acting Distributor. */
+  async getShopProfileNetworkContacts(user: UserDocument) {
+    const shop = await this.userModel.findById(user._id).exec();
+    if (!shop || shop.role !== UserRole.CERTIFIED_SHOP) {
       return { representative: null, parentLink: null };
     }
 
-    const representative = await this.getLocalRepresentativeForShop(user);
+    const representative = await this.getOperationalSupportPartnerForShop(shop);
 
     let parentLink: ReturnType<UsersService['toPublicNetworkContact']> | null =
       null;
     const actingCode = await this.resolveActingParentPartnerCodeForShop({
-      hubPartnerCode: user.hubPartnerCode,
-      country: user.country,
+      hubPartnerCode: shop.hubPartnerCode,
+      country: shop.country,
     });
     const parent = actingCode ? await this.findByPartnerCode(actingCode) : null;
     if (parent && isShopParentLinkRole(parent.role)) {

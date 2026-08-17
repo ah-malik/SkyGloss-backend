@@ -13,15 +13,11 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { UserRole } from '../users/entities/user.entity';
-import { WsAuthService } from '../auth/ws-auth.service';
 
 @Controller('chat')
 @UseGuards(JwtAuthGuard)
 export class ChatController {
-  constructor(
-    private readonly chatService: ChatService,
-    private readonly wsAuthService: WsAuthService,
-  ) {}
+  constructor(private readonly chatService: ChatService) {}
 
   private currentUserId(req: any): string {
     return (
@@ -39,15 +35,10 @@ export class ChatController {
 
     const userId = this.currentUserId(req);
     const role = req.user?.role;
-    const roomOwnerId = room.userId?.toString?.();
-
-    if (roomOwnerId && roomOwnerId === userId) {
-      return room;
+    if (!this.chatService.canUserViewRoom(room, userId, role)) {
+      throw new ForbiddenException('You do not have access to this chat room');
     }
-    if (this.wsAuthService.canAccessOtherUserRooms(role)) {
-      return room;
-    }
-    throw new ForbiddenException('You do not have access to this chat room');
+    return room;
   }
 
   @Post('room')
@@ -62,28 +53,8 @@ export class ChatController {
     },
   ) {
     const actorId = this.currentUserId(req);
-    const role = req.user?.role;
     const requestedUserId = body.userId?.toString?.() || actorId;
-
-    // Partners/admins may open a room for a shop; everyone else only for themselves.
-    if (
-      requestedUserId !== actorId &&
-      !this.wsAuthService.canAccessOtherUserRooms(role)
-    ) {
-      throw new ForbiddenException('Cannot create a chat room for another user');
-    }
-
-    const isOwnRoom = requestedUserId === actorId;
-    return this.chatService.createOrGetRoom({
-      userId: requestedUserId,
-      userName: isOwnRoom
-        ? this.wsAuthService.displayName(this.wsAuthService.toWsUser(req.user))
-        : body.userName || 'User',
-      userEmail: isOwnRoom
-        ? req.user?.email || body.userEmail || ''
-        : body.userEmail || '',
-      userType: isOwnRoom ? role : body.userType || 'certified_shop',
-    });
+    return this.chatService.openDirectRoom(req.user, requestedUserId);
   }
 
   @Get('rooms')

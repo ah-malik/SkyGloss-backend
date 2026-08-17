@@ -121,9 +121,9 @@ export class WsAuthService {
     return name || user.email || 'User';
   }
 
-  /** Admin or partner-network roles may open another user's chat room. */
+  /** Admin may view any chat room for monitoring; partners cannot. */
   canAccessOtherUserRooms(role: string): boolean {
-    return role === UserRole.ADMIN || isPartnerNetworkRole(role);
+    return role === UserRole.ADMIN;
   }
 
   isAdmin(role: string): boolean {

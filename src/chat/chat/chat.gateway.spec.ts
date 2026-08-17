@@ -3,7 +3,6 @@ import { ChatGateway } from './chat.gateway';
 import { ChatService } from '../chat.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { NotificationsGateway } from '../../notifications/notifications.gateway';
-import { UsersService } from '../../users/users.service';
 import { WsAuthService } from '../../auth/ws-auth.service';
 
 describe('ChatGateway', () => {
@@ -16,7 +15,6 @@ describe('ChatGateway', () => {
         { provide: ChatService, useValue: {} },
         { provide: NotificationsService, useValue: {} },
         { provide: NotificationsGateway, useValue: {} },
-        { provide: UsersService, useValue: {} },
         { provide: WsAuthService, useValue: { authenticateSocket: jest.fn() } },
       ],
     }).compile();

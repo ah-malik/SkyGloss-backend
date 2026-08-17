@@ -472,13 +472,14 @@ export class UsersController {
       isTrainingComplete: true,
     } as any, user);
 
-    // Ensure they have an active chat room implicitly connected to them
-    const existingRoom = await this.chatService.createOrGetRoom({
-      userId: user._id.toString(),
-      userName: `${user.firstName} ${user.lastName}`,
-      userEmail: user.email || 'no-email@skygloss.com',
-      userType: user.role,
-    });
+    // Open a private 1-to-1 room with the shop's assigned chat partner when available
+    let roomId: any = null;
+    try {
+      const room = await this.chatService.openDirectRoom(user);
+      roomId = (room as any)?._id ?? null;
+    } catch {
+      roomId = null;
+    }
 
     const notificationMessage = `${user.firstName} ${user.lastName} has 100% completed all available SkyGloss training courses.`;
 
@@ -517,7 +518,10 @@ export class UsersController {
       console.error('Failed to send training complete email:', err);
     });
 
-    return { message: 'Training completion submitted successfully.', roomId: (existingRoom as any)._id };
+    return {
+      message: 'Training completion submitted successfully.',
+      roomId,
+    };
   }
 
 }
