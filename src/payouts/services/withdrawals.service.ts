@@ -25,6 +25,8 @@ import { NotificationType } from '../../notifications/entities/notification.enti
 import { CommissionRecord, CommissionRecordDocument } from '../entities/commission-record.entity';
 import { WITHDRAWAL_ELIGIBLE_ROLES } from '../payout-roles';
 import { isShopParentLinkRole } from '../../common/user-hierarchy';
+import { WisePayoutError, WisePayoutResult, WiseService } from './wise.service';
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class WithdrawalsService {
@@ -40,7 +42,22 @@ export class WithdrawalsService {
     private usersService: UsersService,
     private notificationsService: NotificationsService,
     private notificationsGateway: NotificationsGateway,
+    private wiseService: WiseService,
   ) {}
+
+  private wiseErrorMessage(err: unknown): string {
+    if (err instanceof BadRequestException) {
+      const res = err.getResponse();
+      if (typeof res === 'string') return res;
+      if (res && typeof res === 'object' && 'message' in res) {
+        const m = (res as { message: string | string[] }).message;
+        return Array.isArray(m) ? m.join('; ') : String(m);
+      }
+      return err.message;
+    }
+    if (err instanceof Error) return err.message;
+    return 'Wise payout failed';
+  }
 
   private async pushNotification(data: {
     type: NotificationType;
@@ -731,36 +748,129 @@ export class WithdrawalsService {
       return this.enrichWithdrawal(request);
     }
 
-    // Approve → simulate Wise transfer (integrate Wise API when configured)
-    request.status = WithdrawalStatus.ADMIN_APPROVED;
-    request.adminReviewerId = new Types.ObjectId(adminUserId);
-    request.adminReviewedAt = new Date();
-    request.adminReviewNote = note;
-    await request.save();
+    if (!request.bankDetailsId) {
+      throw new BadRequestException(
+        'This withdrawal has no bank details. The requester must add a bank account before Wise payout.',
+      );
+    }
 
-    request.status = WithdrawalStatus.PAYMENT_PROCESSING;
-    request.wiseTransferReference = `WISE-${Date.now()}`;
-    await request.save();
+    const bank = await this.bankDetailsService.getByIdForAdminReview(
+      request.bankDetailsId.toString(),
+    );
+    const requester = await this.usersService.findOne(request.userId.toString());
+    if (!requester) throw new NotFoundException('Requester not found');
+
+    if (!request.wiseCustomerTransactionId) {
+      request.wiseCustomerTransactionId = randomUUID();
+    }
+
+    const locked = await this.withdrawalModel.findOneAndUpdate(
+      {
+        _id: request._id,
+        status: WithdrawalStatus.SENT_TO_ADMIN,
+      },
+      {
+        $set: {
+          status: WithdrawalStatus.PAYMENT_PROCESSING,
+          adminReviewerId: new Types.ObjectId(adminUserId),
+          adminReviewedAt: new Date(),
+          adminReviewNote: note,
+          wiseCustomerTransactionId: request.wiseCustomerTransactionId,
+        },
+        $unset: { wiseFailureReason: 1 },
+      },
+      { new: true },
+    );
+    if (!locked) {
+      throw new BadRequestException(
+        'Withdrawal is no longer awaiting admin approval',
+      );
+    }
+
+    let payout: WisePayoutResult;
+    try {
+      payout = await this.wiseService.sendPayout({
+        amount: locked.requestedAmount,
+        reference: locked.requestNumber,
+        customerTransactionId: locked.wiseCustomerTransactionId,
+        existingRecipientId: locked.wiseRecipientId,
+        existingTransferId: locked.wiseTransferId,
+        bank: {
+          accountHolderName: bank.accountHolderName,
+          bankName: bank.bankName,
+          iban: bank.iban,
+          accountNumber: bank.accountNumber,
+          routingNumber: bank.routingNumber,
+          swiftBic: bank.swiftBic,
+          country: bank.country,
+          currency: bank.currency,
+        },
+        recipient: {
+          email: requester.email,
+          firstName: requester.firstName,
+          lastName: requester.lastName,
+          address: requester.address,
+          streetAddress: requester.streetAddress,
+          city: requester.city,
+          zipCode: requester.zipCode,
+          country: requester.country,
+        },
+      });
+    } catch (err) {
+      const message = this.wiseErrorMessage(err);
+      const partial = err instanceof WisePayoutError ? err.partial : undefined;
+
+      locked.status = WithdrawalStatus.SENT_TO_ADMIN;
+      locked.wiseFailureReason = message;
+      if (partial?.recipientId) locked.wiseRecipientId = partial.recipientId;
+      if (partial?.transferId) locked.wiseTransferId = partial.transferId;
+      if (partial?.quoteId) locked.wiseQuoteId = partial.quoteId;
+      if (partial?.customerTransactionId) {
+        locked.wiseCustomerTransactionId = partial.customerTransactionId;
+      }
+      await locked.save();
+
+      await this.auditService.logApproval({
+        withdrawalRequestId: locked._id as Types.ObjectId,
+        action: ApprovalAction.PAYMENT_FAILED,
+        actorUserId: new Types.ObjectId(adminUserId),
+        actorRole: UserRole.ADMIN,
+        previousStatus: WithdrawalStatus.PAYMENT_PROCESSING,
+        newStatus: WithdrawalStatus.SENT_TO_ADMIN,
+        note: message,
+      });
+
+      throw new BadRequestException(message);
+    }
+
+    locked.status = WithdrawalStatus.COMPLETED;
+    locked.wiseTransferId = payout.transferId;
+    locked.wiseQuoteId = payout.quoteId;
+    locked.wiseRecipientId = payout.recipientId;
+    locked.wiseCustomerTransactionId = payout.customerTransactionId;
+    locked.wiseTransferReference = payout.reference;
+    locked.wisePayoutStatus = payout.status;
+    locked.wiseSourceAmount = payout.sourceAmount;
+    locked.wiseTargetAmount = payout.targetAmount;
+    locked.wiseFailureReason = '';
+    locked.walletDebitedAt = new Date();
+    locked.completedAt = new Date();
+    await locked.save();
 
     await this.walletsService.debitFromAdminPayout(
-      request.userId.toString(),
-      request.requestedAmount,
-      request._id.toString(),
+      locked.userId.toString(),
+      locked.requestedAmount,
+      locked._id.toString(),
       adminUserId,
     );
 
     await this.commissionsService.markWithdrawn(
-      request.commissionRecordIds,
-      request._id.toString(),
+      locked.commissionRecordIds,
+      locked._id.toString(),
     );
 
-    request.status = WithdrawalStatus.COMPLETED;
-    request.walletDebitedAt = new Date();
-    request.completedAt = new Date();
-    await request.save();
-
     await this.auditService.logApproval({
-      withdrawalRequestId: request._id as Types.ObjectId,
+      withdrawalRequestId: locked._id as Types.ObjectId,
       action: ApprovalAction.ADMIN_APPROVE,
       actorUserId: new Types.ObjectId(adminUserId),
       actorRole: UserRole.ADMIN,
@@ -769,33 +879,44 @@ export class WithdrawalsService {
     });
 
     await this.auditService.logApproval({
-      withdrawalRequestId: request._id as Types.ObjectId,
+      withdrawalRequestId: locked._id as Types.ObjectId,
       action: ApprovalAction.PAYMENT_COMPLETED,
       actorUserId: new Types.ObjectId(adminUserId),
-      metadata: { wiseReference: request.wiseTransferReference },
+      metadata: {
+        wiseReference: locked.wiseTransferReference,
+        wiseTransferId: locked.wiseTransferId,
+        wiseSourceAmount: payout.sourceAmount,
+        wiseTargetAmount: payout.targetAmount,
+      },
     });
 
     await this.auditService.logTransaction({
-      userId: request.userId,
+      userId: locked.userId,
       category: 'payout',
-      title: `Payout completed — ${request.requestNumber}`,
-      amount: request.requestedAmount,
+      title: `Wise payout completed — ${locked.requestNumber}`,
+      amount: locked.requestedAmount,
       direction: 'debit',
-      referenceId: request.requestNumber,
-      sourceDocumentId: request._id as Types.ObjectId,
+      referenceId: locked.requestNumber,
+      sourceDocumentId: locked._id as Types.ObjectId,
       sourceCollection: 'WithdrawalRequest',
+      snapshot: {
+        wiseTransferId: payout.transferId,
+        wiseReference: payout.reference,
+        sourceAmount: payout.sourceAmount,
+        targetAmount: payout.targetAmount,
+      },
     });
 
     await this.pushNotification({
       type: NotificationType.WITHDRAWAL_COMPLETED,
       title: 'Payout Completed',
-      message: `$${request.requestedAmount.toFixed(2)} has been transferred to your bank account.`,
-      user: request.userId.toString(),
+      message: `$${locked.requestedAmount.toFixed(2)} has been transferred to your bank account via Wise.`,
+      user: locked.userId.toString(),
       triggeredBy: adminUserId,
       link: '/dashboard/partner/network?tab=earnings',
     });
 
-    return this.enrichWithdrawal(request);
+    return this.enrichWithdrawal(locked);
   }
 
   async attachBankAndResume(withdrawalId: string, userId: string) {

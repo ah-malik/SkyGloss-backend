@@ -42,6 +42,7 @@ import { BankDetailsController } from './controllers/bank-details.controller';
 import { WalletsController } from './controllers/wallets.controller';
 import { AdminTransactionsController } from './controllers/admin-transactions.controller';
 import { AdminTransactionsService } from './services/admin-transactions.service';
+import { WiseService } from './services/wise.service';
 import { UsersModule } from '../users/users.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 
@@ -76,6 +77,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     AuditService,
     CommissionSchedulerService,
     AdminTransactionsService,
+    WiseService,
   ],
   exports: [CommissionsService, WithdrawalsService],
 })

@@ -58,7 +58,7 @@ export function formatRoleLabel(role?: string): string {
       return 'Sub-Promoter';
     case UserRole.CERTIFIED_SHOP:
     case 'certified_shop':
-      return 'Certified Shop';
+      return 'Shop';
     case UserRole.ADMIN:
     case 'admin':
       return 'Admin';

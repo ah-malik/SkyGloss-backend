@@ -3126,7 +3126,7 @@ export class OrdersService implements OnModuleInit {
     }
     if (shop.role !== UserRole.CERTIFIED_SHOP) {
       throw new BadRequestException(
-        'Test orders must be placed for a Certified Shop user',
+        'Test orders must be placed for a Shop user',
       );
     }
 

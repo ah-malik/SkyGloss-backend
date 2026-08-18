@@ -2815,7 +2815,13 @@ export class UsersService implements OnModuleInit {
       updatePayload.productGroup = null;
     }
     if (updatePayload.referredByPartnerCode === '') {
-      updatePayload.referredByPartnerCode = null;
+      const roleForReferral = (updatePayload.role ??
+        targetUserForHierarchy.role) as UserRole;
+      // Shop Introduction Partner is optional — same unassigned stamp as create.
+      updatePayload.referredByPartnerCode =
+        roleForReferral === UserRole.CERTIFIED_SHOP
+          ? GLOBAL_HUB_PARTNER_CODE
+          : null;
     }
 
     if (updatePayload.customCommissionRate !== undefined) {

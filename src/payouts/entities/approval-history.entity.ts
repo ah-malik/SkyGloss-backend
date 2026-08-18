@@ -13,6 +13,7 @@ export enum ApprovalAction {
   ADMIN_APPROVE = 'admin_approve',
   ADMIN_REJECT = 'admin_reject',
   PAYMENT_COMPLETED = 'payment_completed',
+  PAYMENT_FAILED = 'payment_failed',
   COMMISSION_CANCELLED = 'commission_cancelled',
 }
 

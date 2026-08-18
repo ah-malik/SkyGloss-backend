@@ -94,6 +94,30 @@ export class WithdrawalRequest {
 
   @Prop()
   wiseTransferReference?: string;
+
+  @Prop()
+  wiseTransferId?: string;
+
+  @Prop()
+  wiseQuoteId?: string;
+
+  @Prop()
+  wiseRecipientId?: string;
+
+  @Prop()
+  wiseCustomerTransactionId?: string;
+
+  @Prop()
+  wisePayoutStatus?: string;
+
+  @Prop()
+  wiseSourceAmount?: number;
+
+  @Prop()
+  wiseTargetAmount?: number;
+
+  @Prop()
+  wiseFailureReason?: string;
 }
 
 export const WithdrawalRequestSchema =
