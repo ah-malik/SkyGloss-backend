@@ -254,17 +254,28 @@ export class ChatService {
     senderName: string,
     senderType: string,
     message: string,
+    image?: { url?: string; publicId?: string },
   ): Promise<ChatMessage> {
+    const imageUrl = image?.url || undefined;
     const chatMessage = new this.chatMessageModel({
       roomId: new Types.ObjectId(roomId),
       senderName,
       senderType,
-      message,
+      message: message || '',
+      ...(imageUrl
+        ? { imageUrl, imagePublicId: image?.publicId || undefined }
+        : {}),
     });
+
+    const lastMessage = message?.trim()
+      ? message.trim()
+      : imageUrl
+        ? '📷 Photo'
+        : message;
 
     // Update room's last message
     await this.chatRoomModel.findByIdAndUpdate(roomId, {
-      lastMessage: message,
+      lastMessage,
       lastMessageAt: new Date(),
     });
 

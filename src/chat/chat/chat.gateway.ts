@@ -19,6 +19,10 @@ import {
   ADMIN_CHAT_MONITOR_ROOM,
   getOtherChatParticipantId,
 } from '../chat-connection';
+import {
+  chatPreviewText,
+  isTrustedChatImageUrl,
+} from '../chat-image.constants';
 
 type AuthedSocket = Socket & { data: { user?: WsAuthedUser } };
 
@@ -137,12 +141,22 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       roomId: string;
       senderName?: string;
       senderType?: string;
-      message: string;
+      message?: string;
+      imageUrl?: string;
+      imagePublicId?: string;
     },
     @ConnectedSocket() client: AuthedSocket,
   ) {
     const user = this.requireUser(client);
-    if (!user || !data?.roomId || !data?.message?.trim()) {
+    if (!user || !data?.roomId) {
+      return { error: 'Unauthorized' };
+    }
+
+    const messageText = (data.message || '').trim();
+    const imageUrl = isTrustedChatImageUrl(data.imageUrl)
+      ? data.imageUrl!.trim()
+      : undefined;
+    if (!messageText && !imageUrl) {
       return { error: 'Unauthorized' };
     }
 
@@ -154,13 +168,16 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // Never trust client-provided sender identity
     const senderType = this.wsAuthService.resolveSenderType(user.role);
     const senderName = this.wsAuthService.displayName(user);
-    const messageText = data.message.trim();
+    const previewText = chatPreviewText(messageText, Boolean(imageUrl));
 
     const savedMessage = await this.chatService.saveMessage(
       data.roomId,
       senderName,
       senderType,
       messageText,
+      imageUrl
+        ? { url: imageUrl, publicId: data.imagePublicId }
+        : undefined,
     );
 
     this.server.to(data.roomId.toString()).emit('new_message', savedMessage);
@@ -170,7 +187,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     this.server.to(ADMIN_CHAT_MONITOR_ROOM).emit('message_notification', {
       roomId: data.roomId.toString(),
-      message: messageText,
+      message: previewText,
       senderName,
     });
 
@@ -181,7 +198,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       if (peerIsShop) {
         this.server.to(peerId).emit('new_admin_message', {
           roomId: data.roomId.toString(),
-          message: messageText,
+          message: previewText,
           senderName,
         });
       }
@@ -192,8 +209,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         title: peerIsShop ? 'New message from Partner' : 'New message from Shop',
         message:
           peerIsShop
-            ? messageText.substring(0, 50) +
-              (messageText.length > 50 ? '...' : '')
+            ? previewText.substring(0, 50) +
+              (previewText.length > 50 ? '...' : '')
             : `Shop "${senderName}" sent a message.`,
         metadata: {
           roomId: data.roomId.toString(),
@@ -210,7 +227,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       await this.notificationsService.createOrUpdateChatNotification({
         type: NotificationType.CHAT_MESSAGE,
         title: 'New Chat Message',
-        message: `New message from ${senderName}: ${messageText.substring(0, 50)}${messageText.length > 50 ? '...' : ''}`,
+        message: `New message from ${senderName}: ${previewText.substring(0, 50)}${previewText.length > 50 ? '...' : ''}`,
         metadata: {
           roomId: data.roomId.toString(),
           senderName,

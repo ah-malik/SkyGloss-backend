@@ -14,8 +14,14 @@ export class ChatMessage {
   @Prop({ required: true })
   senderType: string; // 'user' or 'admin'
 
-  @Prop({ required: true })
+  @Prop({ default: '' })
   message: string;
+
+  @Prop()
+  imageUrl?: string;
+
+  @Prop()
+  imagePublicId?: string;
 
   @Prop({ default: false })
   isRead: boolean;
