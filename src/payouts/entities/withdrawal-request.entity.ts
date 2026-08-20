@@ -117,6 +117,18 @@ export class WithdrawalRequest {
   wiseTargetAmount?: number;
 
   @Prop()
+  wiseSourceCurrency?: string;
+
+  @Prop()
+  wiseTargetCurrency?: string;
+
+  @Prop()
+  wiseRate?: number;
+
+  @Prop()
+  wiseFee?: number;
+
+  @Prop()
   wiseFailureReason?: string;
 }
 

@@ -30,7 +30,13 @@ export class BankDetails {
   routingNumber?: string;
 
   @Prop()
+  sortCode?: string;
+
+  @Prop()
   swiftBic?: string;
+
+  @Prop({ type: Object })
+  extraDetails?: Record<string, string>;
 
   @Prop({ required: true })
   country: string;
@@ -38,10 +44,22 @@ export class BankDetails {
   @Prop({ required: true, default: 'USD' })
   currency: string;
 
+  @Prop()
+  wiseRecipientId?: string;
+
+  @Prop()
+  wiseRecipientType?: string;
+
+  @Prop()
+  wiseRecipientStatus?: string;
+
+  @Prop()
+  detailsFingerprint?: string;
+
   @Prop({
     type: String,
     enum: BankVerificationStatus,
-    default: BankVerificationStatus.VERIFIED,
+    default: BankVerificationStatus.PENDING,
   })
   verificationStatus: BankVerificationStatus;
 

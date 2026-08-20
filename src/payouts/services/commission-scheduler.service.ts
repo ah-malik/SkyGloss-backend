@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { CronExpression, SchedulerRegistry } from '@nestjs/schedule';
 import { CronJob } from 'cron';
 import { CommissionsService } from './commissions.service';
+import { WithdrawalsService } from './withdrawals.service';
 import {
   getCommissionHoldDescription,
   useFrequentCommissionReleaseCron,
@@ -13,6 +14,7 @@ export class CommissionSchedulerService implements OnModuleInit {
 
   constructor(
     private readonly commissionsService: CommissionsService,
+    private readonly withdrawalsService: WithdrawalsService,
     private readonly schedulerRegistry: SchedulerRegistry,
   ) {}
 
@@ -29,6 +31,12 @@ export class CommissionSchedulerService implements OnModuleInit {
     this.schedulerRegistry.addCronJob('commission-release', job);
     job.start();
 
+    const payoutJob = new CronJob('*/2 * * * *', () => {
+      void this.syncWisePayouts();
+    });
+    this.schedulerRegistry.addCronJob('wise-payout-sync', payoutJob);
+    payoutJob.start();
+
     this.logger.log(
       `Commission hold: ${getCommissionHoldDescription()} · release cron: ${frequent ? 'every minute (dev)' : 'hourly (production)'}`,
     );
@@ -39,6 +47,14 @@ export class CommissionSchedulerService implements OnModuleInit {
       await this.commissionsService.releaseAvailableCommissions();
     } catch (error) {
       this.logger.error('Commission release cron failed', error);
+    }
+  }
+
+  async syncWisePayouts(): Promise<void> {
+    try {
+      await this.withdrawalsService.syncProcessingPayouts();
+    } catch (error) {
+      this.logger.error('Wise payout sync cron failed', error);
     }
   }
 }

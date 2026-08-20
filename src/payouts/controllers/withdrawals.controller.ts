@@ -75,10 +75,22 @@ export class WithdrawalsController {
     return this.withdrawalsService.listAdminPending();
   }
 
+  @Get('admin/wise-account')
+  @Roles(UserRole.ADMIN)
+  getWiseAccount() {
+    return this.withdrawalsService.getWiseAccountMeta();
+  }
+
   @Get('admin/wise-balance')
   @Roles(UserRole.ADMIN)
   getWiseBalance() {
     return this.withdrawalsService.getWiseAccountSummary();
+  }
+
+  @Get(':id/reveal-amounts')
+  @Roles(UserRole.ADMIN)
+  revealAmounts(@Param('id') id: string) {
+    return this.withdrawalsService.revealAdminAmounts(id);
   }
 
   @Get(':id')

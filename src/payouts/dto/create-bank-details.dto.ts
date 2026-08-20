@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsNotEmpty, IsObject, IsOptional, IsString } from 'class-validator';
 
 export class CreateBankDetailsDto {
   @IsString()
@@ -23,7 +23,15 @@ export class CreateBankDetailsDto {
 
   @IsOptional()
   @IsString()
+  sortCode?: string;
+
+  @IsOptional()
+  @IsString()
   swiftBic?: string;
+
+  @IsOptional()
+  @IsObject()
+  extraDetails?: Record<string, string>;
 
   @IsString()
   @IsNotEmpty()

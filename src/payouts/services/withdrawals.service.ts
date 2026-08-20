@@ -45,6 +45,10 @@ export class WithdrawalsService {
     private wiseService: WiseService,
   ) {}
 
+  getWiseAccountMeta() {
+    return this.wiseService.getAccountMeta();
+  }
+
   getWiseAccountSummary() {
     return this.wiseService.getAccountSummary();
   }
@@ -52,14 +56,15 @@ export class WithdrawalsService {
   private wiseErrorMessage(err: unknown): string {
     if (err instanceof BadRequestException) {
       const res = err.getResponse();
-      if (typeof res === 'string') return res;
+      if (typeof res === 'string') return this.wiseService.toUserFacingError(res);
       if (res && typeof res === 'object' && 'message' in res) {
         const m = (res as { message: string | string[] }).message;
-        return Array.isArray(m) ? m.join('; ') : String(m);
+        const text = Array.isArray(m) ? m.join('; ') : String(m);
+        return this.wiseService.toUserFacingError(text);
       }
-      return err.message;
+      return this.wiseService.toUserFacingError(err.message);
     }
-    if (err instanceof Error) return err.message;
+    if (err instanceof Error) return this.wiseService.toUserFacingError(err.message);
     return 'Wise payout failed';
   }
 
@@ -380,11 +385,44 @@ export class WithdrawalsService {
         : await this.bankDetailsService.getByIdSafe(bankId);
     }
 
+    if (isAdmin) {
+      return {
+        ...this.stripAdminFinancials(this.formatWithdrawal(request)),
+        commissions: this.stripCommissionAmounts(commissions),
+        history: this.stripHistoryAmounts(history),
+        bankDetails,
+      };
+    }
+
     return {
       ...this.formatWithdrawal(request),
       commissions,
       history,
       bankDetails,
+    };
+  }
+
+  async revealAdminAmounts(id: string) {
+    const request = await this.withdrawalModel.findById(id).lean();
+    if (!request) throw new NotFoundException('Withdrawal not found');
+    const commissions = await this.commissionModel
+      .find({ _id: { $in: request.commissionRecordIds } })
+      .select('_id amount currency originalCurrency convertedUsdAmount')
+      .lean();
+    return {
+      requestedAmount: request.requestedAmount,
+      currency: request.currency || 'USD',
+      wiseFee: request.wiseFee ?? null,
+      wiseRate: request.wiseRate ?? null,
+      wiseSourceAmount: request.wiseSourceAmount ?? null,
+      wiseTargetAmount: request.wiseTargetAmount ?? null,
+      wiseSourceCurrency: request.wiseSourceCurrency || 'USD',
+      wiseTargetCurrency: request.wiseTargetCurrency || null,
+      commissions: commissions.map((c) => ({
+        _id: c._id,
+        amount: c.amount,
+        convertedUsdAmount: c.convertedUsdAmount ?? null,
+      })),
     };
   }
 
@@ -561,7 +599,7 @@ export class WithdrawalsService {
       .populate('userId', 'firstName lastName email partnerCode role')
       .populate('hubReviewerId', 'firstName lastName email partnerCode')
       .lean();
-    return items.map((w) => this.formatWithdrawal(w));
+    return items.map((w) => this.stripAdminFinancials(this.formatWithdrawal(w)));
   }
 
   async listAdminAll(status?: string) {
@@ -579,7 +617,7 @@ export class WithdrawalsService {
       .populate('hubReviewerId', 'firstName lastName email partnerCode')
       .populate('adminReviewerId', 'firstName lastName email')
       .lean();
-    return items.map((w) => this.formatWithdrawal(w));
+    return items.map((w) => this.stripAdminFinancials(this.formatWithdrawal(w)));
   }
 
   async hubReview(
@@ -758,7 +796,7 @@ export class WithdrawalsService {
       );
     }
 
-    const bank = await this.bankDetailsService.getByIdForAdminReview(
+    const bank = await this.bankDetailsService.getByIdForPayout(
       request.bankDetailsId.toString(),
     );
     const requester = await this.usersService.findOne(request.userId.toString());
@@ -797,7 +835,7 @@ export class WithdrawalsService {
         amount: locked.requestedAmount,
         reference: locked.requestNumber,
         customerTransactionId: locked.wiseCustomerTransactionId,
-        existingRecipientId: locked.wiseRecipientId,
+        existingRecipientId: locked.wiseRecipientId || bank.wiseRecipientId,
         existingTransferId: locked.wiseTransferId,
         bank: {
           accountHolderName: bank.accountHolderName,
@@ -805,9 +843,11 @@ export class WithdrawalsService {
           iban: bank.iban,
           accountNumber: bank.accountNumber,
           routingNumber: bank.routingNumber,
+          sortCode: bank.sortCode,
           swiftBic: bank.swiftBic,
           country: bank.country,
           currency: bank.currency,
+          extraDetails: bank.extraDetails,
         },
         recipient: {
           email: requester.email,
@@ -847,7 +887,7 @@ export class WithdrawalsService {
       throw new BadRequestException(message);
     }
 
-    locked.status = WithdrawalStatus.COMPLETED;
+    locked.status = WithdrawalStatus.PAYMENT_PROCESSING;
     locked.wiseTransferId = payout.transferId;
     locked.wiseQuoteId = payout.quoteId;
     locked.wiseRecipientId = payout.recipientId;
@@ -856,44 +896,123 @@ export class WithdrawalsService {
     locked.wisePayoutStatus = payout.status;
     locked.wiseSourceAmount = payout.sourceAmount;
     locked.wiseTargetAmount = payout.targetAmount;
+    locked.wiseSourceCurrency = payout.sourceCurrency;
+    locked.wiseTargetCurrency = payout.targetCurrency;
+    locked.wiseRate = payout.rate;
+    locked.wiseFee = payout.fee;
     locked.wiseFailureReason = '';
-    locked.walletDebitedAt = new Date();
-    locked.completedAt = new Date();
     await locked.save();
-
-    await this.walletsService.debitFromAdminPayout(
-      locked.userId.toString(),
-      locked.requestedAmount,
-      locked._id.toString(),
-      adminUserId,
-    );
-
-    await this.commissionsService.markWithdrawn(
-      locked.commissionRecordIds,
-      locked._id.toString(),
-    );
 
     await this.auditService.logApproval({
       withdrawalRequestId: locked._id as Types.ObjectId,
       action: ApprovalAction.ADMIN_APPROVE,
       actorUserId: new Types.ObjectId(adminUserId),
       actorRole: UserRole.ADMIN,
-      newStatus: WithdrawalStatus.COMPLETED,
+      newStatus: WithdrawalStatus.PAYMENT_PROCESSING,
       note,
-    });
-
-    await this.auditService.logApproval({
-      withdrawalRequestId: locked._id as Types.ObjectId,
-      action: ApprovalAction.PAYMENT_COMPLETED,
-      actorUserId: new Types.ObjectId(adminUserId),
       metadata: {
-        wiseReference: locked.wiseTransferReference,
-        wiseTransferId: locked.wiseTransferId,
-        wiseSourceAmount: payout.sourceAmount,
-        wiseTargetAmount: payout.targetAmount,
+        wiseTransferId: payout.transferId,
+        wiseQuoteId: payout.quoteId,
+        wiseFee: payout.fee,
+        wiseRate: payout.rate,
+        sourceAmount: payout.sourceAmount,
+        targetAmount: payout.targetAmount,
+        targetCurrency: payout.targetCurrency,
       },
     });
 
+    await this.pushNotification({
+      type: NotificationType.WITHDRAWAL_COMPLETED,
+      title: 'Payout Processing',
+      message: `Your $${locked.requestedAmount.toFixed(2)} payout is being sent via Wise. Fees are deducted from this amount.`,
+      user: locked.userId.toString(),
+      triggeredBy: adminUserId,
+      link: '/dashboard/partner/network?tab=earnings',
+    });
+
+    return this.enrichWithdrawal(locked);
+  }
+
+  async applyWiseTransferState(transferId: string, wiseStatus: string) {
+    const request = await this.withdrawalModel.findOne({
+      wiseTransferId: String(transferId),
+    });
+    if (!request) return null;
+
+    const status = String(wiseStatus || '').toLowerCase();
+    request.wisePayoutStatus = status;
+
+    if (
+      request.status === WithdrawalStatus.COMPLETED ||
+      request.status === WithdrawalStatus.FAILED ||
+      request.status === WithdrawalStatus.REJECTED_BY_ADMIN
+    ) {
+      await request.save();
+      return this.enrichWithdrawal(request);
+    }
+
+    if (status === 'outgoing_payment_sent') {
+      return this.completeWisePayout(request);
+    }
+    if (
+      request.status === WithdrawalStatus.PAYMENT_PROCESSING &&
+      (status === 'cancelled' ||
+        status === 'funds_refunded' ||
+        status === 'bounced_back' ||
+        status === 'charged_back')
+    ) {
+      return this.failWisePayout(request, `Wise transfer ${status}`);
+    }
+
+    await request.save();
+    return this.enrichWithdrawal(request);
+  }
+
+  private async completeWisePayout(request: WithdrawalRequestDocument) {
+    const locked = await this.withdrawalModel.findOneAndUpdate(
+      {
+        _id: request._id,
+        status: {
+          $in: [
+            WithdrawalStatus.PAYMENT_PROCESSING,
+            WithdrawalStatus.SENT_TO_ADMIN,
+          ],
+        },
+        wiseTransferId: { $exists: true, $nin: [null, ''] },
+      },
+      {
+        $set: {
+          status: WithdrawalStatus.COMPLETED,
+          walletDebitedAt: new Date(),
+          completedAt: new Date(),
+          wisePayoutStatus: request.wisePayoutStatus || 'outgoing_payment_sent',
+          wiseFailureReason: '',
+        },
+      },
+      { new: true },
+    );
+    if (!locked) return this.enrichWithdrawal(request);
+
+    await this.walletsService.debitFromAdminPayout(
+      locked.userId.toString(),
+      locked.requestedAmount,
+      locked._id.toString(),
+    );
+    await this.commissionsService.markWithdrawn(
+      locked.commissionRecordIds,
+      locked._id.toString(),
+    );
+    await this.auditService.logApproval({
+      withdrawalRequestId: locked._id as Types.ObjectId,
+      action: ApprovalAction.PAYMENT_COMPLETED,
+      newStatus: WithdrawalStatus.COMPLETED,
+      metadata: {
+        wiseTransferId: locked.wiseTransferId,
+        wiseFee: locked.wiseFee,
+        targetAmount: locked.wiseTargetAmount,
+        targetCurrency: locked.wiseTargetCurrency,
+      },
+    });
     await this.auditService.logTransaction({
       userId: locked.userId,
       category: 'payout',
@@ -904,23 +1023,90 @@ export class WithdrawalsService {
       sourceDocumentId: locked._id as Types.ObjectId,
       sourceCollection: 'WithdrawalRequest',
       snapshot: {
-        wiseTransferId: payout.transferId,
-        wiseReference: payout.reference,
-        sourceAmount: payout.sourceAmount,
-        targetAmount: payout.targetAmount,
+        wiseTransferId: locked.wiseTransferId,
+        fee: locked.wiseFee,
+        targetAmount: locked.wiseTargetAmount,
+        targetCurrency: locked.wiseTargetCurrency,
       },
     });
-
     await this.pushNotification({
       type: NotificationType.WITHDRAWAL_COMPLETED,
       title: 'Payout Completed',
-      message: `$${locked.requestedAmount.toFixed(2)} has been transferred to your bank account via Wise.`,
+      message: `Your payout ${locked.requestNumber} has been completed.`,
       user: locked.userId.toString(),
-      triggeredBy: adminUserId,
       link: '/dashboard/partner/network?tab=earnings',
     });
-
     return this.enrichWithdrawal(locked);
+  }
+
+  private async failWisePayout(
+    request: WithdrawalRequestDocument,
+    reason: string,
+  ) {
+    const locked = await this.withdrawalModel.findOneAndUpdate(
+      {
+        _id: request._id,
+        status: WithdrawalStatus.PAYMENT_PROCESSING,
+      },
+      {
+        $set: {
+          status: WithdrawalStatus.FAILED,
+          wiseFailureReason: reason,
+          wisePayoutStatus: request.wisePayoutStatus,
+        },
+      },
+      { new: true },
+    );
+    if (!locked) return this.enrichWithdrawal(request);
+
+    await this.walletsService.reverseHubCredit(
+      locked.userId.toString(),
+      locked.requestedAmount,
+      locked._id.toString(),
+    );
+    await this.commissionsService.unlockCommissions(locked.commissionRecordIds);
+    await this.auditService.logApproval({
+      withdrawalRequestId: locked._id as Types.ObjectId,
+      action: ApprovalAction.PAYMENT_FAILED,
+      newStatus: WithdrawalStatus.FAILED,
+      note: reason,
+    });
+    await this.pushNotification({
+      type: NotificationType.WITHDRAWAL_ADMIN_REJECTED,
+      title: 'Payout Failed',
+      message: `Your payout ${locked.requestNumber} could not be completed. Commission has been returned.`,
+      user: locked.userId.toString(),
+      link: '/dashboard/partner/network?tab=earnings',
+    });
+    return this.enrichWithdrawal(locked);
+  }
+
+  async syncProcessingPayouts(): Promise<number> {
+    const items = await this.withdrawalModel
+      .find({
+        status: WithdrawalStatus.PAYMENT_PROCESSING,
+        wiseTransferId: { $exists: true, $nin: [null, ''] },
+      })
+      .limit(25);
+    let updated = 0;
+    for (const item of items) {
+      if (!item.wiseTransferId) continue;
+      try {
+        const transfer = await this.wiseService.getTransfer(item.wiseTransferId);
+        await this.applyWiseTransferState(
+          item.wiseTransferId,
+          transfer.status || '',
+        );
+        updated += 1;
+      } catch (err) {
+        console.error(
+          '[WithdrawalsService] Wise transfer poll failed',
+          item.wiseTransferId,
+          err,
+        );
+      }
+    }
+    return updated;
   }
 
   async attachBankAndResume(withdrawalId: string, userId: string) {
@@ -953,6 +1139,44 @@ export class WithdrawalsService {
       id: w._id?.toString?.() || w.id,
       statusLabel: this.statusLabel(w.status),
     };
+  }
+
+  private stripAdminFinancials(w: Record<string, any>) {
+    const {
+      requestedAmount: _requestedAmount,
+      wiseFee: _wiseFee,
+      wiseRate: _wiseRate,
+      wiseSourceAmount: _wiseSourceAmount,
+      wiseTargetAmount: _wiseTargetAmount,
+      ...rest
+    } = w;
+    return {
+      ...rest,
+      amountsHidden: true,
+      currency: rest.currency || 'USD',
+      wiseFailureReason: rest.wiseFailureReason
+        ? this.wiseService.toUserFacingError(String(rest.wiseFailureReason))
+        : rest.wiseFailureReason,
+    };
+  }
+
+  private stripCommissionAmounts(commissions: Record<string, any>[]) {
+    return commissions.map((c) => {
+      const {
+        amount: _amount,
+        convertedUsdAmount: _converted,
+        originalAmount: _original,
+        ...rest
+      } = c;
+      return { ...rest, amountHidden: true };
+    });
+  }
+
+  private stripHistoryAmounts(history: Record<string, any>[]) {
+    return history.map((h) => {
+      const { metadata: _metadata, ...rest } = h;
+      return rest;
+    });
   }
 
   private async getWithdrawalShopIds(

@@ -506,6 +506,7 @@ export function isAlwaysAllowedPath(pathname: string, method: string): boolean {
   if (path === '/stripe/webhook') return true;
   if (path === '/orders/webhook' || path === '/orders/webhook-usa') return true;
   if (path === '/certifications/webhook') return true;
+  if (path === '/webhooks/wise') return true;
   // Session lifecycle must remain reachable even if Auth APIs are toggled off
   if (
     m === 'POST' &&

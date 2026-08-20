@@ -28,6 +28,10 @@ import {
   TransactionHistory,
   TransactionHistorySchema,
 } from './entities/transaction-history.entity';
+import {
+  WiseWebhookEvent,
+  WiseWebhookEventSchema,
+} from './entities/wise-webhook-event.entity';
 import { Order, OrderSchema } from '../orders/entities/order.entity';
 import { User, UserSchema } from '../users/entities/user.entity';
 import { CommissionsService } from './services/commissions.service';
@@ -41,6 +45,7 @@ import { WithdrawalsController } from './controllers/withdrawals.controller';
 import { BankDetailsController } from './controllers/bank-details.controller';
 import { WalletsController } from './controllers/wallets.controller';
 import { AdminTransactionsController } from './controllers/admin-transactions.controller';
+import { WiseWebhookController } from './controllers/wise-webhook.controller';
 import { AdminTransactionsService } from './services/admin-transactions.service';
 import { WiseService } from './services/wise.service';
 import { UsersModule } from '../users/users.module';
@@ -56,6 +61,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
       { name: BankDetails.name, schema: BankDetailsSchema },
       { name: ApprovalHistory.name, schema: ApprovalHistorySchema },
       { name: TransactionHistory.name, schema: TransactionHistorySchema },
+      { name: WiseWebhookEvent.name, schema: WiseWebhookEventSchema },
       { name: Order.name, schema: OrderSchema },
       { name: User.name, schema: UserSchema },
     ]),
@@ -68,6 +74,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     BankDetailsController,
     WalletsController,
     AdminTransactionsController,
+    WiseWebhookController,
   ],
   providers: [
     CommissionsService,

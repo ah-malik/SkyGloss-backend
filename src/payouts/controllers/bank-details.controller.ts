@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 import { BankDetailsService } from '../services/bank-details.service';
 import { CreateBankDetailsDto } from '../dto/create-bank-details.dto';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
@@ -18,6 +18,15 @@ export class BankDetailsController {
   @Roles(...PAYOUT_ROLES)
   getMine(@GetUser('_id') userId: string) {
     return this.bankDetailsService.getMyBankDetails(userId);
+  }
+
+  @Get('wise-requirements')
+  @Roles(...PAYOUT_ROLES)
+  wiseRequirements(
+    @Query('country') country: string,
+    @Query('currency') currency?: string,
+  ) {
+    return this.bankDetailsService.getWiseRequirements(country, currency);
   }
 
   @Post()

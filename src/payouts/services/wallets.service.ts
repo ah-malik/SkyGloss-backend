@@ -73,6 +73,14 @@ export class WalletsService {
     withdrawalRequestId: string,
     performedBy?: string,
   ) {
+    const existing = await this.walletTxModel.findOne({
+      withdrawalRequestId: new Types.ObjectId(withdrawalRequestId),
+      type: WalletTransactionType.ADMIN_PAYOUT_DEBIT,
+    });
+    if (existing) {
+      return this.getOrCreateWallet(userId);
+    }
+
     const wallet = await this.getOrCreateWallet(userId);
     wallet.availableBalance = Math.round((wallet.availableBalance - amount) * 100) / 100;
     wallet.lifetimeWithdrawn = Math.round((wallet.lifetimeWithdrawn + amount) * 100) / 100;
@@ -99,6 +107,22 @@ export class WalletsService {
     withdrawalRequestId: string,
     performedBy?: string,
   ) {
+    const wrId = new Types.ObjectId(withdrawalRequestId);
+    const alreadyDebited = await this.walletTxModel.findOne({
+      withdrawalRequestId: wrId,
+      type: WalletTransactionType.ADMIN_PAYOUT_DEBIT,
+    });
+    if (alreadyDebited) {
+      return this.getOrCreateWallet(userId);
+    }
+    const existing = await this.walletTxModel.findOne({
+      withdrawalRequestId: wrId,
+      type: WalletTransactionType.ADMIN_REJECT_REVERSAL,
+    });
+    if (existing) {
+      return this.getOrCreateWallet(userId);
+    }
+
     const wallet = await this.getOrCreateWallet(userId);
     wallet.availableBalance = Math.max(
       0,

@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { createHash } from 'crypto';
 import {
   BankDetails,
   BankDetailsDocument,
@@ -12,6 +13,9 @@ import {
 } from '../entities/bank-details.entity';
 import { CreateBankDetailsDto } from '../dto/create-bank-details.dto';
 import { ApprovalAction, AuditService } from './audit.service';
+import { WiseService } from './wise.service';
+import { UsersService } from '../../users/users.service';
+import { defaultCurrencyForCountry } from '../wise-country-iso';
 
 @Injectable()
 export class BankDetailsService {
@@ -19,6 +23,8 @@ export class BankDetailsService {
     @InjectModel(BankDetails.name)
     private bankDetailsModel: Model<BankDetailsDocument>,
     private auditService: AuditService,
+    private wiseService: WiseService,
+    private usersService: UsersService,
   ) {}
 
   maskAccountNumber(value?: string): string | undefined {
@@ -32,13 +38,47 @@ export class BankDetailsService {
     const obj =
       typeof (doc as BankDetailsDocument).toObject === 'function'
         ? (doc as BankDetailsDocument).toObject()
-        : doc;
+        : { ...doc };
     return {
       ...obj,
       accountNumber: this.maskAccountNumber(obj.accountNumber as string),
       iban: this.maskAccountNumber(obj.iban as string),
-      routingNumber: obj.routingNumber ? '****' : undefined,
+      routingNumber: obj.routingNumber ? this.maskAccountNumber(obj.routingNumber as string) : undefined,
+      sortCode: obj.sortCode ? this.maskAccountNumber(obj.sortCode as string) : undefined,
+      swiftBic: obj.swiftBic ? this.maskAccountNumber(obj.swiftBic as string) : undefined,
+      extraDetails: undefined,
+      detailsFingerprint: undefined,
     };
+  }
+
+  fingerprint(dto: {
+    accountHolderName?: string;
+    bankName?: string;
+    iban?: string;
+    accountNumber?: string;
+    routingNumber?: string;
+    sortCode?: string;
+    swiftBic?: string;
+    country?: string;
+    currency?: string;
+    extraDetails?: Record<string, string>;
+  }): string {
+    return createHash('sha256')
+      .update(
+        JSON.stringify({
+          accountHolderName: dto.accountHolderName || '',
+          bankName: dto.bankName || '',
+          iban: dto.iban || '',
+          accountNumber: dto.accountNumber || '',
+          routingNumber: dto.routingNumber || '',
+          sortCode: dto.sortCode || '',
+          swiftBic: dto.swiftBic || '',
+          country: dto.country || '',
+          currency: dto.currency || '',
+          extraDetails: dto.extraDetails || {},
+        }),
+      )
+      .digest('hex');
   }
 
   async getPrimaryForUser(userId: string) {
@@ -49,10 +89,16 @@ export class BankDetailsService {
     });
   }
 
-  async getByIdForAdminReview(id: string) {
+  async getByIdForPayout(id: string) {
     const doc = await this.bankDetailsModel.findById(id);
     if (!doc || doc.isDeleted) throw new NotFoundException('Bank details not found');
     return doc.toObject();
+  }
+
+  async getByIdForAdminReview(id: string) {
+    const doc = await this.bankDetailsModel.findById(id);
+    if (!doc || doc.isDeleted) throw new NotFoundException('Bank details not found');
+    return this.toSafeResponse(doc);
   }
 
   async getByIdSafe(id: string) {
@@ -68,9 +114,59 @@ export class BankDetailsService {
     return docs.map((d) => this.toSafeResponse(d));
   }
 
+  async getWiseRequirements(country: string, currency?: string) {
+    return this.wiseService.getRecipientRequirements(country, currency);
+  }
+
   async upsertPrimary(userId: string, dto: CreateBankDetailsDto) {
-    if (!dto.accountNumber && !dto.iban) {
-      throw new BadRequestException('Account number or IBAN is required');
+    if (!dto.accountNumber && !dto.iban && !Object.keys(dto.extraDetails || {}).length) {
+      throw new BadRequestException('Account number, IBAN, or required bank fields are needed');
+    }
+
+    const currency =
+      (dto.currency || defaultCurrencyForCountry(dto.country) || 'USD').toUpperCase();
+    const user = await this.usersService.findOne(userId);
+    const hash = this.fingerprint({ ...dto, currency });
+    const existing = await this.bankDetailsModel.findOne({
+      userId: new Types.ObjectId(userId),
+      isDeleted: false,
+    }).sort({ isPrimary: -1, createdAt: -1 });
+
+    let recipientId = existing?.wiseRecipientId;
+    let recipientStatus = existing?.wiseRecipientStatus || 'creating';
+    try {
+      const created = await this.wiseService.createOrUpdateRecipient({
+        bank: {
+          accountHolderName: dto.accountHolderName,
+          bankName: dto.bankName,
+          iban: dto.iban,
+          accountNumber: dto.accountNumber,
+          routingNumber: dto.routingNumber,
+          sortCode: dto.sortCode,
+          swiftBic: dto.swiftBic,
+          country: dto.country,
+          currency,
+          extraDetails: dto.extraDetails,
+        },
+        recipient: {
+          email: user?.email,
+          firstName: user?.firstName,
+          lastName: user?.lastName,
+          address: user?.address,
+          streetAddress: user?.streetAddress,
+          city: user?.city,
+          zipCode: user?.zipCode,
+          country: user?.country || dto.country,
+        },
+        existingRecipientId: existing?.wiseRecipientId,
+        fingerprint: hash,
+        previousFingerprint: existing?.detailsFingerprint,
+      });
+      recipientId = created.recipientId;
+      recipientStatus = created.status;
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : 'Wise recipient failed';
+      throw new BadRequestException(this.wiseService.toUserFacingError(raw));
     }
 
     await this.bankDetailsModel.updateMany(
@@ -78,37 +174,33 @@ export class BankDetailsService {
       { isPrimary: false },
     );
 
-    const existing = await this.bankDetailsModel.findOne({
-      userId: new Types.ObjectId(userId),
+    const payload = {
+      ...dto,
+      currency,
+      detailsFingerprint: hash,
+      wiseRecipientId: recipientId,
+      wiseRecipientStatus: recipientStatus,
+      verificationStatus: BankVerificationStatus.VERIFIED,
+      verifiedAt: new Date(),
       isPrimary: true,
       isDeleted: false,
-    });
+    };
 
     let saved: BankDetailsDocument;
     if (existing) {
-      Object.assign(existing, {
-        ...dto,
-        currency: dto.currency || 'USD',
-        verificationStatus: BankVerificationStatus.VERIFIED,
-        verifiedAt: new Date(),
-        isPrimary: true,
-      });
+      Object.assign(existing, payload);
       saved = await existing.save();
     } else {
       saved = await this.bankDetailsModel.create({
         userId: new Types.ObjectId(userId),
-        ...dto,
-        currency: dto.currency || 'USD',
-        verificationStatus: BankVerificationStatus.VERIFIED,
-        verifiedAt: new Date(),
-        isPrimary: true,
+        ...payload,
       });
     }
 
     await this.auditService.logApproval({
       action: ApprovalAction.BANK_DETAILS_ADDED,
       actorUserId: new Types.ObjectId(userId),
-      metadata: { bankDetailsId: saved._id },
+      metadata: { bankDetailsId: saved._id, wiseRecipientId: recipientId },
     });
 
     return this.toSafeResponse(saved);

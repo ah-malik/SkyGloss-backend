@@ -7,7 +7,8 @@ import {
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosError, AxiosInstance } from 'axios';
 import { randomUUID } from 'crypto';
-import { currencyFromIban, toIsoCountryCode } from '../wise-country-iso';
+import * as https from 'https';
+import { currencyFromIban, defaultCurrencyForCountry, toIsoCountryCode } from '../wise-country-iso';
 
 export type WiseBankDetails = {
   accountHolderName: string;
@@ -15,9 +16,11 @@ export type WiseBankDetails = {
   iban?: string;
   accountNumber?: string;
   routingNumber?: string;
+  sortCode?: string;
   swiftBic?: string;
   country?: string;
   currency?: string;
+  extraDetails?: Record<string, string>;
 };
 
 export type WiseRecipientUser = {
@@ -65,6 +68,8 @@ export type WisePayoutResult = {
   targetAmount: number;
   sourceCurrency: string;
   targetCurrency: string;
+  rate: number;
+  fee: number;
   status: string;
 };
 
@@ -81,7 +86,10 @@ export class WiseService {
     let baseURL = (
       this.config.get<string>('WISE_API_URL') || 'https://api.wise.com'
     ).replace(/\/+$/, '');
-    if (baseURL.includes('api.sandbox.transferwise.tech')) {
+    if (
+      baseURL.includes('api.sandbox.transferwise.tech') ||
+      baseURL.includes('api.sandbox.wise.tech')
+    ) {
       baseURL = 'https://api.wise-sandbox.com';
     }
     this.token = (this.config.get<string>('WISE_API_TOKEN') || '').trim();
@@ -93,6 +101,8 @@ export class WiseService {
     this.http = axios.create({
       baseURL,
       timeout: 45000,
+      family: 4,
+      httpsAgent: new https.Agent({ family: 4, keepAlive: true }),
       headers: {
         'Content-Type': 'application/json',
       },
@@ -101,6 +111,183 @@ export class WiseService {
 
   isConfigured(): boolean {
     return Boolean(this.token);
+  }
+
+  toUserFacingError(message: string): string {
+    const raw = String(message || '').trim();
+    const lower = raw.toLowerCase();
+    if (
+      lower.includes('not supported') ||
+      lower.includes('unsupported') ||
+      lower.includes('no available') ||
+      lower.includes('account-requirements')
+    ) {
+      return 'Is country/currency ke liye Wise payout currently supported nahi hai.';
+    }
+    if (
+      lower.includes('iban') ||
+      lower.includes('account') ||
+      lower.includes('recipient') ||
+      lower.includes('422') ||
+      lower.includes('invalid')
+    ) {
+      return 'Bank details verify nahi ho sakin. Please apni bank details check karein.';
+    }
+    if (
+      lower.includes('insufficient') ||
+      lower.includes('balance')
+    ) {
+      return 'Admin Wise balance is insufficient for this payout.';
+    }
+    if (this.looksInternalError(raw)) {
+      return 'Wise payout failed. Check bank details and Wise balance, then retry.';
+    }
+    if (raw.length > 180) {
+      return 'Wise payout failed. Please retry.';
+    }
+    return raw || 'Wise payout failed';
+  }
+
+  private looksInternalError(message: string): boolean {
+    const lower = message.toLowerCase();
+    return (
+      lower.includes('{') ||
+      lower.includes('http') ||
+      lower.includes('bearer') ||
+      lower.includes('token') ||
+      lower.includes('stack') ||
+      lower.includes('axios') ||
+      lower.includes('econn') ||
+      lower.includes('enotfound') ||
+      lower.includes('getaddrinfo') ||
+      lower.includes('etimedout') ||
+      lower.includes('mongo') ||
+      /at\s+\S+\s+\(/.test(message)
+    );
+  }
+
+  async getRecipientRequirements(country: string, currency?: string) {
+    if (!this.isConfigured()) {
+      throw new BadRequestException(
+        'Wise is not configured. Set WISE_API_TOKEN on the backend.',
+      );
+    }
+    const iso = toIsoCountryCode(country);
+    if (!iso) {
+      throw new BadRequestException('Please select a valid country.');
+    }
+    const target = (
+      currency ||
+      defaultCurrencyForCountry(iso) ||
+      ''
+    ).toUpperCase();
+    if (!target) {
+      throw new BadRequestException(
+        'Is country/currency ke liye Wise payout currently supported nahi hai.',
+      );
+    }
+
+    let raw: any[];
+    try {
+      raw = await this.request<any[]>(
+        'GET',
+        `/v1/account-requirements?source=${this.sourceCurrency}&target=${encodeURIComponent(target)}&sourceAmount=100`,
+        undefined,
+        { 'Accept-Minor-Version': '1' },
+      );
+    } catch {
+      throw new BadRequestException(
+        'Is country/currency ke liye Wise payout currently supported nahi hai.',
+      );
+    }
+
+    const options = (Array.isArray(raw) ? raw : []).map((opt) => ({
+      type: String(opt.type || ''),
+      title: String(opt.title || opt.type || 'Bank account'),
+      fields: this.flattenRequirementFields(opt),
+    }));
+    const selected =
+      options.find((o) => o.type === 'iban') ||
+      options.find((o) => o.type === 'aba') ||
+      options.find((o) => o.type === 'sort_code') ||
+      options.find((o) => o.type === 'swift_code') ||
+      options[0];
+    if (!selected) {
+      throw new BadRequestException(
+        'Is country/currency ke liye Wise payout currently supported nahi hai.',
+      );
+    }
+
+    return {
+      country,
+      countryIso: iso,
+      currency: target,
+      sourceCurrency: this.sourceCurrency,
+      type: selected.type,
+      title: selected.title,
+      fields: selected.fields.filter(
+        (f) =>
+          !['accountHolderName', 'ownedByCustomer', 'currency', 'type', 'profile'].includes(
+            f.key,
+          ),
+      ),
+      alternatives: options.map((o) => ({ type: o.type, title: o.title })),
+    };
+  }
+
+  async createOrUpdateRecipient(input: {
+    bank: WiseBankDetails;
+    recipient: WiseRecipientUser;
+    existingRecipientId?: string;
+    fingerprint?: string;
+    previousFingerprint?: string;
+  }): Promise<{ recipientId: string; type?: string; status: string }> {
+    if (
+      input.existingRecipientId &&
+      input.fingerprint &&
+      input.previousFingerprint &&
+      input.fingerprint === input.previousFingerprint
+    ) {
+      return {
+        recipientId: input.existingRecipientId,
+        status: 'ready',
+      };
+    }
+    const profileId = await this.getProfileId();
+    const targetCurrency = this.resolveTargetCurrency(input.bank);
+    const recipientId = await this.createRecipient(
+      profileId,
+      input.bank,
+      input.recipient,
+      targetCurrency,
+    );
+    return {
+      recipientId: String(recipientId),
+      status: 'ready',
+    };
+  }
+
+  async getTransfer(transferId: string | number) {
+    return this.request<{
+      id: number;
+      status?: string;
+      sourceValue?: number;
+      targetValue?: number;
+      sourceCurrency?: string;
+      targetCurrency?: string;
+      rate?: number;
+      quoteUuid?: string;
+    }>('GET', `/v1/transfers/${transferId}`);
+  }
+
+  getAccountMeta() {
+    return {
+      configured: this.isConfigured(),
+      environment: this.http.defaults.baseURL?.includes('sandbox')
+        ? 'sandbox'
+        : 'production',
+      sourceCurrency: this.sourceCurrency,
+    };
   }
 
   async getAccountSummary() {
@@ -137,7 +324,23 @@ export class WiseService {
       amount: Number(b.amount?.value || 0),
       reserved: Number(b.reservedAmount?.value || 0),
     }));
-    const source = mapped.find((b) => b.currency === this.sourceCurrency);
+    const visible = mapped.filter(
+      (b) => b.amount > 0 || b.currency === this.sourceCurrency,
+    );
+    const source = visible.find((b) => b.currency === this.sourceCurrency);
+    const usdRates = await this.getUsdRates(
+      visible.map((b) => b.currency).filter(Boolean),
+    );
+    const withUsd = visible.map((b) => {
+      const rate = b.currency === 'USD' ? 1 : Number(usdRates[b.currency] || 0);
+      const usdEquivalent =
+        Math.round(b.amount * (rate || 0) * 100) / 100;
+      return { ...b, usdEquivalent, usdRate: rate || null };
+    });
+    const totalUsdEquivalent =
+      Math.round(
+        withUsd.reduce((sum, b) => sum + (b.usdEquivalent || 0), 0) * 100,
+      ) / 100;
 
     return {
       configured: true,
@@ -158,10 +361,31 @@ export class WiseService {
       sourceCurrency: this.sourceCurrency,
       sourceBalance: source?.amount ?? 0,
       sourceBalanceId: source?.id ?? null,
-      balances: mapped.filter(
-        (b) => b.amount > 0 || b.currency === this.sourceCurrency,
-      ),
+      totalUsdEquivalent,
+      balances: withUsd,
     };
+  }
+
+  private async getUsdRates(currencies: string[]): Promise<Record<string, number>> {
+    const rates: Record<string, number> = { USD: 1 };
+    const unique = [...new Set(currencies.map((c) => c.toUpperCase()))].filter(
+      (c) => c && c !== 'USD',
+    );
+    await Promise.all(
+      unique.map(async (source) => {
+        try {
+          const rows = await this.request<
+            Array<{ rate?: number; source?: string; target?: string }>
+          >('GET', `/v1/rates?source=${encodeURIComponent(source)}&target=USD`);
+          const row = Array.isArray(rows) ? rows[0] : undefined;
+          const rate = Number(row?.rate || 0);
+          if (rate > 0) rates[source] = rate;
+        } catch {
+          this.logger.warn(`Wise USD rate unavailable for ${source}`);
+        }
+      }),
+    );
+    return rates;
   }
 
   async sendPayout(input: WisePayoutInput): Promise<WisePayoutResult> {
@@ -200,17 +424,39 @@ export class WiseService {
 
       let sourceAmount = amount;
       let targetAmount = amount;
+      let rate = 0;
+      let fee = 0;
+      let alreadyFunded = false;
+
+      if (transferId) {
+        const existing = await this.getTransfer(transferId);
+        const existingStatus = String(existing.status || '').toLowerCase();
+        if (
+          existingStatus === 'cancelled' ||
+          existingStatus === 'funds_refunded'
+        ) {
+          transferId = undefined;
+        } else if (this.isTransferFunded(existingStatus)) {
+          alreadyFunded = true;
+          sourceAmount = Number(existing.sourceValue ?? amount);
+          targetAmount = Number(existing.targetValue ?? amount);
+          rate = Number(existing.rate ?? 0);
+          quoteId = existing.quoteUuid ? String(existing.quoteUuid) : quoteId;
+        }
+      }
 
       if (!transferId) {
         const quote = await this.createQuote({
           profileId,
           targetCurrency,
-          targetAmount: amount,
+          sourceAmount: amount,
           targetAccount: recipientId,
         });
         quoteId = String(quote.id);
-        sourceAmount = Number(quote.sourceAmount ?? amount);
-        targetAmount = Number(quote.targetAmount ?? amount);
+        sourceAmount = quote.sourceAmount;
+        targetAmount = quote.targetAmount;
+        rate = quote.rate;
+        fee = quote.fee;
         await this.assertSufficientBalance(profileId, sourceAmount);
 
         const transfer = await this.createTransfer({
@@ -220,6 +466,23 @@ export class WiseService {
           reference: input.reference,
         });
         transferId = Number(transfer.id);
+      }
+
+      if (alreadyFunded) {
+        return {
+          transferId: String(transferId),
+          quoteId,
+          recipientId: String(recipientId),
+          customerTransactionId,
+          reference: `WISE-${transferId}`,
+          sourceAmount,
+          targetAmount,
+          sourceCurrency: this.sourceCurrency,
+          targetCurrency,
+          rate,
+          fee,
+          status: 'PROCESSING',
+        };
       }
 
       const fund = await this.fundTransfer(profileId, transferId as number);
@@ -247,6 +510,8 @@ export class WiseService {
         targetAmount,
         sourceCurrency: this.sourceCurrency,
         targetCurrency,
+        rate,
+        fee,
         status,
       };
     } catch (err) {
@@ -309,22 +574,47 @@ export class WiseService {
   private async createQuote(params: {
     profileId: number;
     targetCurrency: string;
-    targetAmount: number;
+    sourceAmount: number;
     targetAccount?: number;
   }) {
     const body: Record<string, unknown> = {
       sourceCurrency: this.sourceCurrency,
       targetCurrency: params.targetCurrency,
-      targetAmount: params.targetAmount,
+      sourceAmount: params.sourceAmount,
       preferredPayIn: 'BALANCE',
     };
     if (params.targetAccount) body.targetAccount = params.targetAccount;
 
-    return this.request<{
+    const quote = await this.request<{
       id: string;
+      rate?: number;
       sourceAmount?: number;
       targetAmount?: number;
+      sourceCurrency?: string;
+      targetCurrency?: string;
+      paymentOptions?: Array<{
+        payIn?: string;
+        disabled?: boolean;
+        sourceAmount?: number;
+        targetAmount?: number;
+        fee?: { total?: number };
+      }>;
     }>('POST', `/v3/profiles/${params.profileId}/quotes`, body);
+
+    const options = quote.paymentOptions || [];
+    const balance =
+      options.find((o) => o.payIn === 'BALANCE' && !o.disabled) ||
+      options.find((o) => o.payIn === 'BALANCE') ||
+      options[0];
+    return {
+      id: quote.id,
+      rate: Number(quote.rate || 0),
+      sourceAmount: Number(balance?.sourceAmount ?? quote.sourceAmount ?? params.sourceAmount),
+      targetAmount: Number(balance?.targetAmount ?? quote.targetAmount ?? 0),
+      fee: Number(balance?.fee?.total ?? 0),
+      sourceCurrency: quote.sourceCurrency || this.sourceCurrency,
+      targetCurrency: quote.targetCurrency || params.targetCurrency,
+    };
   }
 
   private async assertSufficientBalance(profileId: number, needed: number) {
@@ -387,13 +677,15 @@ export class WiseService {
     const iban = this.clean(bank.iban);
     const accountNumber = this.clean(bank.accountNumber);
     const routing = this.clean(bank.routingNumber);
+    const sortCode = this.clean(bank.sortCode) || routing;
     const swift = this.clean(bank.swiftBic);
+    const extra = bank.extraDetails || {};
     const country =
       toIsoCountryCode(bank.country) ||
       toIsoCountryCode(user.country) ||
       (iban ? iban.slice(0, 2) : null);
 
-    if (!iban && !accountNumber) {
+    if (!iban && !accountNumber && !Object.keys(extra).length) {
       throw new BadRequestException(
         'Recipient bank details need an IBAN or account number for Wise payout.',
       );
@@ -422,6 +714,7 @@ export class WiseService {
           legalType: 'PRIVATE',
           iban,
           address,
+          ...extra,
         },
       };
     }
@@ -436,18 +729,20 @@ export class WiseService {
           accountNumber,
           accountType: 'CHECKING',
           address: { ...address, country: 'US' },
+          ...extra,
         },
       };
     }
 
-    if (currency === 'GBP' && routing && accountNumber) {
+    if (currency === 'GBP' && sortCode && accountNumber) {
       return {
         ...base,
         type: 'sort_code',
         details: {
           legalType: 'PRIVATE',
-          sortCode: routing,
+          sortCode,
           accountNumber,
+          ...extra,
         },
       };
     }
@@ -461,6 +756,7 @@ export class WiseService {
           swiftCode: swift,
           accountNumber,
           address,
+          ...extra,
         },
       };
     }
@@ -474,6 +770,22 @@ export class WiseService {
           ...(swift ? { swiftCode: swift } : {}),
           accountNumber,
           address,
+          ...extra,
+        },
+      };
+    }
+
+    const extraType = extra.type;
+    const restExtra = { ...extra };
+    delete restExtra.type;
+    if (Object.keys(restExtra).length) {
+      return {
+        ...base,
+        type: extraType || 'iban',
+        details: {
+          legalType: 'PRIVATE',
+          address,
+          ...restExtra,
         },
       };
     }
@@ -511,12 +823,63 @@ export class WiseService {
     );
   }
 
+  private isTransferFunded(status: string): boolean {
+    return [
+      'processing',
+      'funds_converted',
+      'outgoing_payment_sent',
+      'bounced_back',
+      'charged_back',
+    ].includes(status);
+  }
+
   private resolveTargetCurrency(bank: WiseBankDetails): string {
     const explicit = (bank.currency || '').trim().toUpperCase();
     if (explicit && explicit !== 'USD') return explicit;
     const fromIban = currencyFromIban(bank.iban);
     if (fromIban) return fromIban;
+    const fromCountry = defaultCurrencyForCountry(bank.country);
+    if (fromCountry) return fromCountry;
     return explicit || this.sourceCurrency;
+  }
+
+  private flattenRequirementFields(opt: any): Array<{
+    key: string;
+    name: string;
+    required: boolean;
+    type: string;
+    example?: string;
+    minLength?: number;
+    maxLength?: number;
+    valuesAllowed?: Array<{ key: string; name?: string }>;
+  }> {
+    const fields: Array<{
+      key: string;
+      name: string;
+      required: boolean;
+      type: string;
+      example?: string;
+      minLength?: number;
+      maxLength?: number;
+      valuesAllowed?: Array<{ key: string; name?: string }>;
+    }> = [];
+    for (const group of opt.fields || []) {
+      for (const item of group.group || []) {
+        if (!item?.key) continue;
+        if (item.key === 'legalType') continue;
+        fields.push({
+          key: item.key,
+          name: item.name || group.name || item.key,
+          required: Boolean(item.required),
+          type: item.type || 'text',
+          example: item.example || undefined,
+          minLength: item.minLength,
+          maxLength: item.maxLength,
+          valuesAllowed: item.valuesAllowed,
+        });
+      }
+    }
+    return fields;
   }
 
   private clean(value?: string): string {
@@ -527,13 +890,14 @@ export class WiseService {
     method: 'GET' | 'POST',
     url: string,
     data?: Record<string, unknown>,
+    extraHeaders?: Record<string, string>,
   ): Promise<T> {
     try {
       const res = await this.http.request<T>({
         method,
         url,
         data,
-        headers: this.authHeaders(),
+        headers: { ...this.authHeaders(), ...(extraHeaders || {}) },
       });
       return res.data;
     } catch (err) {
@@ -547,7 +911,7 @@ export class WiseService {
     const message = this.errorMessage(err);
 
     this.logger.error(
-      `Wise API ${axiosErr.config?.method?.toUpperCase()} ${axiosErr.config?.url} failed (${status}): ${message}`,
+      `Wise API ${axiosErr.config?.method?.toUpperCase()} ${axiosErr.config?.url} failed (${status || axiosErr.code || 'error'})`,
     );
 
     if (status === 401 || status === 403) {
@@ -560,8 +924,12 @@ export class WiseService {
         );
       }
       return new BadRequestException(
-        'Wise authentication failed. Check WISE_API_TOKEN and WISE_PROFILE_ID.',
+        'Wise authentication failed. Check the admin Wise API token and profile.',
       );
+    }
+
+    if (status === 422) {
+      return new BadRequestException(this.toUserFacingError(message));
     }
 
     if (status && status >= 500) {
@@ -570,7 +938,20 @@ export class WiseService {
       );
     }
 
-    return new BadRequestException(message || 'Wise payout failed');
+    const code = String(axiosErr.code || '');
+    if (
+      code === 'ENOTFOUND' ||
+      code === 'EAI_AGAIN' ||
+      code === 'ECONNRESET' ||
+      code === 'ETIMEDOUT' ||
+      code === 'ECONNREFUSED'
+    ) {
+      return new ServiceUnavailableException(
+        'Wise sandbox se connect nahi ho saka. IPv4/DNS issue tha — retry karein.',
+      );
+    }
+
+    return new BadRequestException(this.toUserFacingError(message));
   }
 
   private fundErrorMessage(fund: {
