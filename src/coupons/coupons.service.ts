@@ -17,9 +17,11 @@ import { CreateCouponDto } from './dto/create-coupon.dto';
 import { UpdateCouponDto } from './dto/update-coupon.dto';
 import {
   calculateCouponDiscountAmount,
+  canUserRedeemShopRegistrationCoupon,
   isCouponCurrentlyValid,
   normalizeCouponCode,
 } from '../common/coupon-discount';
+import { StripeCouponSyncService } from './stripe-coupon-sync.service';
 import { roundMoney } from '../common/order-monetary';
 import {
   CouponAnalyticsOverview,
@@ -52,6 +54,7 @@ export class CouponsService implements OnModuleInit {
     private couponModel: Model<CouponDocument>,
     @InjectModel(Order.name)
     private orderModel: Model<OrderDocument>,
+    private stripeCouponSync: StripeCouponSyncService,
   ) {}
 
   async onModuleInit() {
@@ -99,7 +102,9 @@ export class CouponsService implements OnModuleInit {
       isActive: createCouponDto.isActive ?? true,
     });
 
-    return coupon.save();
+    const saved = await coupon.save();
+    this.stripeCouponSync.syncCouponToAllAccounts(saved as CouponDocument).catch(() => undefined);
+    return saved;
   }
 
   async findAll(): Promise<Coupon[]> {
@@ -174,7 +179,15 @@ export class CouponsService implements OnModuleInit {
       coupon.expiresAt = rawExpires ? new Date(rawExpires) : undefined;
     }
 
-    return coupon.save();
+    const saved = await coupon.save();
+    if (saved.usageType === CouponUsageType.SHOP_REGISTRATION) {
+      if (saved.isActive === false || !isCouponCurrentlyValid(saved)) {
+        this.stripeCouponSync.deactivateCouponPromos(saved.code).catch(() => undefined);
+      } else {
+        this.stripeCouponSync.syncCouponToAllAccounts(saved).catch(() => undefined);
+      }
+    }
+    return saved;
   }
 
   async remove(id: string): Promise<void> {
@@ -182,6 +195,7 @@ export class CouponsService implements OnModuleInit {
     if (!result) {
       throw new NotFoundException('Coupon not found');
     }
+    this.stripeCouponSync.deactivateCouponPromos(result.code).catch(() => undefined);
   }
 
   async validateForCheckout(
@@ -207,11 +221,24 @@ export class CouponsService implements OnModuleInit {
   async validateForShopRegistration(
     code: string,
     subtotal: number,
+    existingUserCouponCode?: string,
   ): Promise<ShopRegistrationCouponResult> {
-    const coupon = await this.findValidCoupon(
-      code,
-      CouponUsageType.SHOP_REGISTRATION,
-    );
+    if (
+      !canUserRedeemShopRegistrationCoupon(existingUserCouponCode, code)
+    ) {
+      throw new BadRequestException(
+        'This account has already used a registration coupon. Each user can redeem a coupon only once.',
+      );
+    }
+
+    const alreadyRedeemedOnAccount =
+      !!existingUserCouponCode &&
+      normalizeCouponCode(existingUserCouponCode) === normalizeCouponCode(code);
+
+    const coupon = alreadyRedeemedOnAccount
+      ? await this.findShopRegistrationCoupon(code)
+      : await this.findValidCoupon(code, CouponUsageType.SHOP_REGISTRATION);
+
     const discountAmount = calculateCouponDiscountAmount(coupon, subtotal);
     const totalAfterDiscount = Math.max(0, roundMoney(subtotal - discountAmount));
 
@@ -226,6 +253,21 @@ export class CouponsService implements OnModuleInit {
       totalAfterDiscount,
       isFullyCovered: totalAfterDiscount <= 0,
     };
+  }
+
+  async findShopRegistrationCoupon(code: string): Promise<CouponDocument> {
+    const normalized = normalizeCouponCode(code);
+    const coupon = await this.couponModel.findOne({ code: normalized });
+    if (!coupon) {
+      throw new BadRequestException('Invalid coupon code');
+    }
+    const usageType = coupon.usageType || CouponUsageType.ORDER;
+    if (usageType !== CouponUsageType.SHOP_REGISTRATION) {
+      throw new BadRequestException(
+        'This coupon is only valid for order checkout',
+      );
+    }
+    return coupon;
   }
 
   async findValidCoupon(

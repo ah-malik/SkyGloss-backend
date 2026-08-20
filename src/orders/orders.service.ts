@@ -82,7 +82,8 @@ import {
 } from '../common/order-number';
 import { normalizeCurrencyCode } from '../common/currency-codes';
 import { normalizeOrderItemType } from '../common/order-type';
-import { CouponsService } from '../coupons/coupons.service';
+import { CouponsService, ShopRegistrationCouponResult } from '../coupons/coupons.service';
+import { StripeCouponSyncService } from '../coupons/stripe-coupon-sync.service';
 import { CommissionsService } from '../payouts/services/commissions.service';
 import { RedisCacheService } from '../redis/redis-cache.service';
 import { CacheKeys, CacheTtl } from '../redis/redis.constants';
@@ -113,6 +114,7 @@ export class OrdersService implements OnModuleInit {
     private pdfService: PdfService,
     private exchangeRatesService: ExchangeRatesService,
     private couponsService: CouponsService,
+    private stripeCouponSync: StripeCouponSyncService,
     private commissionsService: CommissionsService,
     private productsService: ProductsService,
     private readonly cache: RedisCacheService,
@@ -367,7 +369,11 @@ export class OrdersService implements OnModuleInit {
     };
   }
 
-  async createDistributorFeeCheckoutSession(userId: string, email: string, additionalMetadata: any = {}) {
+  async createDistributorFeeCheckoutSession(
+    userId: string,
+    email: string,
+    additionalMetadata: any = {},
+  ): Promise<{ url: string | null; id: string } | { paid: true; user: any }> {
     const user = await this.usersService.findOne(userId);
     const type = additionalMetadata.type || 'partner_registration';
     const country =
@@ -375,6 +381,7 @@ export class OrdersService implements OnModuleInit {
     const isUsaUser = this.isUsaCountry(country);
     const stripeInstance = this.getStripeForUsaUser(isUsaUser);
     const baseUrl = this.getFrontendBaseUrl();
+    const isShopRegistration = type === 'shop_registration';
 
     const keyMode = ((isUsaUser
       ? this.configService.get<string>('USA_STRIPE_SECRET_KEY')
@@ -412,6 +419,47 @@ export class OrdersService implements OnModuleInit {
     }
 
     const totalBeforeDiscount = unit_amount + tax_amount;
+    let appliedShopCoupon: ShopRegistrationCouponResult | null = null;
+    let allowPromotionCodes = true;
+    let registrationProductId: string | undefined;
+
+    if (isShopRegistration) {
+      const requestedCode =
+        additionalMetadata.couponCode || user?.couponCode || '';
+      if (requestedCode) {
+        appliedShopCoupon = await this.couponsService.validateForShopRegistration(
+          requestedCode,
+          totalBeforeDiscount / 100,
+          user?.couponCode,
+        );
+        if (!user?.couponCode && appliedShopCoupon.code) {
+          await this.usersService.update(
+            userId,
+            { couponCode: appliedShopCoupon.code } as any,
+            { role: UserRole.ADMIN } as any,
+          );
+        }
+        allowPromotionCodes = false;
+        additionalMetadata.couponCode = appliedShopCoupon.code;
+        additionalMetadata.registrationDiscount = appliedShopCoupon.discountAmount;
+        additionalMetadata.finalAmount = appliedShopCoupon.totalAfterDiscount;
+      } else {
+        try {
+          registrationProductId = await this.stripeCouponSync.syncShopRegistrationPromos(
+            stripeInstance,
+            isUsaUser ? 'usa' : 'global',
+            currency,
+          );
+        } catch (syncErr) {
+          this.logger.warn(
+            `Failed to sync shop registration coupons to Stripe: ${
+              (syncErr as Error)?.message || syncErr
+            }`,
+          );
+        }
+      }
+    }
+
     const registrationDiscountCents = additionalMetadata.registrationDiscount
       ? Math.round(Number(additionalMetadata.registrationDiscount) * 100)
       : 0;
@@ -425,6 +473,10 @@ export class OrdersService implements OnModuleInit {
       tax_amount = 0;
     }
 
+    if (isShopRegistration && appliedShopCoupon?.isFullyCovered) {
+      return this.completeShopRegistrationWithCoupon(userId, appliedShopCoupon);
+    }
+
     const feeName = user
       ? getRegistrationFeeName(user.role)
       : type === 'shop_registration'
@@ -436,21 +488,38 @@ export class OrdersService implements OnModuleInit {
         ? 'One-time fee to activate FUSION certification and online training courses'
         : 'One-time fee to activate your SkyGloss Hub account.';
 
+    const feePriceData: Stripe.Checkout.SessionCreateParams.LineItem.PriceData = {
+      currency,
+      unit_amount,
+      ...(isShopRegistration && allowPromotionCodes && registrationProductId
+        ? { product: registrationProductId }
+        : {
+            product_data: {
+              name: feeName,
+              description: feeDescription,
+            },
+          }),
+    };
+
+    if (
+      isShopRegistration &&
+      allowPromotionCodes &&
+      registrationProductId
+    ) {
+      feePriceData.unit_amount = totalBeforeDiscount;
+    }
+
     const line_items: Stripe.Checkout.SessionCreateParams.LineItem[] = [
       {
-        price_data: {
-          currency,
-          product_data: {
-            name: feeName,
-            description: feeDescription,
-          },
-          unit_amount,
-        },
+        price_data: feePriceData,
         quantity: 1,
       },
     ];
 
-    if (tax_amount > 0) {
+    if (
+      tax_amount > 0 &&
+      !(isShopRegistration && allowPromotionCodes && registrationProductId)
+    ) {
       line_items.push({
         price_data: {
           currency,
@@ -469,7 +538,7 @@ export class OrdersService implements OnModuleInit {
     try {
       const session = await stripeInstance.checkout.sessions.create({
         payment_method_types: ['card'],
-        allow_promotion_codes: true,
+        allow_promotion_codes: allowPromotionCodes,
         line_items,
         mode: 'payment',
         success_url: `${baseUrl}${success_path}${successJoiner}user_id=${userId}`,
@@ -493,6 +562,104 @@ export class OrdersService implements OnModuleInit {
         `Stripe session creation failed: ${error.message}`,
       );
     }
+  }
+
+  private async completeShopRegistrationWithCoupon(
+    userId: string,
+    coupon: ShopRegistrationCouponResult,
+  ): Promise<{ paid: true; user: any }> {
+    const existing = await this.usersService.findOne(userId);
+    if (existing?.isPartnerPaid) {
+      return {
+        paid: true as const,
+        user: existing,
+      };
+    }
+
+    const updatedUser = await this.usersService.update(
+      userId,
+      {
+        status: UserStatus.ACTIVE,
+        isPartnerPaid: true,
+        couponCode: coupon.code,
+      } as any,
+      { role: UserRole.ADMIN } as any,
+    );
+
+    if (!updatedUser) {
+      throw new BadRequestException('Unable to complete registration with coupon.');
+    }
+
+    let invoiceBuffer: Buffer | undefined;
+    let orderNumber: string | undefined;
+    try {
+      const regOrder = await this.createRegistrationOrder(updatedUser, undefined, {
+        couponCode: coupon.code,
+        discount: coupon.discountAmount,
+      });
+      invoiceBuffer = await this.generateInvoicePdf(regOrder);
+      orderNumber = regOrder.orderNumber;
+      await this.recordCouponUsageIfApplicable(coupon.code);
+    } catch (orderErr) {
+      console.error(
+        '[Shop Registration Coupon] Failed to create registration order:',
+        orderErr,
+      );
+    }
+
+    try {
+      await this.mailService.sendDistributorPaymentCompletedAdminNotification(
+        [],
+        updatedUser,
+      );
+      if (updatedUser.email) {
+        const partnerContact =
+          await this.usersService.getPartnerContactForShop(updatedUser);
+        await this.mailService.sendDistributorPaymentConfirmation(
+          updatedUser.email,
+          updatedUser,
+          invoiceBuffer,
+          orderNumber,
+          partnerContact,
+        );
+      }
+    } catch (mailErr) {
+      console.error(
+        '[Shop Registration Coupon] Failed to send payment emails:',
+        mailErr,
+      );
+    }
+
+    return {
+      paid: true,
+      user: updatedUser,
+    };
+  }
+
+  private async resolvePaidShopRegistrationCoupon(
+    stripeInstance: Stripe,
+    session: Stripe.Checkout.Session,
+    user: any,
+  ): Promise<{ couponCode?: string; discount?: number }> {
+    const stripeDiscount = (session.total_details?.amount_discount || 0) / 100;
+    const promoCode = await this.stripeCouponSync
+      .resolveCodeFromCheckoutSession(stripeInstance, session)
+      .catch(() => undefined);
+    const metadataCode = session.metadata?.couponCode;
+    const couponCode = user?.couponCode || promoCode || metadataCode || undefined;
+
+    if (promoCode && !user?.couponCode) {
+      await this.usersService.update(
+        String(user._id),
+        { couponCode: promoCode } as any,
+        { role: UserRole.ADMIN } as any,
+      );
+    }
+
+    return {
+      couponCode,
+      discount: stripeDiscount > 0.01 ? stripeDiscount : undefined,
+    };
   }
 
   async createCheckoutSession(
@@ -967,9 +1134,17 @@ export class OrdersService implements OnModuleInit {
             const session = await stripeInstance.checkout.sessions.retrieve(stripeSessionId);
             if (session) {
               totalAmount = (session.amount_total || 0) / 100;
-              discount = (session.total_details?.amount_discount || 0) / 100;
-              if (discount > 0.01) {
-                couponCode = 'STRIPECOUPON';
+              const stripeDiscount = (session.total_details?.amount_discount || 0) / 100;
+              const resolvedPromo = await this.stripeCouponSync
+                .resolveCodeFromCheckoutSession(stripeInstance, session)
+                .catch(() => undefined);
+              if (stripeDiscount > 0.01) {
+                discount = stripeDiscount;
+                couponCode =
+                  couponOptions?.couponCode || resolvedPromo || couponCode || 'STRIPECOUPON';
+              } else if (couponOptions?.couponCode) {
+                couponCode = couponOptions.couponCode;
+                discount = Math.max(0, roundMoney(subtotal - totalAmount));
               }
             }
           } catch (stripeErr) {
@@ -979,9 +1154,14 @@ export class OrdersService implements OnModuleInit {
       } else {
         stripeSessionId = stripeSessionOrId.id;
         totalAmount = (stripeSessionOrId.amount_total || 0) / 100;
-        discount = (stripeSessionOrId.total_details?.amount_discount || 0) / 100;
-        if (discount > 0.01) {
-          couponCode = 'STRIPECOUPON';
+        const stripeDiscount = (stripeSessionOrId.total_details?.amount_discount || 0) / 100;
+        if (stripeDiscount > 0.01) {
+          discount = stripeDiscount;
+          couponCode =
+            couponOptions?.couponCode || couponCode || 'STRIPECOUPON';
+        } else if (couponOptions?.couponCode) {
+          couponCode = couponOptions.couponCode;
+          discount = Math.max(0, roundMoney(subtotal - totalAmount));
         }
       }
     }
@@ -1163,6 +1343,12 @@ export class OrdersService implements OnModuleInit {
     if (session.payment_status === 'paid') {
       console.log(`[Manual Verify] Payment confirmed for user ${userId}. Activating...`);
 
+      const couponInfo = await this.resolvePaidShopRegistrationCoupon(
+        this.getStripeForUsaUser(this.isUsaCountry(user.country || '')),
+        session,
+        user,
+      );
+
       const updatedUser = await this.usersService.update(userId, {
         isPartnerPaid: true,
         status: UserStatus.ACTIVE,
@@ -1174,15 +1360,17 @@ export class OrdersService implements OnModuleInit {
         let invoiceBuffer: Buffer | undefined;
         let orderNumber: string | undefined;
         try {
+          const couponCode = couponInfo.couponCode || updatedUser.couponCode;
           const regOrder = await this.createRegistrationOrder(
             updatedUser,
             session,
-            updatedUser.couponCode
-              ? { couponCode: updatedUser.couponCode }
+            couponCode
+              ? { couponCode, discount: couponInfo.discount }
               : undefined,
           );
           invoiceBuffer = await this.generateInvoicePdf(regOrder);
           orderNumber = regOrder.orderNumber;
+          await this.recordCouponUsageIfApplicable(couponCode);
         } catch (orderErr) {
           console.error('[Manual Verify] Failed to create registration order:', orderErr);
         }
@@ -1387,6 +1575,12 @@ export class OrdersService implements OnModuleInit {
         return { received: true };
       }
 
+      const couponInfo = await this.resolvePaidShopRegistrationCoupon(
+        this.usaStripe || this.stripe,
+        session,
+        existingShop,
+      );
+
       const updatedUser = await this.usersService.update(
         userId,
         {
@@ -1402,15 +1596,17 @@ export class OrdersService implements OnModuleInit {
         let invoiceBuffer: Buffer | undefined;
         let orderNumber: string | undefined;
         try {
+          const couponCode = couponInfo.couponCode || updatedUser.couponCode;
           const regOrder = await this.createRegistrationOrder(
             updatedUser,
             session,
-            updatedUser.couponCode
-              ? { couponCode: updatedUser.couponCode }
+            couponCode
+              ? { couponCode, discount: couponInfo.discount }
               : undefined,
           );
           invoiceBuffer = await this.generateInvoicePdf(regOrder);
           orderNumber = regOrder.orderNumber;
+          await this.recordCouponUsageIfApplicable(couponCode);
         } catch (orderErr) {
           console.error(
             '[USA Stripe Webhook] Failed to create registration order:',
@@ -1586,6 +1782,12 @@ export class OrdersService implements OnModuleInit {
           return { received: true };
         }
 
+        const couponInfo = await this.resolvePaidShopRegistrationCoupon(
+          this.stripe,
+          session,
+          existingShop,
+        );
+
         const updatedUser = await this.usersService.update(userId, {
           status: UserStatus.ACTIVE,
           isPartnerPaid: true,
@@ -1597,15 +1799,17 @@ export class OrdersService implements OnModuleInit {
           let invoiceBuffer: Buffer | undefined;
           let orderNumber: string | undefined;
           try {
+            const couponCode = couponInfo.couponCode || updatedUser.couponCode;
             const regOrder = await this.createRegistrationOrder(
             updatedUser,
             session,
-            updatedUser.couponCode
-              ? { couponCode: updatedUser.couponCode }
+            couponCode
+              ? { couponCode, discount: couponInfo.discount }
               : undefined,
           );
             invoiceBuffer = await this.generateInvoicePdf(regOrder);
             orderNumber = regOrder.orderNumber;
+            await this.recordCouponUsageIfApplicable(couponCode);
           } catch (orderErr) {
             console.error('[Stripe Webhook] Failed to create registration order:', orderErr);
           }

@@ -170,11 +170,17 @@ export class AuthController {
   }
 
   @Post('validate-shop-registration-coupon')
+  @UseGuards(OptionalJwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   async validateShopRegistrationCoupon(
     @Body() dto: ValidateShopRegistrationCouponDto,
+    @Req() req: any,
   ) {
-    return this.authService.validateShopRegistrationCoupon(dto.code, dto.country);
+    return this.authService.validateShopRegistrationCoupon(
+      dto.code,
+      dto.country,
+      req.user?.couponCode,
+    );
   }
 
   @UseGuards(JwtAuthGuard)

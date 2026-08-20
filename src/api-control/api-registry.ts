@@ -229,6 +229,11 @@ export const FRONTEND_APIS: ApiEndpointDef[] = [
 
   // PDF
   def('frontend', 'PDF', 'GET', '/pdf/certificate', 'Download certificate'),
+
+  // Inventory
+  def('frontend', 'Inventory', 'GET', '/inventory/me', 'Get my inventory'),
+  def('frontend', 'Inventory', 'PATCH', '/inventory/me', 'Update my inventory'),
+  def('frontend', 'Inventory', 'PATCH', '/inventory/me/adjust', 'Adjust my inventory'),
 ];
 
 /** Admin panel APIs (grouped). */

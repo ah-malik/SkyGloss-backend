@@ -26,6 +26,7 @@ import { ApiControlModule } from './api-control/api-control.module';
 import { RedisModule } from './redis/redis.module';
 import { HealthModule } from './health/health.module';
 import { UserActivityModule } from './user-activity/user-activity.module';
+import { InventoryModule } from './inventory/inventory.module';
 import { CsrfMiddleware } from './auth/csrf.middleware';
 
 @Module({
@@ -62,6 +63,7 @@ import { CsrfMiddleware } from './auth/csrf.middleware';
     PayoutsModule,
     ApiControlModule,
     UserActivityModule,
+    InventoryModule,
   ],
   controllers: [AppController],
   providers: [AppService, SeedService],

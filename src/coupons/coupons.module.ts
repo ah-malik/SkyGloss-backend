@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { CouponsService } from './coupons.service';
 import { CouponsController } from './coupons.controller';
+import { StripeCouponSyncService } from './stripe-coupon-sync.service';
 import { Coupon, CouponSchema } from './entities/coupon.entity';
 import { Order, OrderSchema } from '../orders/entities/order.entity';
 
@@ -13,7 +14,7 @@ import { Order, OrderSchema } from '../orders/entities/order.entity';
     ]),
   ],
   controllers: [CouponsController],
-  providers: [CouponsService],
-  exports: [CouponsService],
+  providers: [CouponsService, StripeCouponSyncService],
+  exports: [CouponsService, StripeCouponSyncService],
 })
 export class CouponsModule {}

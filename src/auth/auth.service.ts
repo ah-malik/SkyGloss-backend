@@ -302,7 +302,7 @@ export class AuthService {
       return {
         paymentRequired: true,
         message: 'Payment of $250 registration fee is required to access the dashboard.',
-        stripeUrl: stripeSession.url,
+        stripeUrl: (stripeSession as { url?: string }).url,
       };
     }
 
@@ -560,7 +560,7 @@ export class AuthService {
 
     return {
       message: 'Registration successful. Redirecting to payment...',
-      stripeUrl: stripeSession.url,
+      stripeUrl: (stripeSession as { url?: string }).url,
       user: {
         id: user._id,
         email: user.email,
@@ -575,6 +575,7 @@ export class AuthService {
   async validateShopRegistrationCoupon(
     code: string,
     country?: string,
+    existingUserCouponCode?: string,
   ): Promise<ShopRegistrationCouponResult> {
     let subtotal = 250;
     try {
@@ -586,7 +587,11 @@ export class AuthService {
       console.error('[AuthService] Failed to resolve registration fee for coupon:', err);
     }
 
-    return this.couponsService.validateForShopRegistration(code, subtotal);
+    return this.couponsService.validateForShopRegistration(
+      code,
+      subtotal,
+      existingUserCouponCode,
+    );
   }
 
   async registerShop(

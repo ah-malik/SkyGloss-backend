@@ -12,7 +12,19 @@ export interface CouponLike {
 }
 
 export function normalizeCouponCode(code: string): string {
-  return code.trim().toUpperCase();
+  return String(code || '').trim().toUpperCase();
+}
+
+/** One shop-registration coupon per account: same code may be re-applied, a different code may not. */
+export function canUserRedeemShopRegistrationCoupon(
+  existingUserCouponCode: string | undefined | null,
+  incomingCode: string,
+): boolean {
+  const existing = existingUserCouponCode
+    ? normalizeCouponCode(existingUserCouponCode)
+    : '';
+  if (!existing) return true;
+  return existing === normalizeCouponCode(incomingCode);
 }
 
 export function isCouponCurrentlyValid(coupon: CouponLike, now = new Date()): boolean {

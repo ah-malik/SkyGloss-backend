@@ -47,6 +47,25 @@ export class Coupon {
 
   @Prop()
   description?: string;
+
+  /** Stripe promotion-code IDs mirrored for shop-registration checkout (USA + global accounts). */
+  @Prop({ type: Object })
+  stripeSync?: {
+    global?: {
+      couponId: string;
+      promotionCodeId: string;
+      productId: string;
+      currency?: string;
+      fingerprint: string;
+    };
+    usa?: {
+      couponId: string;
+      promotionCodeId: string;
+      productId: string;
+      currency?: string;
+      fingerprint: string;
+    };
+  };
 }
 
 export const CouponSchema = SchemaFactory.createForClass(Coupon);
