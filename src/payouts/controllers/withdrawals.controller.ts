@@ -75,6 +75,12 @@ export class WithdrawalsController {
     return this.withdrawalsService.listAdminPending();
   }
 
+  @Get('admin/wise-balance')
+  @Roles(UserRole.ADMIN)
+  getWiseBalance() {
+    return this.withdrawalsService.getWiseAccountSummary();
+  }
+
   @Get(':id')
   @Roles(...PAYOUT_VIEW_ROLES, UserRole.ADMIN)
   getDetail(@Param('id') id: string, @GetUser() user: UserDocument) {

@@ -45,6 +45,10 @@ export class WithdrawalsService {
     private wiseService: WiseService,
   ) {}
 
+  getWiseAccountSummary() {
+    return this.wiseService.getAccountSummary();
+  }
+
   private wiseErrorMessage(err: unknown): string {
     if (err instanceof BadRequestException) {
       const res = err.getResponse();

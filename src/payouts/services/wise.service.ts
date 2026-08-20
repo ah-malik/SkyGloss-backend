@@ -78,9 +78,12 @@ export class WiseService {
   private cachedProfileId?: number;
 
   constructor(private readonly config: ConfigService) {
-    const baseURL = (
+    let baseURL = (
       this.config.get<string>('WISE_API_URL') || 'https://api.wise.com'
     ).replace(/\/+$/, '');
+    if (baseURL.includes('api.sandbox.transferwise.tech')) {
+      baseURL = 'https://api.wise-sandbox.com';
+    }
     this.token = (this.config.get<string>('WISE_API_TOKEN') || '').trim();
     this.sourceCurrency = (
       this.config.get<string>('WISE_SOURCE_CURRENCY') || 'USD'
@@ -98,6 +101,67 @@ export class WiseService {
 
   isConfigured(): boolean {
     return Boolean(this.token);
+  }
+
+  async getAccountSummary() {
+    if (!this.isConfigured()) {
+      throw new BadRequestException(
+        'Wise is not configured. Set WISE_API_TOKEN on the backend.',
+      );
+    }
+
+    const profileId = await this.getProfileId();
+    const profiles = await this.request<
+      Array<{
+        id: number;
+        type?: string;
+        fullName?: string;
+        details?: { name?: string; firstName?: string; lastName?: string };
+      }>
+    >('GET', '/v1/profiles');
+    const profile = profiles.find((p) => p.id === profileId) || profiles[0];
+    const balances = await this.request<
+      Array<{
+        id: number;
+        type?: string;
+        currency?: string;
+        amount?: { value?: number; currency?: string };
+        reservedAmount?: { value?: number };
+      }>
+    >('GET', `/v4/profiles/${profileId}/balances?types=STANDARD`);
+
+    const mapped = (balances || []).map((b) => ({
+      id: b.id,
+      type: b.type || 'STANDARD',
+      currency: (b.amount?.currency || b.currency || '').toUpperCase(),
+      amount: Number(b.amount?.value || 0),
+      reserved: Number(b.reservedAmount?.value || 0),
+    }));
+    const source = mapped.find((b) => b.currency === this.sourceCurrency);
+
+    return {
+      configured: true,
+      environment: this.http.defaults.baseURL?.includes('sandbox')
+        ? 'sandbox'
+        : 'production',
+      profile: {
+        id: profileId,
+        type: profile?.type || null,
+        name:
+          profile?.fullName ||
+          profile?.details?.name ||
+          [profile?.details?.firstName, profile?.details?.lastName]
+            .filter(Boolean)
+            .join(' ') ||
+          null,
+      },
+      sourceCurrency: this.sourceCurrency,
+      sourceBalance: source?.amount ?? 0,
+      sourceBalanceId: source?.id ?? null,
+      balances: mapped.filter(
+        (b) => b.amount > 0 || b.currency === this.sourceCurrency,
+      ),
+    };
   }
 
   async sendPayout(input: WisePayoutInput): Promise<WisePayoutResult> {
