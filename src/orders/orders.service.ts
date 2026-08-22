@@ -9,7 +9,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
 import Stripe from 'stripe';
 import {
@@ -20,6 +20,7 @@ import {
 import { CreateOrderDto } from './dto/create-order.dto';
 import { CreateAdminTestOrderDto } from './dto/create-admin-test-order.dto';
 import { ProductsService } from '../products/products.service';
+import { ProductInventoryService } from '../inventory/product-inventory.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
 import { NotificationType } from '../notifications/entities/notification.entity';
@@ -117,6 +118,7 @@ export class OrdersService implements OnModuleInit {
     private stripeCouponSync: StripeCouponSyncService,
     private commissionsService: CommissionsService,
     private productsService: ProductsService,
+    private productInventoryService: ProductInventoryService,
     private readonly cache: RedisCacheService,
   ) {
     const stripeSecretKey = this.configService.get<string>('STRIPE_SECRET_KEY');
@@ -710,6 +712,14 @@ export class OrdersService implements OnModuleInit {
 
     const orderTotal = Math.max(0, itemsSubtotal + shippingFee - discount);
 
+    await this.productInventoryService.assertStockAvailableForOrder({
+      items,
+      user: currentUser as any,
+      actingParentPartnerCode: (
+        await this.actingParentStampForUser(userId)
+      ).actingParentPartnerCode,
+    });
+
     let order: any;
     let retries = 3;
     while (retries > 0) {
@@ -756,6 +766,7 @@ export class OrdersService implements OnModuleInit {
         order._id.toString(),
         OrderStatus.PENDING,
       );
+      await this.deductProductInventoryForOrder(order._id);
     }
 
     try {
@@ -887,6 +898,83 @@ export class OrdersService implements OnModuleInit {
       country: shop.country,
     });
     return code ? { actingParentPartnerCode: code } : {};
+  }
+
+  /**
+   * Deduct product inventory for the order's acting Hub/Distributor once.
+   * Idempotent via inventoryDeductedAt. Skips registration fees.
+   */
+  private async deductProductInventoryForOrder(
+    orderId: string | Types.ObjectId,
+  ): Promise<void> {
+    try {
+      const claimed = await this.orderModel
+        .findOneAndUpdate(
+          {
+            _id: orderId,
+            $or: [
+              { inventoryDeductedAt: null },
+              { inventoryDeductedAt: { $exists: false } },
+            ],
+            'items.product': { $ne: 'registration_fee' },
+          },
+          { $set: { inventoryDeductedAt: new Date() } },
+          { new: true },
+        )
+        .populate(
+          'user',
+          'hubPartnerCode country parentLinkAssignedAt previousParentPartnerCode role',
+        );
+
+      if (!claimed) return;
+      if (isRegistrationOrder(claimed)) {
+        await this.orderModel.findByIdAndUpdate(claimed._id, {
+          $unset: { inventoryDeductedAt: 1 },
+        });
+        return;
+      }
+
+      await this.productInventoryService.deductForOrder(claimed as any);
+    } catch (err) {
+      this.logger.error(
+        `Failed to deduct product inventory for order ${orderId}`,
+        err as Error,
+      );
+      await this.orderModel
+        .findByIdAndUpdate(orderId, { $unset: { inventoryDeductedAt: 1 } })
+        .catch(() => undefined);
+    }
+  }
+
+  /** Restore product inventory if it was previously deducted for this order. */
+  private async restoreProductInventoryForOrder(
+    orderId: string | Types.ObjectId,
+  ): Promise<void> {
+    try {
+      const order = await this.orderModel
+        .findById(orderId)
+        .populate(
+          'user',
+          'hubPartnerCode country parentLinkAssignedAt previousParentPartnerCode role',
+        );
+      if (!order?.inventoryDeductedAt) return;
+      if (isRegistrationOrder(order)) {
+        await this.orderModel.findByIdAndUpdate(order._id, {
+          $unset: { inventoryDeductedAt: 1 },
+        });
+        return;
+      }
+
+      await this.productInventoryService.restoreForOrder(order as any);
+      await this.orderModel.findByIdAndUpdate(order._id, {
+        $unset: { inventoryDeductedAt: 1 },
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to restore product inventory for order ${orderId}`,
+        err as Error,
+      );
+    }
   }
 
   async createPaymentSessionForOrder(
@@ -1077,6 +1165,12 @@ export class OrdersService implements OnModuleInit {
           await this.mailService.sendOrderPaidCustomerConfirmation(populatedOrder, populatedOrder.user).catch(err => {
             console.error('Failed to send order paid confirmation email to customer (verifyPayment)', err);
           });
+
+          await this.applyOrderCommissions(
+            populatedOrder._id.toString(),
+            OrderStatus.PAID,
+          );
+          await this.deductProductInventoryForOrder(populatedOrder._id);
 
           return populatedOrder;
         }
@@ -1524,6 +1618,7 @@ export class OrdersService implements OnModuleInit {
           updatedOrder._id.toString(),
           OrderStatus.PAID,
         );
+        await this.deductProductInventoryForOrder(updatedOrder._id);
       } else {
         console.error(`[USA Stripe Webhook] Order ${orderId} not found in DB.`);
       }
@@ -1942,6 +2037,7 @@ export class OrdersService implements OnModuleInit {
             updatedOrder._id.toString(),
             OrderStatus.PAID,
           );
+          await this.deductProductInventoryForOrder(updatedOrder._id);
         } else {
           console.error(`[Stripe Webhook] Order with id ${orderId} not found in DB.`);
         }
@@ -3156,10 +3252,16 @@ export class OrdersService implements OnModuleInit {
         .catch((err) =>
           this.logger.error('Failed to cancel commission records', err),
         );
+      await this.restoreProductInventoryForOrder(updatedOrder._id);
+    }
+
+    if (status === OrderStatus.FAILED && oldStatus !== OrderStatus.FAILED) {
+      await this.restoreProductInventoryForOrder(updatedOrder._id);
     }
 
     if (status === OrderStatus.PAID && oldStatus !== OrderStatus.PAID) {
       await this.recordCouponUsageIfApplicable(updatedOrder.couponCode);
+      await this.deductProductInventoryForOrder(updatedOrder._id);
     }
 
     return actor
@@ -3190,6 +3292,14 @@ export class OrdersService implements OnModuleInit {
       if (!items || !Array.isArray(items) || items.length === 0) {
         throw new BadRequestException('Order items are required');
       }
+
+      await this.productInventoryService.assertStockAvailableForOrder({
+        items,
+        user: currentUser as any,
+        actingParentPartnerCode: (
+          await this.actingParentStampForUser(userId)
+        ).actingParentPartnerCode,
+      });
 
       const itemsSubtotal = getItemsSubtotal(items);
       const shippingCountry =
@@ -3250,6 +3360,7 @@ export class OrdersService implements OnModuleInit {
           savedOrder._id.toString(),
           OrderStatus.PENDING,
         );
+        await this.deductProductInventoryForOrder(savedOrder._id);
       }
 
       // Create notification for admin
@@ -3415,6 +3526,15 @@ export class OrdersService implements OnModuleInit {
       savedOrder._id.toString(),
       initialStatus,
     );
+
+    if (
+      initialStatus === OrderStatus.PENDING ||
+      initialStatus === OrderStatus.PAID ||
+      initialStatus === OrderStatus.SHIPPED ||
+      initialStatus === OrderStatus.DELIVERED
+    ) {
+      await this.deductProductInventoryForOrder(savedOrder._id);
+    }
 
     if (dto.markShippedImmediately) {
       await this.updateStatus(

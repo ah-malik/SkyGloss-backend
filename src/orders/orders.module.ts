@@ -14,6 +14,7 @@ import { ExchangeRatesModule } from '../exchange-rates/exchange-rates.module';
 import { CouponsModule } from '../coupons/coupons.module';
 import { PayoutsModule } from '../payouts/payouts.module';
 import { ProductsModule } from '../products/products.module';
+import { InventoryModule } from '../inventory/inventory.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { ProductsModule } from '../products/products.module';
     CouponsModule,
     PayoutsModule,
     ProductsModule,
+    InventoryModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService, OrdersSchedulerService],

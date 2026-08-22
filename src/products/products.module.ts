@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ProductsService } from './products.service';
 import { ProductsController } from './products.controller';
@@ -8,6 +8,7 @@ import {
   ProductGroupSchema,
 } from '../product-groups/entities/product-group.entity';
 import { CloudinaryModule } from '../cloudinary/cloudinary.module';
+import { InventoryModule } from '../inventory/inventory.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { CloudinaryModule } from '../cloudinary/cloudinary.module';
       { name: ProductGroup.name, schema: ProductGroupSchema },
     ]),
     CloudinaryModule,
+    forwardRef(() => InventoryModule),
   ],
   controllers: [ProductsController],
   providers: [ProductsService],

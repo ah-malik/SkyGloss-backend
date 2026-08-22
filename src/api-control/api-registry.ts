@@ -234,6 +234,21 @@ export const FRONTEND_APIS: ApiEndpointDef[] = [
   def('frontend', 'Inventory', 'GET', '/inventory/me', 'Get my inventory'),
   def('frontend', 'Inventory', 'PATCH', '/inventory/me', 'Update my inventory'),
   def('frontend', 'Inventory', 'PATCH', '/inventory/me/adjust', 'Adjust my inventory'),
+  def('frontend', 'Inventory', 'GET', '/inventory/me/products', 'Get my product inventory'),
+  def(
+    'frontend',
+    'Inventory',
+    'PATCH',
+    '/inventory/me/products/:productId',
+    'Update my product inventory',
+  ),
+  def(
+    'frontend',
+    'Inventory',
+    'PATCH',
+    '/inventory/me/products/:productId/adjust',
+    'Adjust my product inventory',
+  ),
 ];
 
 /** Admin panel APIs (grouped). */

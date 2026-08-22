@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Product, ProductDocument } from './entities/product.entity';
@@ -11,6 +11,10 @@ import { UpdateProductDto } from './dto/update-product.dto';
 import { User, UserRole } from '../users/entities/user.entity';
 import { RedisCacheService } from '../redis/redis-cache.service';
 import { CacheKeys, CacheTtl } from '../redis/redis.constants';
+import {
+  DEFAULT_PRODUCT_STOCK,
+  ProductInventoryService,
+} from '../inventory/product-inventory.service';
 
 @Injectable()
 export class ProductsService {
@@ -19,6 +23,8 @@ export class ProductsService {
     @InjectModel(ProductGroup.name)
     private productGroupModel: Model<ProductGroupDocument>,
     private readonly cache: RedisCacheService,
+    @Inject(forwardRef(() => ProductInventoryService))
+    private readonly productInventoryService: ProductInventoryService,
   ) { }
 
   async create(createProductDto: CreateProductDto): Promise<ProductDocument> {
@@ -81,7 +87,7 @@ export class ProductsService {
     // 1. If user has an applicable product group, STRICTLY restrict visibility and override prices
     if (groupToUse) {
       // Return only products in the group with group-specific prices
-      return groupToUse.products
+      const grouped = groupToUse.products
         .map((item) => {
           const product = item.productId as any;
           if (!product) return null;
@@ -100,12 +106,14 @@ export class ProductsService {
           };
         })
         .filter((p) => p !== null);
+
+      return this.attachViewerHubStock(grouped, user);
     }
 
     // 2. Fallback to standard fetching ONLY for users WITHOUT a product group or anonymous users
     // Cache this shared catalog path (not user-specific group pricing).
     const cacheKey = CacheKeys.productsList(status, targetAudience);
-    return this.cache.wrap(cacheKey, CacheTtl.productsList, async () => {
+    const catalog = await this.cache.wrap(cacheKey, CacheTtl.productsList, async () => {
       const filter: any = {};
       if (status) filter.status = status;
       if (targetAudience)
@@ -117,6 +125,8 @@ export class ProductsService {
         .lean()
         .exec();
     });
+
+    return this.attachViewerHubStock(catalog, user);
   }
 
   async findOne(id: string, user?: User): Promise<any> {
@@ -173,15 +183,18 @@ export class ProductsService {
       if (groupItem) {
         const product = groupItem.productId as any;
         const productObj = product.toObject ? product.toObject() : product;
-        return {
-          ...productObj,
-          sizes: groupItem.sizes.map((s) => ({
-            size: s.size,
-            price: s.price,
-          })),
-          currency: groupToUse.currency || 'USD',
-          groupName: groupToUse.name,
-        };
+        return this.attachViewerHubStockToOne(
+          {
+            ...productObj,
+            sizes: groupItem.sizes.map((s) => ({
+              size: s.size,
+              price: s.price,
+            })),
+            currency: groupToUse.currency || 'USD',
+            groupName: groupToUse.name,
+          },
+          user,
+        );
       } else {
         console.warn(
           `[ProductsService] Product ${id} NOT found in group ${groupToUse.name}`,
@@ -196,7 +209,11 @@ export class ProductsService {
     if (!product) {
       throw new NotFoundException(`Product with ID ${id} not found`);
     }
-    return product;
+    const productObj =
+      typeof (product as any).toObject === 'function'
+        ? (product as any).toObject()
+        : product;
+    return this.attachViewerHubStockToOne(productObj, user);
   }
 
   async update(
@@ -225,6 +242,51 @@ export class ProductsService {
     }
     await this.invalidateProductCaches();
     return deletedProduct;
+  }
+
+  /**
+   * Overlay Hub/Distributor product-inventory stock onto catalog products for:
+   * - Shops → Parent Link (Hub/Distributor) inventory
+   * - Representatives / Promoters → parent Hub/Distributor inventory (via referredBy)
+   * - Hub / Distributor → own inventory
+   */
+  private async attachViewerHubStock(
+    products: any[],
+    user?: User,
+  ): Promise<any[]> {
+    if (!products?.length || !user) return products;
+
+    try {
+      const stockMap =
+        await this.productInventoryService.getStockMapForViewer(user);
+      if (!stockMap) return products;
+
+      return products.map((product) => {
+        const id = String(product._id || product.id || '');
+        const stock = stockMap.has(id)
+          ? stockMap.get(id)!
+          : DEFAULT_PRODUCT_STOCK;
+        return {
+          ...product,
+          stock,
+          stockStatus: stock > 0 ? 'available' : 'out_of_stock',
+        };
+      });
+    } catch (err) {
+      console.error('[ProductsService] Failed to attach hub stock', err);
+      return products;
+    }
+  }
+
+  private async attachViewerHubStockToOne(
+    product: any,
+    user?: User,
+  ): Promise<any> {
+    const [enriched] = await this.attachViewerHubStock(
+      product ? [product] : [],
+      user,
+    );
+    return enriched || product;
   }
 
   async migrateStatuses(): Promise<void> {

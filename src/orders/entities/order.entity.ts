@@ -153,6 +153,13 @@ export class Order {
   @Prop()
   shippedAt?: Date;
 
+  /**
+   * Set when product inventory was deducted for the acting Hub/Distributor.
+   * Used for idempotent deduct/restore across webhooks and status updates.
+   */
+  @Prop()
+  inventoryDeductedAt?: Date;
+
   @Prop()
   cancellationReason?: string;
 
