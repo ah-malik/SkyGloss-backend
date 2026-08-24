@@ -12,7 +12,6 @@ import {
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { CreateAdminTestOrderDto } from './dto/create-admin-test-order.dto';
-import { ActivationFeeDto } from './dto/activation-fee.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -49,10 +48,7 @@ export class OrdersController {
 
   @Post('activation-fee')
   @UseGuards(JwtAuthGuard)
-  async createActivationFeeSession(
-    @GetUser() user: any,
-    @Body() body: ActivationFeeDto = {},
-  ) {
+  async createActivationFeeSession(@GetUser() user: any) {
     const session = await this.ordersService.createDistributorFeeCheckoutSession(
       user._id.toString(),
       user.email,
@@ -62,7 +58,6 @@ export class OrdersController {
         country: user.country,
         successPath: '/dashboard/shop?payment_success=true',
         cancelPath: '/dashboard/shop?payment_canceled=true',
-        ...(body?.couponCode ? { couponCode: body.couponCode } : {}),
       }
     );
     return 'url' in session && session.url ? { url: session.url } : session;

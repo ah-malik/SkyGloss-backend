@@ -426,21 +426,15 @@ export class OrdersService implements OnModuleInit {
     let registrationProductId: string | undefined;
 
     if (isShopRegistration) {
-      const requestedCode =
-        additionalMetadata.couponCode || user?.couponCode || '';
+      // Coupon may be redeemed on the shop registration form (stored on the user)
+      // or later on Stripe Checkout — never both, and never via this API body.
+      const requestedCode = user?.couponCode || '';
       if (requestedCode) {
         appliedShopCoupon = await this.couponsService.validateForShopRegistration(
           requestedCode,
           totalBeforeDiscount / 100,
           user?.couponCode,
         );
-        if (!user?.couponCode && appliedShopCoupon.code) {
-          await this.usersService.update(
-            userId,
-            { couponCode: appliedShopCoupon.code } as any,
-            { role: UserRole.ADMIN } as any,
-          );
-        }
         allowPromotionCodes = false;
         additionalMetadata.couponCode = appliedShopCoupon.code;
         additionalMetadata.registrationDiscount = appliedShopCoupon.discountAmount;
