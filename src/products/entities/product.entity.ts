@@ -67,7 +67,7 @@ export class Product {
   @Prop({ default: 'published', enum: ['published', 'draft'] })
   status: string;
 
-  @Prop({ default: 'all', enum: ['certified_shop', 'all'] })
+  @Prop({ default: 'all', enum: ['all', 'shop', 'technician', 'certified_shop'] })
   targetAudience: string;
 
   @Prop({ default: 0 })

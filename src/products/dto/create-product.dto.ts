@@ -111,7 +111,7 @@ export class CreateProductDto {
 
   @IsString()
   @IsOptional()
-  @IsEnum(['certified_shop', 'all'])
+  @IsEnum(['all', 'shop', 'technician', 'certified_shop'])
   targetAudience?: string;
 
   @IsNumber()

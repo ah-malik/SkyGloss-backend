@@ -45,7 +45,11 @@ export class ProductsService {
   ): Promise<any[]> {
     let groupToUse: any = null;
 
-    if (user) {
+    // Admins manage the full catalog — never restrict to a product group.
+    // (Admin accounts may still have productGroup set from user-create defaults.)
+    const isAdmin = user?.role === UserRole.ADMIN;
+
+    if (user && !isAdmin) {
       // Priority 1: Explicitly assigned product group by Admin or Registration
       if (user.productGroup) {
         groupToUse = await this.productGroupModel
@@ -137,7 +141,9 @@ export class ProductsService {
 
     let groupToUse: any = null;
 
-    if (user) {
+    const isAdmin = user?.role === UserRole.ADMIN;
+
+    if (user && !isAdmin) {
       if (user.productGroup) {
         groupToUse = await this.productGroupModel
           .findById(user.productGroup)
