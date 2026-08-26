@@ -113,6 +113,12 @@ export class WithdrawalsController {
     return this.withdrawalsService.hubReview(id, userId, body.action, body.note);
   }
 
+  @Patch(':id/verify-bank')
+  @Roles(UserRole.ADMIN)
+  verifyBank(@Param('id') id: string, @GetUser('_id') userId: string) {
+    return this.withdrawalsService.verifyBankForAdmin(id, userId);
+  }
+
   @Patch(':id/admin-review')
   @Roles(UserRole.ADMIN)
   adminReview(

@@ -5,9 +5,9 @@ export class CreateBankDetailsDto {
   @IsNotEmpty()
   accountHolderName: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  bankName: string;
+  bankName?: string;
 
   @IsOptional()
   @IsString()

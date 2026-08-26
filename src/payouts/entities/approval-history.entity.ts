@@ -8,6 +8,7 @@ export enum ApprovalAction {
   COMMISSION_AVAILABLE = 'commission_available',
   WITHDRAWAL_SUBMIT = 'withdrawal_submit',
   BANK_DETAILS_ADDED = 'bank_details_added',
+  BANK_VERIFIED = 'bank_verified',
   HUB_APPROVE = 'hub_approve',
   HUB_REJECT = 'hub_reject',
   ADMIN_APPROVE = 'admin_approve',

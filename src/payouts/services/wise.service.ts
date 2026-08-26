@@ -9,6 +9,7 @@ import axios, { AxiosError, AxiosInstance } from 'axios';
 import { randomUUID } from 'crypto';
 import * as https from 'https';
 import { currencyFromIban, defaultCurrencyForCountry, toIsoCountryCode } from '../wise-country-iso';
+import { ibanValidationError, normalizeIban } from '../iban-validate';
 
 export type WiseBankDetails = {
   accountHolderName: string;
@@ -57,6 +58,27 @@ export class WisePayoutError extends BadRequestException {
     super(message);
   }
 }
+
+export type WiseRecipientResult = {
+  recipientId: string;
+  type?: string;
+  status: string;
+  accountVerified: boolean;
+  outcome: string;
+  summary: string;
+};
+
+type WiseConfirmationOutcome = {
+  type?: string;
+  outcome?: string;
+  requiresCustomerAcceptance?: boolean;
+  providedName?: string;
+  fieldsChecked?: string[];
+};
+
+type WiseConfirmations = {
+  outcomes?: WiseConfirmationOutcome[];
+};
 
 export type WisePayoutResult = {
   transferId: string;
@@ -122,7 +144,7 @@ export class WiseService {
       lower.includes('no available') ||
       lower.includes('account-requirements')
     ) {
-      return 'Is country/currency ke liye Wise payout currently supported nahi hai.';
+      return 'Wise payout is not currently supported for this country or currency.';
     }
     if (
       lower.includes('iban') ||
@@ -131,7 +153,10 @@ export class WiseService {
       lower.includes('422') ||
       lower.includes('invalid')
     ) {
-      return 'Bank details verify nahi ho sakin. Please apni bank details check karein.';
+      if (!this.looksInternalError(raw) && raw.length <= 180) {
+        return raw;
+      }
+      return 'Bank details could not be verified. Please check the account details.';
     }
     if (
       lower.includes('insufficient') ||
@@ -183,7 +208,7 @@ export class WiseService {
     ).toUpperCase();
     if (!target) {
       throw new BadRequestException(
-        'Is country/currency ke liye Wise payout currently supported nahi hai.',
+        'Wise payout is not currently supported for this country or currency.',
       );
     }
 
@@ -197,7 +222,7 @@ export class WiseService {
       );
     } catch {
       throw new BadRequestException(
-        'Is country/currency ke liye Wise payout currently supported nahi hai.',
+        'Wise payout is not currently supported for this country or currency.',
       );
     }
 
@@ -214,7 +239,7 @@ export class WiseService {
       options[0];
     if (!selected) {
       throw new BadRequestException(
-        'Is country/currency ke liye Wise payout currently supported nahi hai.',
+        'Wise payout is not currently supported for this country or currency.',
       );
     }
 
@@ -227,7 +252,7 @@ export class WiseService {
       title: selected.title,
       fields: selected.fields.filter(
         (f) =>
-          !['accountHolderName', 'ownedByCustomer', 'currency', 'type', 'profile'].includes(
+          !['accountHolderName', 'ownedByCustomer', 'currency', 'type', 'profile', 'bankName'].includes(
             f.key,
           ),
       ),
@@ -241,8 +266,10 @@ export class WiseService {
     existingRecipientId?: string;
     fingerprint?: string;
     previousFingerprint?: string;
-  }): Promise<{ recipientId: string; type?: string; status: string }> {
+    force?: boolean;
+  }): Promise<WiseRecipientResult> {
     if (
+      !input.force &&
       input.existingRecipientId &&
       input.fingerprint &&
       input.previousFingerprint &&
@@ -251,20 +278,138 @@ export class WiseService {
       return {
         recipientId: input.existingRecipientId,
         status: 'ready',
+        accountVerified: false,
+        outcome: 'REUSED',
+        summary: 'Existing Wise recipient reused. Run Verify Bank to confirm the account.',
       };
     }
     const profileId = await this.getProfileId();
     const targetCurrency = this.resolveTargetCurrency(input.bank);
-    const recipientId = await this.createRecipient(
+    const created = await this.createRecipient(
       profileId,
       input.bank,
       input.recipient,
       targetCurrency,
     );
+    let confirmations = created.confirmations;
+    try {
+      const fresh = await this.request<{
+        id: number;
+        confirmations?: WiseConfirmations;
+      }>('GET', `/v1/accounts/${created.id}`);
+      if (fresh?.confirmations?.outcomes?.length) {
+        confirmations = fresh.confirmations;
+      }
+    } catch {
+      // Create response confirmations are enough when GET is unavailable.
+    }
+
+    let result = this.interpretConfirmations(confirmations);
+
+    if (input.force) {
+      const quote = await this.createQuote({
+        profileId,
+        targetCurrency,
+        sourceAmount: 100,
+        targetAccount: created.id,
+      });
+      try {
+        const compat = await this.request<{ confirmations?: WiseConfirmations }>(
+          'POST',
+          `/v1/accounts/${created.id}/quotes/${quote.id}/compatibility`,
+        );
+        const fromCompat = this.interpretConfirmations(compat.confirmations);
+        result = this.mergeVerification(result, fromCompat);
+      } catch (err) {
+        this.logger.warn(
+          `Wise compatibility check skipped: ${this.errorMessage(err)}`,
+        );
+      }
+    }
+
+    if (result.outcome === 'FAILURE' || result.outcome === 'PARTIAL_FAILURE') {
+      throw new BadRequestException(result.summary);
+    }
+
     return {
-      recipientId: String(recipientId),
-      status: 'ready',
+      recipientId: String(created.id),
+      status: result.accountVerified ? 'verified' : 'ready',
+      accountVerified: result.accountVerified,
+      outcome: result.outcome,
+      summary: result.summary,
     };
+  }
+
+  async probePayoutRoute(recipientId: string, bank: WiseBankDetails) {
+    const profileId = await this.getProfileId();
+    const targetCurrency = this.resolveTargetCurrency(bank);
+    await this.createQuote({
+      profileId,
+      targetCurrency,
+      sourceAmount: 100,
+      targetAccount: Number(recipientId),
+    });
+  }
+
+  private interpretConfirmations(confirmations?: WiseConfirmations): {
+    accountVerified: boolean;
+    outcome: string;
+    summary: string;
+  } {
+    const outcomes = confirmations?.outcomes || [];
+    if (!outcomes.length) {
+      return {
+        accountVerified: false,
+        outcome: 'FORMAT_ONLY',
+        summary:
+          'Wise does not currently confirm account existence for this currency (live checks: EUR, INR, IDR, CNY, KRW). Format and payout route were checked.',
+      };
+    }
+    const normalized = outcomes.map((o) => String(o.outcome || '').toUpperCase());
+    if (normalized.includes('FAILURE')) {
+      return {
+        accountVerified: false,
+        outcome: 'FAILURE',
+        summary:
+          'Wise could not confirm this bank account exists or matches the account holder name.',
+      };
+    }
+    if (normalized.includes('PARTIAL_FAILURE')) {
+      return {
+        accountVerified: false,
+        outcome: 'PARTIAL_FAILURE',
+        summary:
+          'Wise found a name or account mismatch. Update the account holder name or IBAN and try again.',
+      };
+    }
+    if (normalized.every((o) => o === 'SUCCESS')) {
+      return {
+        accountVerified: true,
+        outcome: 'SUCCESS',
+        summary: 'Wise confirmed this bank account exists.',
+      };
+    }
+    return {
+      accountVerified: false,
+      outcome: 'COULD_NOT_CHECK',
+      summary:
+        'Wise could not reach the destination bank to confirm this account. Try again later.',
+    };
+  }
+
+  private mergeVerification(
+    a: { accountVerified: boolean; outcome: string; summary: string },
+    b: { accountVerified: boolean; outcome: string; summary: string },
+  ) {
+    const rank: Record<string, number> = {
+      FAILURE: 4,
+      PARTIAL_FAILURE: 3,
+      SUCCESS: 2,
+      COULD_NOT_CHECK: 1,
+      FORMAT_ONLY: 0,
+      REUSED: 0,
+    };
+    return (rank[b.outcome] || 0) >= (rank[a.outcome] || 0) ? b : a;
   }
 
   async getTransfer(transferId: string | number) {
@@ -414,12 +559,13 @@ export class WiseService {
       : undefined;
     try {
       if (!recipientId) {
-        recipientId = await this.createRecipient(
+        const created = await this.createRecipient(
           profileId,
           input.bank,
           input.recipient,
           targetCurrency,
         );
+        recipientId = created.id;
       }
 
       let sourceAmount = amount;
@@ -459,6 +605,9 @@ export class WiseService {
         fee = quote.fee;
         await this.assertSufficientBalance(profileId, sourceAmount);
 
+        if (!recipientId) {
+          throw new BadRequestException('Wise recipient is missing for this payout.');
+        }
         const transfer = await this.createTransfer({
           recipientId,
           quoteId,
@@ -602,10 +751,12 @@ export class WiseService {
     }>('POST', `/v3/profiles/${params.profileId}/quotes`, body);
 
     const options = quote.paymentOptions || [];
-    const balance =
-      options.find((o) => o.payIn === 'BALANCE' && !o.disabled) ||
-      options.find((o) => o.payIn === 'BALANCE') ||
-      options[0];
+    const balance = options.find((o) => o.payIn === 'BALANCE' && !o.disabled);
+    if (!balance) {
+      throw new BadRequestException(
+        'Wise cannot pay this bank account with the current details.',
+      );
+    }
     return {
       id: quote.id,
       rate: Number(quote.rate || 0),
@@ -650,17 +801,16 @@ export class WiseService {
     bank: WiseBankDetails,
     user: WiseRecipientUser,
     currency: string,
-  ): Promise<number> {
+  ): Promise<{ id: number; confirmations?: WiseConfirmations }> {
     const payload = this.buildRecipientPayload(profileId, bank, user, currency);
-    const created = await this.request<{ id: number }>(
-      'POST',
-      '/v1/accounts',
-      payload,
-    );
+    const created = await this.request<{
+      id: number;
+      confirmations?: WiseConfirmations;
+    }>('POST', '/v1/accounts', payload);
     if (!created?.id) {
       throw new BadRequestException('Wise did not return a recipient account id');
     }
-    return created.id;
+    return created;
   }
 
   private buildRecipientPayload(
@@ -674,7 +824,7 @@ export class WiseService {
       throw new BadRequestException('Account holder name is required for Wise payout');
     }
 
-    const iban = this.clean(bank.iban);
+    const iban = normalizeIban(bank.iban);
     const accountNumber = this.clean(bank.accountNumber);
     const routing = this.clean(bank.routingNumber);
     const sortCode = this.clean(bank.sortCode) || routing;
@@ -684,6 +834,11 @@ export class WiseService {
       toIsoCountryCode(bank.country) ||
       toIsoCountryCode(user.country) ||
       (iban ? iban.slice(0, 2) : null);
+
+    if (iban) {
+      const ibanError = ibanValidationError(iban, bank.country || user.country);
+      if (ibanError) throw new BadRequestException(ibanError);
+    }
 
     if (!iban && !accountNumber && !Object.keys(extra).length) {
       throw new BadRequestException(
@@ -696,7 +851,7 @@ export class WiseService {
       city: user.city || 'Unknown',
       postCode: user.zipCode || '00000',
       firstLine:
-        user.address || user.streetAddress || bank.bankName || 'Address on file',
+        user.address || user.streetAddress || 'Address on file',
     };
 
     const base = {
@@ -947,7 +1102,7 @@ export class WiseService {
       code === 'ECONNREFUSED'
     ) {
       return new ServiceUnavailableException(
-        'Wise sandbox se connect nahi ho saka. IPv4/DNS issue tha — retry karein.',
+        'Could not connect to Wise. Please retry.',
       );
     }
 
@@ -978,7 +1133,12 @@ export class WiseService {
     if (typeof data.message === 'string' && data.message) return data.message;
     if (Array.isArray(data.errors) && data.errors.length) {
       return data.errors
-        .map((e: { message?: string; code?: string }) => e.message || e.code)
+        .map((e: { message?: string; code?: string; path?: string; arguments?: string[] }) => {
+          const path = e.path || (Array.isArray(e.arguments) ? e.arguments[0] : '');
+          const text = e.message || e.code;
+          if (path && text) return `${path}: ${text}`;
+          return text;
+        })
         .filter(Boolean)
         .join('; ');
     }

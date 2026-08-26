@@ -105,6 +105,9 @@ export class WithdrawalRequest {
   wiseRecipientId?: string;
 
   @Prop()
+  wiseBankVerifiedAt?: Date;
+
+  @Prop()
   wiseCustomerTransactionId?: string;
 
   @Prop()

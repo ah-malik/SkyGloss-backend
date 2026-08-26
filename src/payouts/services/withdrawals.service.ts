@@ -391,6 +391,9 @@ export class WithdrawalsService {
         commissions: this.stripCommissionAmounts(commissions),
         history: this.stripHistoryAmounts(history),
         bankDetails,
+        bankVerifiedForPayout: Boolean(
+          request.wiseBankVerifiedAt && request.wiseRecipientId,
+        ),
       };
     }
 
@@ -742,6 +745,46 @@ export class WithdrawalsService {
     return this.enrichWithdrawal(request);
   }
 
+  async verifyBankForAdmin(withdrawalId: string, adminUserId: string) {
+    const request = await this.withdrawalModel.findById(withdrawalId);
+    if (!request) throw new NotFoundException('Withdrawal not found');
+    if (request.status !== WithdrawalStatus.SENT_TO_ADMIN) {
+      throw new BadRequestException(
+        'Bank can only be verified while the withdrawal is awaiting admin approval.',
+      );
+    }
+    if (!request.bankDetailsId) {
+      throw new BadRequestException(
+        'This withdrawal has no bank details. The requester must add a bank account first.',
+      );
+    }
+
+    const bank = await this.bankDetailsService.verifyWithWise(
+      request.bankDetailsId.toString(),
+      adminUserId,
+    );
+    request.wiseRecipientId = String(bank.wiseRecipientId || '');
+    request.wiseBankVerifiedAt = new Date();
+    request.wiseFailureReason = '';
+    await request.save();
+
+    await this.auditService.logApproval({
+      withdrawalRequestId: request._id as Types.ObjectId,
+      action: ApprovalAction.BANK_VERIFIED,
+      actorUserId: new Types.ObjectId(adminUserId),
+      actorRole: UserRole.ADMIN,
+      previousStatus: request.status,
+      newStatus: request.status,
+      metadata: { wiseRecipientId: request.wiseRecipientId },
+    });
+
+    return {
+      ...this.stripAdminFinancials(this.formatWithdrawal(request)),
+      bankDetails: bank,
+      bankVerifiedForPayout: true,
+    };
+  }
+
   async adminReview(
     withdrawalId: string,
     adminUserId: string,
@@ -788,6 +831,12 @@ export class WithdrawalsService {
       });
 
       return this.enrichWithdrawal(request);
+    }
+
+    if (!request.wiseBankVerifiedAt || !request.wiseRecipientId) {
+      throw new BadRequestException(
+        'Verify the bank with Wise first. The payout can be sent only after verification succeeds.',
+      );
     }
 
     if (!request.bankDetailsId) {

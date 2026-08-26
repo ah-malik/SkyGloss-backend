@@ -17,8 +17,8 @@ export class BankDetails {
   @Prop({ required: true })
   accountHolderName: string;
 
-  @Prop({ required: true })
-  bankName: string;
+  @Prop()
+  bankName?: string;
 
   @Prop()
   iban?: string;
@@ -52,6 +52,12 @@ export class BankDetails {
 
   @Prop()
   wiseRecipientStatus?: string;
+
+  @Prop()
+  wiseVerificationOutcome?: string;
+
+  @Prop()
+  wiseVerificationSummary?: string;
 
   @Prop()
   detailsFingerprint?: string;

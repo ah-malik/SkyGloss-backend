@@ -16,6 +16,7 @@ import { ApprovalAction, AuditService } from './audit.service';
 import { WiseService } from './wise.service';
 import { UsersService } from '../../users/users.service';
 import { defaultCurrencyForCountry } from '../wise-country-iso';
+import { ibanValidationError, normalizeIban } from '../iban-validate';
 
 @Injectable()
 export class BankDetailsService {
@@ -48,6 +49,8 @@ export class BankDetailsService {
       swiftBic: obj.swiftBic ? this.maskAccountNumber(obj.swiftBic as string) : undefined,
       extraDetails: undefined,
       detailsFingerprint: undefined,
+      wiseVerificationOutcome: obj.wiseVerificationOutcome,
+      wiseVerificationSummary: obj.wiseVerificationSummary,
     };
   }
 
@@ -122,6 +125,13 @@ export class BankDetailsService {
     if (!dto.accountNumber && !dto.iban && !Object.keys(dto.extraDetails || {}).length) {
       throw new BadRequestException('Account number, IBAN, or required bank fields are needed');
     }
+    const ibanValue =
+      dto.iban ||
+      dto.extraDetails?.iban ||
+      dto.extraDetails?.IBAN;
+    const ibanError = ibanValidationError(ibanValue, dto.country);
+    if (ibanError) throw new BadRequestException(ibanError);
+    if (ibanValue) dto.iban = normalizeIban(ibanValue);
 
     const currency =
       (dto.currency || defaultCurrencyForCountry(dto.country) || 'USD').toUpperCase();
@@ -134,6 +144,9 @@ export class BankDetailsService {
 
     let recipientId = existing?.wiseRecipientId;
     let recipientStatus = existing?.wiseRecipientStatus || 'creating';
+    let verificationOutcome = existing?.wiseVerificationOutcome || '';
+    let verificationSummary = existing?.wiseVerificationSummary || '';
+    let accountVerified = false;
     try {
       const created = await this.wiseService.createOrUpdateRecipient({
         bank: {
@@ -164,6 +177,9 @@ export class BankDetailsService {
       });
       recipientId = created.recipientId;
       recipientStatus = created.status;
+      verificationOutcome = created.outcome;
+      verificationSummary = created.summary;
+      accountVerified = created.accountVerified;
     } catch (err) {
       const raw = err instanceof Error ? err.message : 'Wise recipient failed';
       throw new BadRequestException(this.wiseService.toUserFacingError(raw));
@@ -180,8 +196,12 @@ export class BankDetailsService {
       detailsFingerprint: hash,
       wiseRecipientId: recipientId,
       wiseRecipientStatus: recipientStatus,
-      verificationStatus: BankVerificationStatus.VERIFIED,
-      verifiedAt: new Date(),
+      wiseVerificationOutcome: verificationOutcome,
+      wiseVerificationSummary: verificationSummary,
+      verificationStatus: accountVerified
+        ? BankVerificationStatus.VERIFIED
+        : BankVerificationStatus.PENDING,
+      verifiedAt: accountVerified ? new Date() : undefined,
       isPrimary: true,
       isDeleted: false,
     };
@@ -189,6 +209,10 @@ export class BankDetailsService {
     let saved: BankDetailsDocument;
     if (existing) {
       Object.assign(existing, payload);
+      if (!accountVerified) {
+        existing.set('verifiedAt', undefined);
+        existing.set('verifiedBy', undefined);
+      }
       saved = await existing.save();
     } else {
       saved = await this.bankDetailsModel.create({
@@ -206,9 +230,69 @@ export class BankDetailsService {
     return this.toSafeResponse(saved);
   }
 
+  async verifyWithWise(bankId: string, adminUserId: string) {
+    const bank = await this.bankDetailsModel.findById(bankId);
+    if (!bank || bank.isDeleted) {
+      throw new NotFoundException('Bank details not found');
+    }
+    const user = await this.usersService.findOne(bank.userId.toString());
+    if (!user) throw new NotFoundException('Requester not found');
+
+    const ibanError = ibanValidationError(bank.iban, bank.country);
+    if (ibanError) throw new BadRequestException(ibanError);
+
+    try {
+      const created = await this.wiseService.createOrUpdateRecipient({
+        bank: {
+          accountHolderName: bank.accountHolderName,
+          bankName: bank.bankName,
+          iban: bank.iban,
+          accountNumber: bank.accountNumber,
+          routingNumber: bank.routingNumber,
+          sortCode: bank.sortCode,
+          swiftBic: bank.swiftBic,
+          country: bank.country,
+          currency: bank.currency,
+          extraDetails: bank.extraDetails,
+        },
+        recipient: {
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          address: user.address,
+          streetAddress: user.streetAddress,
+          city: user.city,
+          zipCode: user.zipCode,
+          country: user.country || bank.country,
+        },
+        existingRecipientId: bank.wiseRecipientId,
+        force: true,
+      });
+      bank.wiseRecipientId = created.recipientId;
+      bank.wiseRecipientStatus = created.status || 'ready';
+      bank.wiseVerificationOutcome = created.outcome;
+      bank.wiseVerificationSummary = created.summary;
+      if (created.accountVerified) {
+        bank.verificationStatus = BankVerificationStatus.VERIFIED;
+        bank.verifiedAt = new Date();
+        bank.verifiedBy = new Types.ObjectId(adminUserId);
+      } else {
+        bank.verificationStatus = BankVerificationStatus.PENDING;
+      }
+      await bank.save();
+      return this.toSafeResponse(bank);
+    } catch (err) {
+      bank.verificationStatus = BankVerificationStatus.REJECTED;
+      bank.wiseRecipientStatus = 'failed';
+      await bank.save();
+      const raw = err instanceof Error ? err.message : 'Wise recipient failed';
+      throw new BadRequestException(this.wiseService.toUserFacingError(raw));
+    }
+  }
+
   async getVerifiedPrimaryOrThrow(userId: string) {
     const bank = await this.getPrimaryForUser(userId);
-    if (!bank || bank.verificationStatus !== BankVerificationStatus.VERIFIED) {
+    if (!bank || bank.verificationStatus === BankVerificationStatus.REJECTED) {
       return null;
     }
     return bank;
