@@ -253,7 +253,9 @@ export class WithdrawalsService {
       snapshot: { status: initialStatus },
     });
 
-    await this.notifyStakeholdersOnSubmit(user, request);
+    if (initialStatus !== WithdrawalStatus.WAITING_BANK_DETAILS) {
+      await this.notifyStakeholdersOnSubmit(user, request);
+    }
 
     return this.enrichWithdrawal(request);
   }
@@ -340,6 +342,7 @@ export class WithdrawalsService {
   }
 
   async listMyWithdrawals(userId: string) {
+    await this.resumeWaitingWithdrawalsForUser(userId);
     const items = await this.withdrawalModel
       .find({ userId: new Types.ObjectId(userId) })
       .sort({ createdAt: -1 })
@@ -508,6 +511,8 @@ export class WithdrawalsService {
       throw new ForbiddenException('Hub access only');
     }
 
+    await this.resumeAllStuckWaitingBankDetails();
+
     const all = await this.withdrawalModel
       .find({})
       .sort({ createdAt: -1 })
@@ -533,6 +538,8 @@ export class WithdrawalsService {
     ) {
       throw new ForbiddenException('Hub access only');
     }
+
+    await this.resumeAllStuckWaitingBankDetails();
 
     const allPending = await this.withdrawalModel
       .find({ status: WithdrawalStatus.WAITING_HUB_APPROVAL })
@@ -979,6 +986,14 @@ export class WithdrawalsService {
       link: '/dashboard/partner/network?tab=earnings',
     });
 
+    void this.finalizeProcessingPayout(locked.wiseTransferId).catch((err) => {
+      console.error(
+        '[WithdrawalsService] Post-pay Wise finalize failed',
+        locked.wiseTransferId,
+        err,
+      );
+    });
+
     return this.enrichWithdrawal(locked);
   }
 
@@ -1000,7 +1015,7 @@ export class WithdrawalsService {
       return this.enrichWithdrawal(request);
     }
 
-    if (status === 'outgoing_payment_sent') {
+    if (status === 'outgoing_payment_sent' || status === 'completed') {
       return this.completeWisePayout(request);
     }
     if (
@@ -1130,6 +1145,23 @@ export class WithdrawalsService {
     return this.enrichWithdrawal(locked);
   }
 
+  async finalizeProcessingPayout(transferId?: string | null) {
+    if (!transferId) return null;
+    let status = String(
+      (await this.wiseService.getTransfer(transferId)).status || '',
+    ).toLowerCase();
+    if (
+      this.wiseService.isSandbox() &&
+      status !== 'outgoing_payment_sent' &&
+      status !== 'completed'
+    ) {
+      status = await this.wiseService.simulateSandboxUntilOutgoingSent(
+        transferId,
+      );
+    }
+    return this.applyWiseTransferState(transferId, status);
+  }
+
   async syncProcessingPayouts(): Promise<number> {
     const items = await this.withdrawalModel
       .find({
@@ -1141,11 +1173,7 @@ export class WithdrawalsService {
     for (const item of items) {
       if (!item.wiseTransferId) continue;
       try {
-        const transfer = await this.wiseService.getTransfer(item.wiseTransferId);
-        await this.applyWiseTransferState(
-          item.wiseTransferId,
-          transfer.status || '',
-        );
+        await this.finalizeProcessingPayout(item.wiseTransferId);
         updated += 1;
       } catch (err) {
         console.error(
@@ -1158,6 +1186,52 @@ export class WithdrawalsService {
     return updated;
   }
 
+  async resumeWaitingWithdrawalsForUser(userId: string): Promise<number> {
+    const bank = await this.bankDetailsService.getVerifiedPrimaryOrThrow(userId);
+    if (!bank) return 0;
+
+    const waiting = await this.withdrawalModel.find({
+      userId: new Types.ObjectId(userId),
+      status: WithdrawalStatus.WAITING_BANK_DETAILS,
+    });
+    if (!waiting.length) return 0;
+
+    const user = await this.usersService.findOne(userId);
+    let resumed = 0;
+    for (const request of waiting) {
+      const updated = await this.withdrawalModel.findOneAndUpdate(
+        {
+          _id: request._id,
+          status: WithdrawalStatus.WAITING_BANK_DETAILS,
+        },
+        {
+          $set: {
+            bankDetailsId: bank._id,
+            status: WithdrawalStatus.WAITING_HUB_APPROVAL,
+          },
+        },
+        { new: true },
+      );
+      if (!updated) continue;
+      resumed += 1;
+      if (user) await this.notifyStakeholdersOnSubmit(user as any, updated);
+    }
+    return resumed;
+  }
+
+  private async resumeAllStuckWaitingBankDetails() {
+    const stuck = await this.withdrawalModel
+      .find({ status: WithdrawalStatus.WAITING_BANK_DETAILS })
+      .select('userId')
+      .lean();
+    const userIds = [
+      ...new Set(stuck.map((w) => w.userId?.toString()).filter(Boolean)),
+    ];
+    for (const id of userIds) {
+      await this.resumeWaitingWithdrawalsForUser(id);
+    }
+  }
+
   async attachBankAndResume(withdrawalId: string, userId: string) {
     const request = await this.withdrawalModel.findById(withdrawalId);
     if (!request || request.userId.toString() !== userId) {
@@ -1167,19 +1241,14 @@ export class WithdrawalsService {
       throw new BadRequestException('Withdrawal does not need bank details');
     }
 
-    const bank = await this.bankDetailsService.getVerifiedPrimaryOrThrow(userId);
-    if (!bank) {
+    await this.resumeWaitingWithdrawalsForUser(userId);
+
+    const fresh = await this.withdrawalModel.findById(withdrawalId);
+    if (!fresh || fresh.status === WithdrawalStatus.WAITING_BANK_DETAILS) {
       throw new BadRequestException('Please add verified bank details first');
     }
 
-    request.bankDetailsId = bank._id as Types.ObjectId;
-    request.status = WithdrawalStatus.WAITING_HUB_APPROVAL;
-    await request.save();
-
-    const user = await this.usersService.findOne(userId);
-    if (user) await this.notifyStakeholdersOnSubmit(user as any, request);
-
-    return this.enrichWithdrawal(request);
+    return this.enrichWithdrawal(fresh);
   }
 
   private formatWithdrawal(w: Record<string, any>) {

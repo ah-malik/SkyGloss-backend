@@ -38,7 +38,11 @@ export class TransformInterceptor<T>
       path.endsWith('/orders/webhook-usa') ||
       path.endsWith('/stripe/webhook') ||
       path === '/webhooks/wise' ||
-      path.endsWith('/webhooks/wise')
+      path.endsWith('/webhooks/wise') ||
+      path === '/webhooks/stripe-wise-payouts' ||
+      path.endsWith('/webhooks/stripe-wise-payouts') ||
+      path === '/webhooks/stripe-wise-payouts-usa' ||
+      path.endsWith('/webhooks/stripe-wise-payouts-usa')
     ) {
       return next.handle();
     }

@@ -129,6 +129,7 @@ export const FRONTEND_APIS: ApiEndpointDef[] = [
   def('frontend', 'Orders', 'GET', '/orders/verify/:orderId', 'Verify order payment'),
   def('frontend', 'Orders', 'GET', '/orders/:id', 'Get order'),
   def('frontend', 'Orders', 'POST', '/orders/:id/pay', 'Pay for order'),
+  def('frontend', 'Orders', 'POST', '/orders/:parentId/add-items', 'Add items to existing order'),
   def('frontend', 'Orders', 'POST', '/orders/request', 'Create order request'),
   def('frontend', 'Orders', 'POST', '/orders/admin/:id/status', 'Update order status'),
 
@@ -455,6 +456,14 @@ export const ADMIN_APIS: ApiEndpointDef[] = [
   // Email settings
   def('admin', 'Email Settings', 'GET', '/email-settings', 'Get email settings'),
   def('admin', 'Email Settings', 'PATCH', '/email-settings', 'Update email settings'),
+
+  def('admin', 'Stripe Wise Payouts', 'GET', '/stripe-wise-payouts/overview', 'Stripe to Wise overview'),
+  def('admin', 'Stripe Wise Payouts', 'GET', '/stripe-wise-payouts/destination', 'Get Wise receiving destination'),
+  def('admin', 'Stripe Wise Payouts', 'PATCH', '/stripe-wise-payouts/destination', 'Update Wise receiving destination'),
+  def('admin', 'Stripe Wise Payouts', 'POST', '/stripe-wise-payouts/destination/from-wise', 'Import Wise receiving details'),
+  def('admin', 'Stripe Wise Payouts', 'GET', '/stripe-wise-payouts/history', 'Stripe to Wise payout history'),
+  def('admin', 'Stripe Wise Payouts', 'GET', '/stripe-wise-payouts/:id', 'Stripe to Wise payout detail'),
+  def('admin', 'Stripe Wise Payouts', 'POST', '/stripe-wise-payouts', 'Send Stripe balance to Wise'),
 ];
 
 export const ALL_APIS: ApiEndpointDef[] = [...FRONTEND_APIS, ...ADMIN_APIS];
@@ -527,6 +536,12 @@ export function isAlwaysAllowedPath(pathname: string, method: string): boolean {
   if (path === '/orders/webhook' || path === '/orders/webhook-usa') return true;
   if (path === '/certifications/webhook') return true;
   if (path === '/webhooks/wise') return true;
+  if (
+    path === '/webhooks/stripe-wise-payouts' ||
+    path === '/webhooks/stripe-wise-payouts-usa'
+  ) {
+    return true;
+  }
   // Session lifecycle must remain reachable even if Auth APIs are toggled off
   if (
     m === 'POST' &&

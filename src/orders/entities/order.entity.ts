@@ -105,6 +105,14 @@ export class Order {
   @Prop({ type: String, enum: ['request', 'purchase'] })
   orderFlow?: 'request' | 'purchase';
 
+  /** standard = normal order; add_on = additional items linked to a parent order */
+  @Prop({ type: String, enum: ['standard', 'add_on'], default: 'standard' })
+  orderKind?: 'standard' | 'add_on';
+
+  /** Parent order when this is an add-on (additional items) order */
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Order' })
+  parentOrderId?: MongooseSchema.Types.ObjectId;
+
   @Prop({ default: 'USD' })
   currency: string;
 
@@ -191,5 +199,6 @@ OrderSchema.index({ 'commissions.recipientPartnerCode': 1, createdAt: -1 });
 OrderSchema.index({ status: 1, createdAt: -1 });
 OrderSchema.index({ 'commissions.recipientUserId': 1, createdAt: -1 });
 OrderSchema.index({ orderFlow: 1, status: 1, createdAt: -1 });
+OrderSchema.index({ parentOrderId: 1, createdAt: -1 });
 OrderSchema.index({ stripeSessionId: 1 }, { sparse: true });
 OrderSchema.index({ shippedAt: 1, status: 1 });

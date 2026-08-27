@@ -18,6 +18,7 @@ import {
   OrderStatus,
 } from './entities/order.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { AddOrderItemsDto } from './dto/add-order-items.dto';
 import { CreateAdminTestOrderDto } from './dto/create-admin-test-order.dto';
 import { ProductsService } from '../products/products.service';
 import { ProductInventoryService } from '../inventory/product-inventory.service';
@@ -37,6 +38,7 @@ import {
   registrationOrderExclusionFilter,
   shouldHideShopRegistrationFromViewer,
 } from '../common/order-totals';
+import { isOrderModifiable } from '../common/order-modifiable';
 import {
   formatRoleLabel,
   getRegistrationFeeDescription,
@@ -816,11 +818,11 @@ export class OrdersService implements OnModuleInit {
     const orderUserId = String((order as any).user?._id || (order as any).user);
 
     if (viewer.role === UserRole.ADMIN) {
-      return order;
+      return this.enrichOrderDetails(order as any);
     }
 
     if (orderUserId === viewer._id.toString()) {
-      return order;
+      return this.enrichOrderDetails(order as any);
     }
 
     const networkRoles = [
@@ -842,11 +844,38 @@ export class OrdersService implements OnModuleInit {
         orderUserId,
       );
       if (inNetwork) {
-        return this.withOrderManagementFlag(order as any, viewer);
+        const enriched = await this.enrichOrderDetails(order as any);
+        return this.withOrderManagementFlag(enriched, viewer);
       }
     }
 
     throw new ForbiddenException('You do not have access to this order');
+  }
+
+  private async enrichOrderDetails(order: Record<string, any>): Promise<any> {
+    const orderId = String(order._id);
+    const [addOnOrders, parentOrder] = await Promise.all([
+      this.orderModel
+        .find({ parentOrderId: orderId } as any)
+        .sort({ createdAt: -1 })
+        .select(
+          'orderNumber status totalAmount shippingFee items createdAt orderKind orderFlow',
+        )
+        .lean(),
+      order.parentOrderId
+        ? this.orderModel
+            .findById(order.parentOrderId)
+            .select('orderNumber status shippingAddress')
+            .lean()
+        : Promise.resolve(null),
+    ]);
+
+    return {
+      ...order,
+      isModifiable: isOrderModifiable(order),
+      addOnOrders: addOnOrders || [],
+      parentOrder: parentOrder || undefined,
+    };
   }
 
   private async withOrderManagementFlag(
@@ -3396,6 +3425,225 @@ export class OrdersService implements OnModuleInit {
       }
       throw new BadRequestException(`Failed to create order request: ${error.message}`);
     }
+  }
+
+  async createAddOnOrder(
+    userId: string,
+    parentOrderId: string,
+    dto: AddOrderItemsDto,
+    role?: string,
+  ) {
+    const parentOrder = await this.orderModel.findById(parentOrderId);
+    if (!parentOrder) {
+      throw new NotFoundException('Parent order not found');
+    }
+
+    if (String(parentOrder.user) !== String(userId)) {
+      throw new ForbiddenException(
+        'You can only add items to your own orders',
+      );
+    }
+
+    if (!isOrderModifiable(parentOrder)) {
+      throw new BadRequestException(
+        'This order cannot be modified. Only unshipped orders can receive additional items.',
+      );
+    }
+
+    const { items: rawItems, couponCode } = dto;
+    if (!rawItems?.length) {
+      throw new BadRequestException('At least one item is required');
+    }
+
+    const items = rawItems.map((item) => ({
+      ...item,
+      orderType: normalizeOrderItemType(item.orderType),
+    }));
+
+    const currentUser = await this.usersService.findOne(userId);
+    if (!currentUser) {
+      throw new NotFoundException('User not found');
+    }
+
+    const userCountry = (currentUser.country || '').toLowerCase().trim();
+    const isUsaUser = this.isUsaCountry(userCountry);
+    const orderCurrency = await this.getCurrencyForUser(currentUser);
+    const shippingAddress = parentOrder.shippingAddress;
+
+    const itemsSubtotal = getItemsSubtotal(items);
+    const shippingFee = 0;
+
+    let discount = 0;
+    let appliedCouponCode: string | undefined;
+    if (couponCode?.trim()) {
+      const validation = await this.couponsService.validateForCheckout(
+        couponCode,
+        itemsSubtotal,
+      );
+      discount = validation.discountAmount;
+      appliedCouponCode = validation.code;
+    }
+
+    const orderTotal = Math.max(0, itemsSubtotal + shippingFee - discount);
+
+    await this.productInventoryService.assertStockAvailableForOrder({
+      items,
+      user: currentUser as any,
+      actingParentPartnerCode:
+        parentOrder.actingParentPartnerCode ||
+        (await this.actingParentStampForUser(userId)).actingParentPartnerCode,
+    });
+
+    const orderFlow: 'purchase' | 'request' = isUsaUser ? 'purchase' : 'request';
+    const initialStatus = isUsaUser
+      ? OrderStatus.PENDING_PAYMENT
+      : OrderStatus.PENDING;
+
+    let order: OrderDocument | undefined;
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        const shippingCountry =
+          shippingAddress?.country || currentUser.country || '';
+        const orderNumber = await this.generateShopOrderNumber(
+          shippingCountry,
+          orderFlow,
+        );
+        const monetary = await this.buildMonetaryFieldsForNewOrder(
+          orderTotal,
+          orderCurrency,
+        );
+        const newOrder = new this.orderModel({
+          user: userId,
+          items,
+          shippingFee,
+          shippingAddress,
+          status: initialStatus,
+          orderNumber,
+          orderFlow,
+          orderKind: 'add_on',
+          parentOrderId: parentOrder._id,
+          paymentReminderCount: 0,
+          discount,
+          couponCode: appliedCouponCode,
+          actingParentPartnerCode: parentOrder.actingParentPartnerCode,
+          ...monetary,
+        });
+        order = await newOrder.save();
+        break;
+      } catch (saveError: any) {
+        if (saveError.code === 11000 && retries > 1) {
+          retries--;
+          continue;
+        }
+        throw new BadRequestException(
+          `Failed to create add-on order: ${saveError.message}`,
+        );
+      }
+    }
+
+    if (!order) {
+      throw new BadRequestException('Failed to create add-on order');
+    }
+
+    if (order.status === OrderStatus.PENDING) {
+      await this.applyOrderCommissions(
+        order._id.toString(),
+        OrderStatus.PENDING,
+      );
+      await this.deductProductInventoryForOrder(order._id);
+    }
+
+    if (isUsaUser) {
+      const stripeInstance = this.getStripeForUsaUser(true);
+      if (!stripeInstance) {
+        throw new BadRequestException('Stripe is not configured on the server.');
+      }
+
+      try {
+        const session = await this.createStripeCheckoutForOrder(
+          order,
+          currentUser,
+          role,
+          stripeInstance,
+          orderCurrency,
+        );
+
+        const payUrl = this.getOrderPayUrl(
+          order._id.toString(),
+          currentUser?.role || role,
+        );
+        await this.mailService
+          .sendPendingPaymentReminder(order, currentUser, payUrl, false)
+          .catch((err) =>
+            console.error(
+              'Failed to send pending payment email for add-on order',
+              err,
+            ),
+          );
+
+        if (!session.url) {
+          throw new BadRequestException(
+            'Failed to create Stripe checkout session.',
+          );
+        }
+
+        return {
+          orderId: order._id,
+          orderNumber: order.orderNumber,
+          url: session.url,
+        };
+      } catch (error: any) {
+        console.error('Add-on Stripe session creation error:', error);
+        throw new BadRequestException(
+          `Stripe session creation failed: ${error.message}`,
+        );
+      }
+    }
+
+    try {
+      const notification = await this.notificationsService.create({
+        type: NotificationType.ORDER_PLACED,
+        title: 'Additional Items Request',
+        message: `Additional items request ${order.orderNumber} for order ${parentOrder.orderNumber} has been submitted.`,
+        metadata: {
+          orderId: order._id,
+          orderNumber: order.orderNumber,
+          parentOrderId: parentOrder._id,
+          parentOrderNumber: parentOrder.orderNumber,
+        },
+        user: userId,
+        triggeredBy: userId,
+        link: `/orders/${order._id}`,
+      });
+      this.notificationsGateway.broadcastNotification(notification);
+    } catch (notifErr) {
+      console.error(
+        'Failed to create notification for add-on order request:',
+        notifErr,
+      );
+    }
+
+    await this.mailService
+      .sendNewOrderRequestNotification(order, currentUser)
+      .catch((err) =>
+        console.error('Failed to send add-on order request email to sales', err),
+      );
+
+    await this.mailService
+      .sendOrderRequestCustomerConfirmation(order, currentUser)
+      .catch((err) =>
+        console.error(
+          'Failed to send add-on order confirmation email to customer',
+          err,
+        ),
+      );
+
+    return {
+      orderId: order._id,
+      orderNumber: order.orderNumber,
+      order,
+    };
   }
 
   private assertTestOrdersAllowed(): void {

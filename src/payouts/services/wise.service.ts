@@ -10,6 +10,11 @@ import { randomUUID } from 'crypto';
 import * as https from 'https';
 import { currencyFromIban, defaultCurrencyForCountry, toIsoCountryCode } from '../wise-country-iso';
 import { ibanValidationError, normalizeIban } from '../iban-validate';
+import {
+  parseWiseReceivingAccounts,
+  pickWiseReceivingAccount,
+  WiseReceivingAccount,
+} from '../wise-receiving-details';
 
 export type WiseBankDetails = {
   accountHolderName: string;
@@ -425,6 +430,40 @@ export class WiseService {
     }>('GET', `/v1/transfers/${transferId}`);
   }
 
+  isSandbox(): boolean {
+    return Boolean(this.http.defaults.baseURL?.includes('sandbox'));
+  }
+
+  async simulateSandboxUntilOutgoingSent(
+    transferId: string | number,
+  ): Promise<string> {
+    const id = String(transferId);
+    let status = String((await this.getTransfer(id)).status || '').toLowerCase();
+    if (status === 'outgoing_payment_sent') return status;
+    if (!this.isSandbox()) return status;
+
+    const steps =
+      status === 'funds_converted'
+        ? ['outgoing_payment_sent']
+        : ['processing', 'funds_converted', 'outgoing_payment_sent'];
+
+    for (const step of steps) {
+      try {
+        await this.request('GET', `/v1/simulation/transfers/${id}/${step}`);
+      } catch (err) {
+        this.logger.warn(
+          `Sandbox simulate ${step} for transfer ${id}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5500));
+      status = String((await this.getTransfer(id)).status || '').toLowerCase();
+      if (status === 'outgoing_payment_sent') return status;
+    }
+    return status;
+  }
+
   getAccountMeta() {
     return {
       configured: this.isConfigured(),
@@ -509,6 +548,135 @@ export class WiseService {
       totalUsdEquivalent,
       balances: withUsd,
     };
+  }
+
+  async getReceivingAccountDetails(currency?: string): Promise<{
+    configured: boolean;
+    accounts: WiseReceivingAccount[];
+    error?: string;
+  }> {
+    if (!this.isConfigured()) {
+      return { configured: false, accounts: [] };
+    }
+    try {
+      const profileId = await this.getProfileId();
+      const payload = await this.request<any>(
+        'GET',
+        `/v1/profiles/${profileId}/account-details`,
+      );
+      const accounts = parseWiseReceivingAccounts(payload);
+      const wanted = (currency || this.sourceCurrency || '').toUpperCase();
+      const preferred = pickWiseReceivingAccount(accounts, wanted);
+      const ordered = preferred
+        ? [preferred, ...accounts.filter((item) => item !== preferred)]
+        : accounts;
+      return {
+        configured: true,
+        accounts: ordered,
+      };
+    } catch (err) {
+      this.logger.warn(
+        `Wise receiving account details unavailable: ${this.errorMessage(err)}`,
+      );
+      return {
+        configured: true,
+        accounts: [],
+        error:
+          'Wise did not return receiving bank details for this profile. Enter them manually in Admin settings.',
+      };
+    }
+  }
+
+  async findIncomingCredit(params: {
+    currency: string;
+    amount: number;
+    since: Date;
+    excludeIds?: string[];
+  }): Promise<{
+    available: boolean;
+    credit?: { id: string; amount: number; currency: string; date?: string };
+    error?: string;
+  }> {
+    if (!this.isConfigured()) {
+      return { available: false, error: 'Wise is not configured.' };
+    }
+    try {
+      const profileId = await this.getProfileId();
+      const currency = (params.currency || this.sourceCurrency).toUpperCase();
+      const balances = await this.request<
+        Array<{
+          id: number;
+          currency?: string;
+          amount?: { value?: number; currency?: string };
+        }>
+      >('GET', `/v4/profiles/${profileId}/balances?types=STANDARD`);
+      const match = (balances || []).find(
+        (b) =>
+          (b.amount?.currency || b.currency || '').toUpperCase() === currency,
+      );
+      if (!match?.id) {
+        return { available: true };
+      }
+
+      const intervalStart = params.since.toISOString();
+      const intervalEnd = new Date().toISOString();
+      const statement = await this.request<{
+        transactions?: Array<{
+          referenceNumber?: string;
+          date?: string;
+          amount?: { value?: number; currency?: string };
+          type?: string;
+          details?: { type?: string; description?: string };
+        }>;
+      }>(
+        'GET',
+        `/v1/profiles/${profileId}/balance-statements/${match.id}/statement.json?currency=${encodeURIComponent(currency)}&intervalStart=${encodeURIComponent(intervalStart)}&intervalEnd=${encodeURIComponent(intervalEnd)}&type=COMPACT`,
+      );
+
+      const exclude = new Set(params.excludeIds || []);
+      const credits = (statement.transactions || []).filter((tx) => {
+        const type = String(tx.type || tx.details?.type || '').toUpperCase();
+        const amount = Number(tx.amount?.value || 0);
+        const id = String(tx.referenceNumber || '');
+        if (exclude.has(id)) return false;
+        if (amount <= 0) return false;
+        if (type.includes('DEBIT')) return false;
+        const isCredit =
+          type.includes('CREDIT') ||
+          type.includes('DEPOSIT') ||
+          type === '' ||
+          amount > 0;
+        if (!isCredit) return false;
+        const delta = Math.abs(amount - params.amount);
+        const allowed = Math.max(0.01, Math.abs(params.amount) * 0.05);
+        return delta <= allowed;
+      });
+
+      const credit = credits.sort((a, b) => {
+        const da = Math.abs(Number(a.amount?.value || 0) - params.amount);
+        const db = Math.abs(Number(b.amount?.value || 0) - params.amount);
+        return da - db;
+      })[0];
+
+      if (!credit) return { available: true };
+      return {
+        available: true,
+        credit: {
+          id: String(credit.referenceNumber || `${match.id}-${credit.date}`),
+          amount: Number(credit.amount?.value || 0),
+          currency,
+          date: credit.date,
+        },
+      };
+    } catch (err) {
+      this.logger.warn(
+        `Wise incoming credit lookup failed: ${this.errorMessage(err)}`,
+      );
+      return {
+        available: false,
+        error: 'Wise transaction status is not available for this account.',
+      };
+    }
   }
 
   private async getUsdRates(currencies: string[]): Promise<Record<string, number>> {

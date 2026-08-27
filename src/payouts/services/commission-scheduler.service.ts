@@ -36,6 +36,7 @@ export class CommissionSchedulerService implements OnModuleInit {
     });
     this.schedulerRegistry.addCronJob('wise-payout-sync', payoutJob);
     payoutJob.start();
+    void this.syncWisePayouts();
 
     this.logger.log(
       `Commission hold: ${getCommissionHoldDescription()} · release cron: ${frequent ? 'every minute (dev)' : 'hourly (production)'}`,

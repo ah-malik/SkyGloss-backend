@@ -32,6 +32,14 @@ import {
   WiseWebhookEvent,
   WiseWebhookEventSchema,
 } from './entities/wise-webhook-event.entity';
+import {
+  StripeWiseDestination,
+  StripeWiseDestinationSchema,
+} from './entities/stripe-wise-destination.entity';
+import {
+  StripeWisePayout,
+  StripeWisePayoutSchema,
+} from './entities/stripe-wise-payout.entity';
 import { Order, OrderSchema } from '../orders/entities/order.entity';
 import { User, UserSchema } from '../users/entities/user.entity';
 import { CommissionsService } from './services/commissions.service';
@@ -46,8 +54,12 @@ import { BankDetailsController } from './controllers/bank-details.controller';
 import { WalletsController } from './controllers/wallets.controller';
 import { AdminTransactionsController } from './controllers/admin-transactions.controller';
 import { WiseWebhookController } from './controllers/wise-webhook.controller';
+import { StripeWisePayoutsController } from './controllers/stripe-wise-payouts.controller';
+import { StripeWisePayoutWebhookController } from './controllers/stripe-wise-payout-webhook.controller';
 import { AdminTransactionsService } from './services/admin-transactions.service';
 import { WiseService } from './services/wise.service';
+import { StripeAccountService } from './services/stripe-account.service';
+import { StripeWisePayoutsService } from './services/stripe-wise-payouts.service';
 import { UsersModule } from '../users/users.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 
@@ -62,6 +74,8 @@ import { NotificationsModule } from '../notifications/notifications.module';
       { name: ApprovalHistory.name, schema: ApprovalHistorySchema },
       { name: TransactionHistory.name, schema: TransactionHistorySchema },
       { name: WiseWebhookEvent.name, schema: WiseWebhookEventSchema },
+      { name: StripeWiseDestination.name, schema: StripeWiseDestinationSchema },
+      { name: StripeWisePayout.name, schema: StripeWisePayoutSchema },
       { name: Order.name, schema: OrderSchema },
       { name: User.name, schema: UserSchema },
     ]),
@@ -75,6 +89,8 @@ import { NotificationsModule } from '../notifications/notifications.module';
     WalletsController,
     AdminTransactionsController,
     WiseWebhookController,
+    StripeWisePayoutsController,
+    StripeWisePayoutWebhookController,
   ],
   providers: [
     CommissionsService,
@@ -85,6 +101,8 @@ import { NotificationsModule } from '../notifications/notifications.module';
     CommissionSchedulerService,
     AdminTransactionsService,
     WiseService,
+    StripeAccountService,
+    StripeWisePayoutsService,
   ],
   exports: [CommissionsService, WithdrawalsService],
 })

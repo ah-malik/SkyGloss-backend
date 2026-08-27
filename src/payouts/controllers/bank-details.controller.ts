@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 import { BankDetailsService } from '../services/bank-details.service';
+import { WithdrawalsService } from '../services/withdrawals.service';
 import { CreateBankDetailsDto } from '../dto/create-bank-details.dto';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -12,7 +13,10 @@ const PAYOUT_ROLES = [...WITHDRAWAL_ELIGIBLE_ROLES];
 @Controller('bank-details')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class BankDetailsController {
-  constructor(private readonly bankDetailsService: BankDetailsService) {}
+  constructor(
+    private readonly bankDetailsService: BankDetailsService,
+    private readonly withdrawalsService: WithdrawalsService,
+  ) {}
 
   @Get('my')
   @Roles(...PAYOUT_ROLES)
@@ -31,7 +35,9 @@ export class BankDetailsController {
 
   @Post()
   @Roles(...PAYOUT_ROLES)
-  upsert(@GetUser('_id') userId: string, @Body() dto: CreateBankDetailsDto) {
-    return this.bankDetailsService.upsertPrimary(userId, dto);
+  async upsert(@GetUser('_id') userId: string, @Body() dto: CreateBankDetailsDto) {
+    const bank = await this.bankDetailsService.upsertPrimary(userId, dto);
+    await this.withdrawalsService.resumeWaitingWithdrawalsForUser(userId);
+    return bank;
   }
 }

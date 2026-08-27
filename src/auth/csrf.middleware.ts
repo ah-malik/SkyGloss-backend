@@ -54,6 +54,8 @@ export class CsrfMiddleware implements NestMiddleware {
       '/auth/refresh',
       '/auth/establish-session',
       '/webhooks/wise',
+      '/webhooks/stripe-wise-payouts',
+      '/webhooks/stripe-wise-payouts-usa',
     ]);
     const normalizedPath = path.endsWith('/') && path.length > 1 ? path.slice(0, -1) : path;
     if (

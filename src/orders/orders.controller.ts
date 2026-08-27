@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { AddOrderItemsDto } from './dto/add-order-items.dto';
 import { CreateAdminTestOrderDto } from './dto/create-admin-test-order.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -146,6 +147,24 @@ export class OrdersController {
     @GetUser('role') role: string,
   ) {
     return this.ordersService.createPaymentSessionForOrder(id, userId, role);
+  }
+
+  @Post(':parentId/add-items')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    UserRole.CERTIFIED_SHOP,
+    UserRole.PARTNER,
+    UserRole.REGIONAL_PARTNER,
+    UserRole.MASTER_PARTNER,
+    UserRole.DISTRIBUTOR,
+  )
+  addItemsToOrder(
+    @Param('parentId') parentId: string,
+    @GetUser('_id') userId: string,
+    @GetUser('role') role: string,
+    @Body() dto: AddOrderItemsDto,
+  ) {
+    return this.ordersService.createAddOnOrder(userId, parentId, dto, role);
   }
 
   @Get('verify/:orderId')
