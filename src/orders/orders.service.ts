@@ -88,6 +88,7 @@ import { normalizeOrderItemType } from '../common/order-type';
 import { CouponsService, ShopRegistrationCouponResult } from '../coupons/coupons.service';
 import { StripeCouponSyncService } from '../coupons/stripe-coupon-sync.service';
 import { CommissionsService } from '../payouts/services/commissions.service';
+import { OrderCommissionTransferService } from '../payouts/services/order-commission-transfer.service';
 import { RedisCacheService } from '../redis/redis-cache.service';
 import { CacheKeys, CacheTtl } from '../redis/redis.constants';
 
@@ -119,6 +120,7 @@ export class OrdersService implements OnModuleInit {
     private couponsService: CouponsService,
     private stripeCouponSync: StripeCouponSyncService,
     private commissionsService: CommissionsService,
+    private orderCommissionTransferService: OrderCommissionTransferService,
     private productsService: ProductsService,
     private productInventoryService: ProductInventoryService,
     private readonly cache: RedisCacheService,
@@ -1155,48 +1157,29 @@ export class OrdersService implements OnModuleInit {
         order.cancellationReason = undefined;
         await order.save();
 
-        const populatedOrder = await this.orderModel
+        await this.sendPaidOrderNotificationsIfNeeded(order._id.toString());
+
+        await this.applyOrderCommissions(
+          order._id.toString(),
+          OrderStatus.PAID,
+        );
+        const stripeAccountKey = isUsaUser ? 'usa' : 'global';
+        this.queuePaidOrderCommissionTransfer(order._id.toString(), {
+          stripeAccountKey,
+        });
+        await this.deductProductInventoryForOrder(order._id);
+
+        const refreshed = await this.orderModel
           .findById(order._id)
           .populate('user', 'firstName lastName email');
-
-        if (populatedOrder) {
-          // Send notification
-          try {
-            const notification = await this.notificationsService.create({
-              type: NotificationType.ORDER_PAID,
-              title: 'Order Paid',
-              message: `Order ${populatedOrder.orderNumber} has been paid by ${populatedOrder.user ? (populatedOrder.user as any).firstName : 'a user'}.`,
-              metadata: {
-                orderId: populatedOrder._id,
-                orderNumber: populatedOrder.orderNumber,
-              },
-              user: (populatedOrder.user as any)?._id,
-              triggeredBy: (populatedOrder.user as any)?._id,
-              link: `/orders/${populatedOrder._id}`,
-            });
-            this.notificationsGateway.broadcastNotification(notification);
-          } catch (notifErr) {
-            console.error('Failed to create/broadcast notification for verified order:', notifErr);
-          }
-
-          // Send Email to sales@skygloss.com
-          await this.mailService.sendNewOrderNotification(populatedOrder, populatedOrder.user).catch(err => {
-            console.error('Failed to send order email to sales (verifyPayment)', err);
-          });
-
-          // Send Confirmation Email to the Customer
-          await this.mailService.sendOrderPaidCustomerConfirmation(populatedOrder, populatedOrder.user).catch(err => {
-            console.error('Failed to send order paid confirmation email to customer (verifyPayment)', err);
-          });
-
-          await this.applyOrderCommissions(
-            populatedOrder._id.toString(),
-            OrderStatus.PAID,
-          );
-          await this.deductProductInventoryForOrder(populatedOrder._id);
-
-          return populatedOrder;
+        if (!refreshed) {
+          throw new NotFoundException('Order not found after payment verification');
         }
+        return refreshed;
+      }
+
+      if (order.status === OrderStatus.PAID) {
+        await this.sendPaidOrderNotificationsIfNeeded(order._id.toString());
       }
     }
     return order;
@@ -1577,6 +1560,14 @@ export class OrdersService implements OnModuleInit {
       const existingOrder = await this.orderModel.findById(orderId);
       if (existingOrder && existingOrder.status === OrderStatus.PAID) {
         console.log(`[USA Stripe Webhook] Order ${existingOrder.orderNumber} is already PAID. Skipping duplicate notifications/emails.`);
+        await this.sendPaidOrderNotificationsIfNeeded(orderId);
+        this.queuePaidOrderCommissionTransfer(orderId, {
+          stripeAccountKey: 'usa',
+          stripePaymentId:
+            typeof session.payment_intent === 'string'
+              ? session.payment_intent
+              : session.payment_intent?.id || session.id,
+        });
         return { received: true };
       }
 
@@ -1612,35 +1603,19 @@ export class OrdersService implements OnModuleInit {
 
         await this.recordCouponUsageIfApplicable(updatedOrder.couponCode);
 
-        // Send notification
-        const notification = await this.notificationsService.create({
-          type: NotificationType.ORDER_PAID,
-          title: 'Order Paid',
-          message: `Order ${updatedOrder.orderNumber} has been paid by ${updatedOrder.user ? (updatedOrder.user as any).firstName : 'a user'}.`,
-          metadata: {
-            orderId: updatedOrder._id,
-            orderNumber: updatedOrder.orderNumber,
-          },
-          user: (updatedOrder.user as any)?._id,
-          triggeredBy: (updatedOrder.user as any)?._id,
-          link: `/orders/${updatedOrder._id}`,
-        });
-        this.notificationsGateway.broadcastNotification(notification);
-
-        // Send Email to sales@skygloss.com
-        await this.mailService.sendNewOrderNotification(updatedOrder, updatedOrder.user).catch(err => {
-          console.error('[USA Stripe Webhook] Failed to send order email to sales', err);
-        });
-
-        // Send Confirmation Email to the Customer
-        await this.mailService.sendOrderPaidCustomerConfirmation(updatedOrder, updatedOrder.user).catch(err => {
-          console.error('[USA Stripe Webhook] Failed to send order paid confirmation email to customer', err);
-        });
+        await this.sendPaidOrderNotificationsIfNeeded(updatedOrder._id.toString());
 
         await this.applyOrderCommissions(
           updatedOrder._id.toString(),
           OrderStatus.PAID,
         );
+        this.queuePaidOrderCommissionTransfer(updatedOrder._id.toString(), {
+          stripeAccountKey: 'usa',
+          stripePaymentId:
+            typeof session.payment_intent === 'string'
+              ? session.payment_intent
+              : session.payment_intent?.id || session.id,
+        });
         await this.deductProductInventoryForOrder(updatedOrder._id);
       } else {
         console.error(`[USA Stripe Webhook] Order ${orderId} not found in DB.`);
@@ -1998,6 +1973,14 @@ export class OrdersService implements OnModuleInit {
         const existingOrder = await this.orderModel.findById(orderId);
         if (existingOrder && existingOrder.status === OrderStatus.PAID) {
           console.log(`[Stripe Webhook] Order ${existingOrder.orderNumber} is already PAID. Skipping duplicate notifications/emails.`);
+          await this.sendPaidOrderNotificationsIfNeeded(orderId);
+          this.queuePaidOrderCommissionTransfer(orderId, {
+            stripeAccountKey: 'global',
+            stripePaymentId:
+              typeof session.payment_intent === 'string'
+                ? session.payment_intent
+                : session.payment_intent?.id || session.id,
+          });
           return { received: true };
         }
 
@@ -2032,34 +2015,20 @@ export class OrdersService implements OnModuleInit {
           console.log(`[Stripe Webhook] Order ${updatedOrder.orderNumber} status updated to PAID.`);
 
           await this.recordCouponUsageIfApplicable(updatedOrder.couponCode);
-          const notification = await this.notificationsService.create({
-            type: NotificationType.ORDER_PAID,
-            title: 'Order Paid',
-            message: `Order ${updatedOrder.orderNumber} has been paid by ${updatedOrder.user ? (updatedOrder.user as any).firstName : 'a user'}.`,
-            metadata: {
-              orderId: updatedOrder._id,
-              orderNumber: updatedOrder.orderNumber,
-            },
-            user: (updatedOrder.user as any)?._id,
-            triggeredBy: (updatedOrder.user as any)?._id,
-            link: `/orders/${updatedOrder._id}`,
-          });
-          this.notificationsGateway.broadcastNotification(notification);
 
-          // Send Email to sales@skygloss.com
-          await this.mailService.sendNewOrderNotification(updatedOrder, updatedOrder.user).catch(err => {
-            console.error('Failed to send order email to sales', err);
-          });
-
-          // Send Confirmation Email to the Customer
-          await this.mailService.sendOrderPaidCustomerConfirmation(updatedOrder, updatedOrder.user).catch(err => {
-            console.error('Failed to send order paid confirmation email to customer', err);
-          });
+          await this.sendPaidOrderNotificationsIfNeeded(updatedOrder._id.toString());
 
           await this.applyOrderCommissions(
             updatedOrder._id.toString(),
             OrderStatus.PAID,
           );
+          this.queuePaidOrderCommissionTransfer(updatedOrder._id.toString(), {
+            stripeAccountKey: 'global',
+            stripePaymentId:
+              typeof session.payment_intent === 'string'
+                ? session.payment_intent
+                : session.payment_intent?.id || session.id,
+          });
           await this.deductProductInventoryForOrder(updatedOrder._id);
         } else {
           console.error(`[Stripe Webhook] Order with id ${orderId} not found in DB.`);
@@ -2611,6 +2580,100 @@ export class OrdersService implements OnModuleInit {
         `[Commission] Order ${order.orderNumber}: ${entries.length} recipient(s), status=${commissionStatus}, base=${monetary.orderAmount} ${monetary.orderCurrency} @ ${monetary.exchangeRateToUsd} → USD`,
       );
     }
+  }
+
+  /** Queue Stripe→Wise transfer using commissions already saved on the order. */
+  private queuePaidOrderCommissionTransfer(
+    orderId: string,
+    context?: {
+      stripeAccountKey?: 'global' | 'usa';
+      stripePaymentId?: string;
+    },
+  ): void {
+    void this.orderCommissionTransferService
+      .enqueueFromPaidOrder(orderId, context)
+      .catch((err) =>
+        this.logger.error(
+          `Failed to queue Stripe→Wise commission transfer for order ${orderId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        ),
+      );
+  }
+
+  /**
+   * Idempotent paid-order emails + in-app notification.
+   * Customer email: shop user account email, falling back to shipping address email.
+   */
+  async sendPaidOrderNotificationsIfNeeded(
+    orderId: string,
+    options?: { force?: boolean },
+  ): Promise<boolean> {
+    const order = await this.orderModel
+      .findById(orderId)
+      .populate('user', 'firstName lastName email role partnerCode')
+      .exec();
+    if (!order || order.status !== OrderStatus.PAID) return false;
+    if (order.paidConfirmationEmailSentAt && !options?.force) return false;
+
+    const userDoc =
+      typeof order.user === 'object' && order.user !== null && '_id' in (order.user as object)
+        ? (order.user as any)
+        : await this.usersService.findOne(String(order.user));
+
+    const customerEmail = this.mailService.resolveCustomerEmail(order, userDoc);
+    if (!customerEmail) {
+      this.logger.warn(
+        `Paid order notifications skipped for ${order.orderNumber}: no customer email.`,
+      );
+      return false;
+    }
+
+    try {
+      const notification = await this.notificationsService.create({
+        type: NotificationType.ORDER_PAID,
+        title: 'Order Paid',
+        message: `Order ${order.orderNumber} has been paid by ${userDoc?.firstName || 'a customer'}.`,
+        metadata: {
+          orderId: order._id,
+          orderNumber: order.orderNumber,
+        },
+        user: userDoc?._id,
+        triggeredBy: userDoc?._id,
+        link: `/orders/${order._id}`,
+      });
+      this.notificationsGateway.broadcastNotification(notification);
+    } catch (notifErr) {
+      this.logger.error(
+        `Failed to create/broadcast notification for order ${order.orderNumber}`,
+        notifErr,
+      );
+    }
+
+    await this.mailService
+      .sendNewOrderNotification(order, userDoc)
+      .catch((err) =>
+        this.logger.error(
+          `Failed to send sales notification for order ${order.orderNumber}`,
+          err,
+        ),
+      );
+
+    const customerSent = await this.mailService.sendOrderPaidCustomerConfirmation(
+      order,
+      userDoc,
+    );
+
+    if (customerSent) {
+      order.paidConfirmationEmailSentAt = new Date();
+      await order.save();
+      this.logger.log(
+        `Paid order confirmation sent to ${customerEmail} for ${order.orderNumber}`,
+      );
+      return true;
+    }
+
+    return false;
   }
 
   /** Orders where `viewer` (Representative or Promoter) is a commission recipient. */
@@ -3256,6 +3319,15 @@ export class OrdersService implements OnModuleInit {
       status === OrderStatus.DELIVERED
     ) {
       await this.applyOrderCommissions(updatedOrder._id.toString(), status);
+    }
+
+    if (
+      status === OrderStatus.PAID &&
+      oldStatus !== OrderStatus.PAID &&
+      updatedOrder.stripeSessionId
+    ) {
+      void this.sendPaidOrderNotificationsIfNeeded(updatedOrder._id.toString());
+      this.queuePaidOrderCommissionTransfer(updatedOrder._id.toString());
     }
 
     if (status === OrderStatus.SHIPPED) {

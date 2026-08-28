@@ -1132,26 +1132,41 @@ export class MailService {
   }
 
   async sendOrderPaidCustomerConfirmation(order: any, user: any) {
+    const to = this.resolveCustomerEmail(order, user);
+    if (!to) {
+      this.logger.warn(
+        `Order paid confirmation skipped for ${order?.orderNumber}: no customer email.`,
+      );
+      return false;
+    }
+    const recipient = {
+      ...(user || {}),
+      email: to,
+      firstName: user?.firstName || order?.shippingAddress?.firstName || 'Customer',
+      lastName: user?.lastName || order?.shippingAddress?.lastName || '',
+    };
+
     if (await this.useLatestTemplates()) {
-      const footerContact = await this.resolveLatestFooterContact(user);
+      const footerContact = await this.resolveLatestFooterContact(recipient);
       const mailOptions = {
         from: `"SkyGloss Portal" <sales@skygloss.com>`,
-        to: user.email,
+        to,
         subject: `Order Confirmation: ${order.orderNumber}`,
-        html: buildLatestOrderPaidHtml(order, user, footerContact),
+        html: buildLatestOrderPaidHtml(order, recipient, footerContact),
       };
       try {
         await this.salesTransporter.sendMail(mailOptions);
         this.logger.log(
-          `Order paid confirmation (latest) sent to customer ${user.email} for ${order.orderNumber}`,
+          `Order paid confirmation (latest) sent to customer ${to} for ${order.orderNumber}`,
         );
+        return true;
       } catch (error) {
         this.logger.error(
           `Failed to send order paid confirmation to customer`,
           error.stack,
         );
+        return false;
       }
-      return;
     }
 
     const subtotal = order.items.reduce((sum: number, item: any) => sum + (item.price * item.quantity), 0);
@@ -1171,7 +1186,7 @@ export class MailService {
 
     const mailOptions = {
       from: `"SkyGloss Portal" <sales@skygloss.com>`,
-      to: user.email,
+      to,
       subject: `Order Confirmation: ${order.orderNumber}`,
       html: `
         <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
@@ -1182,7 +1197,7 @@ export class MailService {
                   <tr><td align="center" bgcolor="#0ea0dc" style="padding:20px; color:#ffffff; font-size:24px; font-weight:bold;">Payment Confirmed</td></tr>
                   <tr>
                     <td style="padding:30px; color:#333333; font-size:14px; line-height:1.6;">
-                      <h2 style="color:#272727; margin-bottom: 5px;">Hi ${user.firstName},</h2>
+                      <h2 style="color:#272727; margin-bottom: 5px;">Hi ${recipient.firstName},</h2>
                       <p style="margin-top: 0; color: #666;">Thank you for your purchase! Your order (<strong>${order.orderNumber}</strong>) has been successfully paid and is now being processed.</p>
                       
                       <p>We will notify you once your items have been shipped.</p>
@@ -1221,10 +1236,21 @@ export class MailService {
 
     try {
       await this.salesTransporter.sendMail(mailOptions);
-      this.logger.log(`Order paid confirmation sent to customer ${user.email} for ${order.orderNumber}`);
+      this.logger.log(`Order paid confirmation sent to customer ${to} for ${order.orderNumber}`);
+      return true;
     } catch (error) {
       this.logger.error(`Failed to send order paid confirmation to customer`, error.stack);
+      return false;
     }
+  }
+
+  resolveCustomerEmail(order: any, user: any): string | undefined {
+    const candidates = [user?.email, order?.shippingAddress?.email];
+    for (const raw of candidates) {
+      const email = String(raw || '').trim();
+      if (email && email.includes('@')) return email;
+    }
+    return undefined;
   }
 
   private buildTrackingUrl(shippingCompany: string | undefined, trackingId: string): string | null {

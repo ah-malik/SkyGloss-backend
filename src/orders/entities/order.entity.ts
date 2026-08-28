@@ -174,6 +174,10 @@ export class Order {
   @Prop({ default: 0 })
   paymentReminderCount?: number;
 
+  /** Set when paid order confirmation emails were sent to the customer (and sales notified). */
+  @Prop({ type: Date })
+  paidConfirmationEmailSentAt?: Date;
+
   @Prop({ type: [Object], default: [] })
   commissions?: {
     recipientUserId: string;

@@ -40,6 +40,10 @@ import {
   StripeWisePayout,
   StripeWisePayoutSchema,
 } from './entities/stripe-wise-payout.entity';
+import {
+  OrderCommissionTransfer,
+  OrderCommissionTransferSchema,
+} from './entities/order-commission-transfer.entity';
 import { Order, OrderSchema } from '../orders/entities/order.entity';
 import { User, UserSchema } from '../users/entities/user.entity';
 import { CommissionsService } from './services/commissions.service';
@@ -56,11 +60,13 @@ import { AdminTransactionsController } from './controllers/admin-transactions.co
 import { WiseWebhookController } from './controllers/wise-webhook.controller';
 import { StripeWisePayoutsController } from './controllers/stripe-wise-payouts.controller';
 import { StripeWisePayoutWebhookController } from './controllers/stripe-wise-payout-webhook.controller';
+import { OrderCommissionTransfersController } from './controllers/order-commission-transfers.controller';
 import { AdminTransactionsService } from './services/admin-transactions.service';
 import { WiseService } from './services/wise.service';
 import { StripeAccountService } from './services/stripe-account.service';
 import { StripeMoneyManagementService } from './services/stripe-money-management.service';
 import { StripeWisePayoutsService } from './services/stripe-wise-payouts.service';
+import { OrderCommissionTransferService } from './services/order-commission-transfer.service';
 import { UsersModule } from '../users/users.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 
@@ -77,6 +83,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
       { name: WiseWebhookEvent.name, schema: WiseWebhookEventSchema },
       { name: StripeWiseDestination.name, schema: StripeWiseDestinationSchema },
       { name: StripeWisePayout.name, schema: StripeWisePayoutSchema },
+      { name: OrderCommissionTransfer.name, schema: OrderCommissionTransferSchema },
       { name: Order.name, schema: OrderSchema },
       { name: User.name, schema: UserSchema },
     ]),
@@ -92,6 +99,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     WiseWebhookController,
     StripeWisePayoutsController,
     StripeWisePayoutWebhookController,
+    OrderCommissionTransfersController,
   ],
   providers: [
     CommissionsService,
@@ -105,7 +113,8 @@ import { NotificationsModule } from '../notifications/notifications.module';
     StripeAccountService,
     StripeMoneyManagementService,
     StripeWisePayoutsService,
+    OrderCommissionTransferService,
   ],
-  exports: [CommissionsService, WithdrawalsService],
+  exports: [CommissionsService, WithdrawalsService, OrderCommissionTransferService],
 })
 export class PayoutsModule {}
