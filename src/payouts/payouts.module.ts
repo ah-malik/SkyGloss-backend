@@ -59,6 +59,7 @@ import { StripeWisePayoutWebhookController } from './controllers/stripe-wise-pay
 import { AdminTransactionsService } from './services/admin-transactions.service';
 import { WiseService } from './services/wise.service';
 import { StripeAccountService } from './services/stripe-account.service';
+import { StripeMoneyManagementService } from './services/stripe-money-management.service';
 import { StripeWisePayoutsService } from './services/stripe-wise-payouts.service';
 import { UsersModule } from '../users/users.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -102,6 +103,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     AdminTransactionsService,
     WiseService,
     StripeAccountService,
+    StripeMoneyManagementService,
     StripeWisePayoutsService,
   ],
   exports: [CommissionsService, WithdrawalsService],

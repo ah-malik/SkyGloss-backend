@@ -28,6 +28,16 @@ export class StripeWisePayout {
   @Prop()
   stripePayoutId?: string;
 
+  /** Present when funds were sent from a Financial Account via outbound payment. */
+  @Prop()
+  stripeOutboundPaymentId?: string;
+
+  @Prop({ type: String, default: 'payments_balance' })
+  sourceType?: 'payments_balance' | 'financial_account';
+
+  @Prop()
+  stripeFinancialAccountId?: string;
+
   @Prop()
   stripeDestinationId?: string;
 

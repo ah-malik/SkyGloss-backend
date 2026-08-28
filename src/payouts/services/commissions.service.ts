@@ -18,6 +18,11 @@ import { normalizePartnerCode } from '../../common/partner-code';
 import { GLOBAL_HUB_PARTNER_CODE } from '../../common/global-hub';
 import { normalizeHubCountries } from '../../common/hub-countries';
 import { isShopParentLinkRole } from '../../common/user-hierarchy';
+import {
+  canonicalEarningType,
+  missingCommissionAmount,
+  uniqueSplitEarningType,
+} from '../commission-split';
 
 export type WithdrawalHubBalance = {
   hubId: string;
@@ -270,6 +275,7 @@ export class CommissionsService {
 
   async getSummary(userId: string) {
     await this.releaseAvailableCommissions();
+    await this.repairOrphanedPartialAmounts(userId);
 
     const uid = new Types.ObjectId(userId);
     const records = await this.commissionModel.find({ recipientUserId: uid }).lean();
@@ -322,6 +328,7 @@ export class CommissionsService {
     currency: string;
   }> {
     await this.releaseAvailableCommissions();
+    await this.repairOrphanedPartialAmounts(userId);
 
     const uid = new Types.ObjectId(userId);
     const availableRecords = await this.commissionModel
@@ -544,6 +551,7 @@ export class CommissionsService {
     amount: number,
     hubPartnerCode?: string,
   ): Promise<{ recordIds: Types.ObjectId[]; total: number }> {
+    await this.repairOrphanedPartialAmounts(userId);
     const available = await this.commissionModel
       .find({
         recipientUserId: new Types.ObjectId(userId),
@@ -642,32 +650,91 @@ export class CommissionsService {
       return record._id as Types.ObjectId;
     }
 
+    const originalAmount = record.amount;
     record.amount = remainder;
     await record.save();
 
-    const partial = await this.commissionModel.create({
-      orderId: record.orderId,
-      orderNumber: record.orderNumber,
-      recipientUserId: record.recipientUserId,
-      recipientPartnerCode: record.recipientPartnerCode,
-      recipientRole: record.recipientRole,
-      earningType: `${record.earningType} (partial)`,
-      percentage: record.percentage,
-      amount: lock,
-      currency: record.currency,
-      status: CommissionLifecycleStatus.LOCKED,
-      shippedAt: record.shippedAt,
-      availableAt: record.availableAt,
-      availableConfirmedAt: record.availableConfirmedAt,
-      shopUserId: record.shopUserId,
-      actingParentPartnerCode: record.actingParentPartnerCode,
-      originalCurrency: record.originalCurrency,
-      exchangeRate: record.exchangeRate,
-      convertedUsdAmount: record.convertedUsdAmount,
-      splitFromRecordId: record._id as Types.ObjectId,
-    });
+    try {
+      const splitId = new Types.ObjectId();
+      const partial = await this.commissionModel.create({
+        _id: splitId,
+        orderId: record.orderId,
+        orderNumber: record.orderNumber,
+        recipientUserId: record.recipientUserId,
+        recipientPartnerCode: record.recipientPartnerCode,
+        recipientRole: record.recipientRole,
+        earningType: uniqueSplitEarningType(
+          record.earningType,
+          splitId.toHexString(),
+        ),
+        percentage: record.percentage,
+        amount: lock,
+        currency: record.currency,
+        status: CommissionLifecycleStatus.LOCKED,
+        shippedAt: record.shippedAt,
+        availableAt: record.availableAt,
+        availableConfirmedAt: record.availableConfirmedAt,
+        shopUserId: record.shopUserId,
+        actingParentPartnerCode: record.actingParentPartnerCode,
+        originalCurrency: record.originalCurrency,
+        exchangeRate: record.exchangeRate,
+        convertedUsdAmount: record.convertedUsdAmount,
+        splitFromRecordId: record._id as Types.ObjectId,
+      });
 
-    return partial._id as Types.ObjectId;
+      return partial._id as Types.ObjectId;
+    } catch (err) {
+      record.amount = originalAmount;
+      await record.save();
+      throw err;
+    }
+  }
+
+  /** Restore amount lost when a partial lock shrank the parent but the split insert failed. */
+  private async repairOrphanedPartialAmounts(userId: string): Promise<void> {
+    const uid = new Types.ObjectId(userId);
+    const records = await this.commissionModel.find({
+      recipientUserId: uid,
+      status: { $ne: CommissionLifecycleStatus.CANCELLED },
+    });
+    const originals = records.filter(
+      (record) =>
+        !record.splitFromRecordId &&
+        record.status === CommissionLifecycleStatus.AVAILABLE,
+    );
+    if (!originals.length) return;
+
+    const orders = await this.orderModel
+      .find({ _id: { $in: originals.map((record) => record.orderId) } })
+      .select('_id commissions');
+    const orderById = new Map(orders.map((order) => [String(order._id), order]));
+
+    for (const original of originals) {
+      const canonical = canonicalEarningType(original.earningType);
+      const relatedAmounts = records
+        .filter(
+          (record) =>
+            String(record.orderId) === String(original.orderId) &&
+            canonicalEarningType(record.earningType) === canonical,
+        )
+        .map((record) => record.amount);
+      const order = orderById.get(String(original.orderId));
+      const entry = (order?.commissions || []).find(
+        (commission) =>
+          String(commission.recipientUserId) ===
+            String(original.recipientUserId) &&
+          canonicalEarningType(commission.earningType || 'Shop Introduction') ===
+            canonical,
+      );
+      if (!entry) continue;
+      const missing = missingCommissionAmount(entry.amount, relatedAmounts);
+      if (missing <= 0) continue;
+      original.amount = Math.round((original.amount + missing) * 100) / 100;
+      await original.save();
+      this.logger.warn(
+        `Restored $${missing.toFixed(2)} on commission ${original._id} after a failed partial withdrawal lock`,
+      );
+    }
   }
 
   async unlockCommissions(recordIds: Types.ObjectId[]): Promise<void> {

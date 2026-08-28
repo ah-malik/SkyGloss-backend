@@ -42,6 +42,9 @@ export type StripeAccountOverview = {
   accountId: string | null;
   available: StripeBalanceRow[];
   externalAccounts: StripeExternalBank[];
+  /** True when the Stripe bank list API failed; payouts can still use the default bank. */
+  externalAccountsUnavailable?: boolean;
+  externalAccountsError?: string;
   error?: string;
 };
 
@@ -114,7 +117,7 @@ export class StripeAccountService {
     }
 
     try {
-      const [account, balance, banks] = await Promise.all([
+      const [account, balance, bankResult] = await Promise.all([
         stripe.accounts.retrieve(),
         stripe.balance.retrieve(),
         this.listExternalBanks(stripe),
@@ -132,7 +135,9 @@ export class StripeAccountService {
         defaultCurrency: normalizeCurrency(account.default_currency) || null,
         accountId: account.id || null,
         available,
-        externalAccounts: banks,
+        externalAccounts: bankResult.banks,
+        externalAccountsUnavailable: bankResult.unavailable,
+        externalAccountsError: bankResult.error,
       };
     } catch (err) {
       this.logger.warn(
@@ -200,19 +205,7 @@ export class StripeAccountService {
     );
 
     if (dest.payoutToDefaultStripeBank) {
-      const def =
-        banks.find((bank) => bank.defaultForCurrency) ||
-        banks[0] ||
-        overview.externalAccounts.find((bank) => bank.defaultForCurrency);
-      return {
-        ok: true,
-        usedDefault: true,
-        destinationId: def?.id,
-        matchedLast4: def?.last4,
-        summary: def
-          ? `${def.bankName || 'Default Stripe bank'} • ${currency} • ****${def.last4 || '????'}`
-          : `Stripe default ${currency} payout bank (Wise must already be this account)`,
-      };
+      return this.defaultBankResolution(overview, banks, currency);
     }
 
     const match = this.matchConfiguredBank(banks, dest);
@@ -247,6 +240,20 @@ export class StripeAccountService {
         error:
           'Configure Wise receiving account details (account/IBAN and routing where required) in Admin settings before sending a payout.',
       };
+    }
+
+    // Stripe often cannot list platform payout banks via Connect APIs.
+    // If Wise details exist and payouts are enabled, pay the Stripe default bank.
+    if (
+      overview.externalAccountsUnavailable ||
+      overview.externalAccounts.length === 0
+    ) {
+      return this.defaultBankResolution(
+        overview,
+        banks,
+        currency,
+        'Stripe bank list unavailable — payout uses the Stripe default bank for this currency. Confirm that bank is your Wise receiving account.',
+      );
     }
 
     return {
@@ -332,36 +339,100 @@ export class StripeAccountService {
     );
   }
 
-  private async listExternalBanks(stripe: Stripe): Promise<StripeExternalBank[]> {
-    const account = await stripe.accounts.retrieve();
-    if (!account.id) return [];
+  private async listExternalBanks(stripe: Stripe): Promise<{
+    banks: StripeExternalBank[];
+    unavailable: boolean;
+    error?: string;
+  }> {
     try {
-      const listed = await stripe.accounts.listExternalAccounts(account.id, {
+      const expanded = await stripe.accounts.retrieve({
+        expand: ['external_accounts'],
+      });
+      const fromExpand = this.mapExternalBanks(
+        (
+          expanded as Stripe.Account & {
+            external_accounts?: { data?: Stripe.BankAccount[] };
+          }
+        ).external_accounts?.data,
+      );
+      if (fromExpand.length) {
+        return { banks: fromExpand, unavailable: false };
+      }
+
+      if (!expanded.id) {
+        return {
+          banks: [],
+          unavailable: true,
+          error: 'Stripe account id was not returned.',
+        };
+      }
+
+      const listed = await stripe.accounts.listExternalAccounts(expanded.id, {
         object: 'bank_account',
         limit: 100,
       });
-      return (listed.data || []).map((item) => {
-        const bank = item as Stripe.BankAccount;
-        return {
-          id: bank.id,
-          last4: bank.last4 || null,
-          routingNumber: bank.routing_number || null,
-          country: bank.country || null,
-          currency: normalizeCurrency(bank.currency),
-          bankName: bank.bank_name || null,
-          status: bank.status || null,
-          defaultForCurrency: Boolean(bank.default_for_currency),
-          availablePayoutMethods: Array.isArray(bank.available_payout_methods)
-            ? bank.available_payout_methods.map(String)
-            : [],
-        };
-      });
+      const banks = this.mapExternalBanks(listed.data as Stripe.BankAccount[]);
+      return { banks, unavailable: false };
     } catch (err) {
+      const raw = String(
+        (err as { raw?: { message?: string }; message?: string })?.raw
+          ?.message ||
+          (err as { message?: string })?.message ||
+          '',
+      ).trim();
       this.logger.warn(
-        `Could not list Stripe external accounts: ${userFacingStripeError(err)}`,
+        `Could not list Stripe external accounts: ${raw || userFacingStripeError(err)}`,
       );
-      return [];
+      return {
+        banks: [],
+        unavailable: true,
+        error: raw || userFacingStripeError(err),
+      };
     }
+  }
+
+  private mapExternalBanks(
+    items?: Array<Stripe.BankAccount | Stripe.Card | null> | null,
+  ): StripeExternalBank[] {
+    return (items || [])
+      .filter((item): item is Stripe.BankAccount =>
+        Boolean(item && (item as Stripe.BankAccount).object === 'bank_account'),
+      )
+      .map((bank) => ({
+        id: bank.id,
+        last4: bank.last4 || null,
+        routingNumber: bank.routing_number || null,
+        country: bank.country || null,
+        currency: normalizeCurrency(bank.currency),
+        bankName: bank.bank_name || null,
+        status: bank.status || null,
+        defaultForCurrency: Boolean(bank.default_for_currency),
+        availablePayoutMethods: Array.isArray(bank.available_payout_methods)
+          ? bank.available_payout_methods.map(String)
+          : [],
+      }));
+  }
+
+  private defaultBankResolution(
+    overview: StripeAccountOverview,
+    banks: StripeExternalBank[],
+    currency: string,
+    note?: string,
+  ): DestinationResolution {
+    const def =
+      banks.find((bank) => bank.defaultForCurrency) ||
+      banks[0] ||
+      overview.externalAccounts.find((bank) => bank.defaultForCurrency);
+    const base = def
+      ? `${def.bankName || 'Default Stripe bank'} • ${currency} • ****${def.last4 || '????'}`
+      : `Stripe default ${currency} payout bank (Wise must already be this account)`;
+    return {
+      ok: true,
+      usedDefault: true,
+      destinationId: def?.id,
+      matchedLast4: def?.last4,
+      summary: note ? `${base}. ${note}` : base,
+    };
   }
 
   private mapBalance(

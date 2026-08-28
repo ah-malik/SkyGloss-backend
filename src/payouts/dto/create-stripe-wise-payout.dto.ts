@@ -24,6 +24,16 @@ export class CreateStripeWisePayoutDto {
   @IsIn(['global', 'usa'])
   stripeAccountKey?: 'global' | 'usa';
 
+  /** payments_balance = classic Stripe payout; financial_account = FA → Wise outbound. */
+  @IsOptional()
+  @IsIn(['payments_balance', 'financial_account'])
+  sourceType?: 'payments_balance' | 'financial_account';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  financialAccountId?: string;
+
   /** Must be true. Payout is not created until the admin confirms. */
   @IsBoolean()
   confirmed: boolean;

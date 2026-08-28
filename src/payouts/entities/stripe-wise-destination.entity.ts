@@ -56,6 +56,18 @@ export class StripeWiseDestination {
   @Prop()
   stripeDestinationFingerprint?: string;
 
+  /** Stripe Global Payouts recipient account that holds the Wise bank payout method. */
+  @Prop()
+  stripeRecipientId?: string;
+
+  /** Stripe payout method id (usba_...) for the Wise receiving bank. */
+  @Prop()
+  stripePayoutMethodId?: string;
+
+  /** Preferred Financial Account to send from (fa_...). */
+  @Prop()
+  stripeFinancialAccountId?: string;
+
   @Prop()
   lastVerifiedAt?: Date;
 

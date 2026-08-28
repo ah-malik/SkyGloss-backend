@@ -13,6 +13,7 @@ describe('StripeWisePayoutsService', () => {
   let destinationModel: any;
   let payoutModel: any;
   let stripeAccounts: any;
+  let moneyManagement: any;
   let wiseService: any;
   let destination: any;
 
@@ -91,6 +92,32 @@ describe('StripeWisePayoutsService', () => {
       retrievePayout: jest.fn(),
     };
 
+    moneyManagement = {
+      listFinancialAccounts: jest.fn().mockResolvedValue({
+        configured: true,
+        accounts: [
+          {
+            id: 'fa_test',
+            type: 'storage',
+            status: 'open',
+            country: 'US',
+            displayName: 'Storage',
+            balances: [{ currency: 'USD', available: 100, inboundPending: 0, outboundPending: 0 }],
+          },
+        ],
+      }),
+      availableOnAccount: jest.fn().mockReturnValue(100),
+      resolveWiseOutboundTarget: jest.fn().mockResolvedValue({
+        ok: true,
+        recipientId: 'acct_recipient',
+        payoutMethodId: 'usba_wise',
+        summary: 'COLUMN NA WISE • ****7744',
+      }),
+      createOutboundPayment: jest.fn(),
+      retrieveOutboundPayment: jest.fn(),
+      mapOutboundStatus: jest.fn().mockReturnValue('paid'),
+    };
+
     wiseService = {
       isConfigured: jest.fn().mockReturnValue(true),
       getAccountSummary: jest.fn().mockResolvedValue({
@@ -106,6 +133,7 @@ describe('StripeWisePayoutsService', () => {
       destinationModel,
       payoutModel,
       stripeAccounts,
+      moneyManagement,
       wiseService,
     );
   });

@@ -37,7 +37,16 @@ export class BankDetailsController {
   @Roles(...PAYOUT_ROLES)
   async upsert(@GetUser('_id') userId: string, @Body() dto: CreateBankDetailsDto) {
     const bank = await this.bankDetailsService.upsertPrimary(userId, dto);
-    await this.withdrawalsService.resumeWaitingWithdrawalsForUser(userId);
+    try {
+      await this.withdrawalsService.resumeWaitingWithdrawalsForUser(
+        userId?.toString?.() || userId,
+      );
+    } catch (err) {
+      console.error(
+        '[BankDetailsController] Withdrawal resume after bank save failed',
+        err,
+      );
+    }
     return bank;
   }
 }

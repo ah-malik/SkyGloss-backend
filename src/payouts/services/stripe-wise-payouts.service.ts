@@ -18,6 +18,7 @@ import {
 import { CreateStripeWisePayoutDto } from '../dto/create-stripe-wise-payout.dto';
 import { UpdateStripeWiseDestinationDto } from '../dto/update-stripe-wise-destination.dto';
 import { StripeAccountService } from './stripe-account.service';
+import { StripeMoneyManagementService } from './stripe-money-management.service';
 import { WiseService } from './wise.service';
 import {
   hasReceivingBankDetails,
@@ -56,6 +57,7 @@ export class StripeWisePayoutsService implements OnModuleInit {
     @InjectModel(StripeWisePayout.name)
     private readonly payoutModel: Model<StripeWisePayoutDocument>,
     private readonly stripeAccounts: StripeAccountService,
+    private readonly moneyManagement: StripeMoneyManagementService,
     private readonly wiseService: WiseService,
   ) {}
 
@@ -108,15 +110,93 @@ export class StripeWisePayoutsService implements OnModuleInit {
     const destCurrency = normalizeCurrency(destination.currency) || 'USD';
     const currency = isValidCurrency(destCurrency) ? destCurrency : 'USD';
 
-    const [global, usa, wise] = await Promise.all([
+    const [global, usa, wise, globalFa, usaFa, wiseOutbound] = await Promise.all([
       this.stripeAccounts.inspect('global'),
       this.stripeAccounts.inspect('usa'),
       this.safeWiseSummary(currency),
+      this.moneyManagement.listFinancialAccounts('global'),
+      this.moneyManagement.listFinancialAccounts('usa'),
+      this.moneyManagement.resolveWiseOutboundTarget(selectedKey, destination),
     ]);
     const selected = selectedKey === 'usa' ? usa : global;
-    const destResolution = selected.configured
+    let destResolution = selected.configured
       ? this.stripeAccounts.resolveDestination(selected, destination)
       : { ok: false as const, error: selected.error || 'Stripe is not configured.' };
+
+    // Persist default-bank mode when Stripe bank list is unavailable so Send works.
+    if (
+      destResolution.ok &&
+      'usedDefault' in destResolution &&
+      destResolution.usedDefault &&
+      !destination.payoutToDefaultStripeBank &&
+      (selected.externalAccountsUnavailable ||
+        selected.externalAccounts.length === 0) &&
+      (destination.iban || destination.accountNumber)
+    ) {
+      destination.payoutToDefaultStripeBank = true;
+      destination.lastVerifyError = undefined;
+      await destination.save();
+      destResolution = this.stripeAccounts.resolveDestination(
+        selected,
+        destination,
+      );
+    }
+
+    if (wiseOutbound.ok) {
+      let dirty = false;
+      if (destination.stripeRecipientId !== wiseOutbound.recipientId) {
+        destination.stripeRecipientId = wiseOutbound.recipientId;
+        dirty = true;
+      }
+      if (destination.stripePayoutMethodId !== wiseOutbound.payoutMethodId) {
+        destination.stripePayoutMethodId = wiseOutbound.payoutMethodId;
+        dirty = true;
+      }
+      if (dirty) {
+        destination.lastVerifyError = undefined;
+        await destination.save();
+      }
+    }
+
+    const financialAccounts = [
+      ...(globalFa.accounts || []).map((account) => ({
+        ...account,
+        stripeAccountKey: 'global' as const,
+        availableForCurrency: this.moneyManagement.availableOnAccount(
+          account,
+          currency,
+        ),
+      })),
+      ...(usaFa.accounts || []).map((account) => ({
+        ...account,
+        stripeAccountKey: 'usa' as const,
+        availableForCurrency: this.moneyManagement.availableOnAccount(
+          account,
+          currency,
+        ),
+      })),
+    ];
+
+    const preferredFa =
+      financialAccounts.find(
+        (account) => account.id === destination.stripeFinancialAccountId,
+      ) ||
+      financialAccounts.find(
+        (account) =>
+          account.stripeAccountKey === selectedKey &&
+          account.status === 'open' &&
+          account.availableForCurrency > 0,
+      ) ||
+      financialAccounts.find(
+        (account) =>
+          account.stripeAccountKey === selectedKey && account.status === 'open',
+      ) ||
+      null;
+
+    const stripeAvailable = this.stripeAccounts.availableForCurrency(
+      selected,
+      currency,
+    );
 
     const latestReceived = await this.payoutModel
       .findOne({ wiseStatus: 'received' })
@@ -124,13 +204,14 @@ export class StripeWisePayoutsService implements OnModuleInit {
       .lean()
       .exec();
 
-    const stripeAvailable = this.stripeAccounts.availableForCurrency(
-      selected,
-      currency,
-    );
-
     return {
-      destination: this.toPublicDestination(destination, destResolution),
+      destination: {
+        ...this.toPublicDestination(destination, destResolution),
+        wiseOutboundReady: wiseOutbound.ok,
+        wiseOutboundError: wiseOutbound.ok ? null : wiseOutbound.error,
+        wiseOutboundSummary: wiseOutbound.ok ? wiseOutbound.summary : null,
+        preferredFinancialAccountId: preferredFa?.id || null,
+      },
       stripe: {
         selectedAccountKey: selectedKey,
         accounts: [global, usa].map((account) => ({
@@ -146,8 +227,18 @@ export class StripeWisePayoutsService implements OnModuleInit {
         availableBalances: selected.available || [],
         currency,
         payoutsEnabled: selected.payoutsEnabled,
-        destinationReady: destResolution.ok,
-        destinationError: destResolution.ok ? null : destResolution.error,
+        destinationReady: destResolution.ok || wiseOutbound.ok,
+        destinationError: destResolution.ok
+          ? null
+          : wiseOutbound.ok
+            ? null
+            : destResolution.error ||
+              (wiseOutbound.ok ? null : wiseOutbound.error),
+        financialAccounts,
+        financialAccountsError:
+          selectedKey === 'usa'
+            ? usaFa.error || null
+            : globalFa.error || null,
       },
       wise,
       lastSettlement: latestReceived
@@ -279,8 +370,33 @@ export class StripeWisePayoutsService implements OnModuleInit {
     current.routingNumber = match.routingNumber || current.routingNumber;
     current.sortCode = match.sortCode || current.sortCode;
     current.swiftBic = match.swiftBic || current.swiftBic;
+
+    const overview = await this.stripeAccounts.inspect(current.stripeAccountKey);
+    const resolution = overview.configured
+      ? this.stripeAccounts.resolveDestination(overview, current)
+      : { ok: false as const, error: overview.error || 'Stripe is not configured.' };
+
+    // Platform Stripe keys often cannot list payout banks. Persist default-bank
+    // mode so Send to Wise stays enabled after refresh.
+    if (
+      resolution.ok &&
+      'usedDefault' in resolution &&
+      resolution.usedDefault &&
+      (overview.externalAccountsUnavailable ||
+        overview.externalAccounts.length === 0)
+    ) {
+      current.payoutToDefaultStripeBank = true;
+    }
+    if (resolution.ok && 'destinationId' in resolution && resolution.destinationId) {
+      current.stripeExternalAccountId = resolution.destinationId;
+      current.lastVerifiedAt = new Date();
+      current.lastVerifyError = undefined;
+    } else if (!resolution.ok) {
+      current.lastVerifyError = resolution.error;
+    }
+
     await current.save();
-    return this.getDestination();
+    return this.toPublicDestination(current, resolution);
   }
 
   async createPayout(adminId: string, dto: CreateStripeWisePayoutDto) {
@@ -351,6 +467,22 @@ export class StripeWisePayoutsService implements OnModuleInit {
       );
     }
 
+    const sourceType =
+      dto.sourceType === 'financial_account'
+        ? 'financial_account'
+        : 'payments_balance';
+
+    if (sourceType === 'financial_account') {
+      return this.createFinancialAccountPayout({
+        adminId,
+        dto,
+        amount,
+        currency,
+        stripeAccountKey,
+        destination,
+      });
+    }
+
     const overview = await this.stripeAccounts.inspect(stripeAccountKey);
     if (!overview.configured || overview.error) {
       throw new BadRequestException(
@@ -393,6 +525,7 @@ export class StripeWisePayoutsService implements OnModuleInit {
         amount,
         currency,
         stripeAccountKey,
+        sourceType: 'payments_balance',
         stripeDestinationId: resolution.destinationId,
         status: 'creating',
         wiseStatus: 'not_started',
@@ -404,6 +537,7 @@ export class StripeWisePayoutsService implements OnModuleInit {
           stripeAvailableBefore: available,
           wiseBalanceBefore: wiseBefore,
           destinationReady: true,
+          sourceType: 'payments_balance',
         },
       });
     } catch (err) {
@@ -454,6 +588,139 @@ export class StripeWisePayoutsService implements OnModuleInit {
       await record.save();
       this.logger.warn(
         `Stripe→Wise payout ${record._id} failed: ${record.failureMessage}`,
+      );
+      throw new BadRequestException(record.failureMessage);
+    }
+  }
+
+  private async createFinancialAccountPayout(params: {
+    adminId: string;
+    dto: CreateStripeWisePayoutDto;
+    amount: number;
+    currency: string;
+    stripeAccountKey: StripeAccountKey;
+    destination: StripeWiseDestinationDocument;
+  }) {
+    const { adminId, dto, amount, currency, stripeAccountKey, destination } =
+      params;
+
+    const faList = await this.moneyManagement.listFinancialAccounts(
+      stripeAccountKey,
+    );
+    if (faList.error && !faList.accounts.length) {
+      throw new BadRequestException(faList.error);
+    }
+    const financialAccountId =
+      dto.financialAccountId ||
+      destination.stripeFinancialAccountId ||
+      faList.accounts.find((account) => account.status === 'open')?.id;
+    if (!financialAccountId) {
+      throw new BadRequestException(
+        'No Stripe Financial Account found. Create one in Stripe Dashboard first.',
+      );
+    }
+    const account = faList.accounts.find((row) => row.id === financialAccountId);
+    if (!account) {
+      throw new BadRequestException(
+        'Selected Financial Account was not found on this Stripe account.',
+      );
+    }
+    const available = this.moneyManagement.availableOnAccount(account, currency);
+    try {
+      assertAmountWithinBalance(amount, available, currency);
+    } catch (err) {
+      throw new BadRequestException(
+        err instanceof Error
+          ? err.message
+          : 'Insufficient Financial Account balance.',
+      );
+    }
+
+    const outboundTarget =
+      await this.moneyManagement.resolveWiseOutboundTarget(
+        stripeAccountKey,
+        destination,
+      );
+    if (!outboundTarget.ok) {
+      throw new BadRequestException(outboundTarget.error);
+    }
+
+    destination.stripeRecipientId = outboundTarget.recipientId;
+    destination.stripePayoutMethodId = outboundTarget.payoutMethodId;
+    destination.stripeFinancialAccountId = financialAccountId;
+    await destination.save();
+
+    const wiseBefore = await this.safeWiseBalance(currency);
+    let record: StripeWisePayoutDocument;
+    try {
+      record = await this.payoutModel.create({
+        idempotencyKey: dto.idempotencyKey,
+        createdBy: new Types.ObjectId(adminId),
+        amount,
+        currency,
+        stripeAccountKey,
+        sourceType: 'financial_account',
+        stripeFinancialAccountId: financialAccountId,
+        stripeDestinationId: outboundTarget.payoutMethodId,
+        status: 'creating',
+        wiseStatus: 'not_started',
+        estimatedAmount: amount,
+        destinationName: destination.accountName,
+        destinationSummary: outboundTarget.summary,
+        wisePreviousBalance: wiseBefore?.amount ?? undefined,
+        snapshot: {
+          financialAccountAvailableBefore: available,
+          wiseBalanceBefore: wiseBefore,
+          sourceType: 'financial_account',
+          financialAccountId,
+          recipientId: outboundTarget.recipientId,
+          payoutMethodId: outboundTarget.payoutMethodId,
+        },
+      });
+    } catch (err) {
+      if (this.isDuplicateKey(err)) {
+        const dup = await this.payoutModel
+          .findOne({ idempotencyKey: dto.idempotencyKey })
+          .exec();
+        if (dup) return this.toPublicPayout(dup);
+      }
+      throw err;
+    }
+
+    this.logger.log(
+      `Stripe FA→Wise payout attempt ${record._id} amount=${amount} ${currency} fa=${financialAccountId} admin=${adminId}`,
+    );
+
+    try {
+      const outbound = await this.moneyManagement.createOutboundPayment({
+        key: stripeAccountKey,
+        financialAccountId,
+        recipientId: outboundTarget.recipientId,
+        payoutMethodId: outboundTarget.payoutMethodId,
+        amount,
+        currency,
+        idempotencyKey: dto.idempotencyKey,
+        description: `SkyGloss FA→Wise ${record._id}`,
+      });
+      this.applyOutboundPayment(record, outbound);
+      if (shouldStartWiseReceiptWatch(record.status)) {
+        record.wiseStatus = 'awaiting_receipt';
+      }
+      await record.save();
+      this.logger.log(
+        `Stripe FA→Wise outbound created ${record.stripeOutboundPaymentId} status=${record.status}`,
+      );
+      if (record.status === 'paid') {
+        await this.tryMatchWiseReceipt(record);
+      }
+      return this.toPublicPayout(record);
+    } catch (err) {
+      record.status = 'failed';
+      record.failureMessage = userFacingStripeError(err);
+      record.stripeFailedAt = new Date();
+      await record.save();
+      this.logger.warn(
+        `Stripe FA→Wise payout ${record._id} failed: ${record.failureMessage}`,
       );
       throw new BadRequestException(record.failureMessage);
     }
@@ -519,7 +786,15 @@ export class StripeWisePayoutsService implements OnModuleInit {
   }
 
   private async refreshPayout(record: StripeWisePayoutDocument) {
-    if (record.stripePayoutId) {
+    if (record.stripeOutboundPaymentId) {
+      const outbound = await this.moneyManagement.retrieveOutboundPayment(
+        record.stripeAccountKey,
+        record.stripeOutboundPaymentId,
+      );
+      if (outbound) {
+        this.applyOutboundPayment(record, outbound);
+      }
+    } else if (record.stripePayoutId) {
       const payout = await this.stripeAccounts.retrievePayout(
         record.stripeAccountKey,
         record.stripePayoutId,
@@ -539,6 +814,33 @@ export class StripeWisePayoutsService implements OnModuleInit {
     await record.save();
     if (shouldApplyWiseReceipt(record.status, record.wiseStatus)) {
       await this.tryMatchWiseReceipt(record);
+    }
+  }
+
+  private applyOutboundPayment(
+    record: StripeWisePayoutDocument,
+    outbound: {
+      id: string;
+      status: string;
+      expectedArrivalDate?: string | null;
+      failureMessage?: string | null;
+    },
+  ) {
+    record.stripeOutboundPaymentId = outbound.id;
+    record.sourceType = 'financial_account';
+    record.status = this.moneyManagement.mapOutboundStatus(outbound.status);
+    if (outbound.expectedArrivalDate) {
+      record.arrivalDate = new Date(outbound.expectedArrivalDate);
+    }
+    if (record.status === 'paid') {
+      record.stripePaidAt = record.stripePaidAt || new Date();
+      record.failureCode = undefined;
+      record.failureMessage = undefined;
+    }
+    if (record.status === 'failed' || record.status === 'canceled') {
+      record.stripeFailedAt = record.stripeFailedAt || new Date();
+      record.failureMessage =
+        outbound.failureMessage || record.failureMessage || 'Outbound payment failed';
     }
   }
 
@@ -746,6 +1048,9 @@ export class StripeWisePayoutsService implements OnModuleInit {
       hasRoutingNumber: Boolean(dest.routingNumber),
       stripeAccountKey: dest.stripeAccountKey,
       payoutToDefaultStripeBank: Boolean(dest.payoutToDefaultStripeBank),
+      stripeFinancialAccountId: dest.stripeFinancialAccountId || null,
+      stripeRecipientId: dest.stripeRecipientId || null,
+      stripePayoutMethodId: dest.stripePayoutMethodId || null,
       stripeDestinationReady: resolution.ok,
       stripeDestinationError: resolution.ok ? null : resolution.error || null,
       stripeDestinationSummary: resolution.ok ? resolution.summary || null : null,
@@ -769,7 +1074,10 @@ export class StripeWisePayoutsService implements OnModuleInit {
             ? 'actual'
             : 'estimated',
       currency: item.currency,
+      sourceType: item.sourceType || 'payments_balance',
       stripePayoutId: item.stripePayoutId || null,
+      stripeOutboundPaymentId: item.stripeOutboundPaymentId || null,
+      stripeFinancialAccountId: item.stripeFinancialAccountId || null,
       stripeAccountKey: item.stripeAccountKey,
       status: item.status,
       statusLabel: stripeStatusLabel(item.status),

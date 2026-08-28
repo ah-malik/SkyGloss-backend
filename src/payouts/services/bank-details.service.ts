@@ -15,7 +15,7 @@ import { CreateBankDetailsDto } from '../dto/create-bank-details.dto';
 import { ApprovalAction, AuditService } from './audit.service';
 import { WiseService } from './wise.service';
 import { UsersService } from '../../users/users.service';
-import { defaultCurrencyForCountry } from '../wise-country-iso';
+import { sanitizePayoutCurrency } from '../wise-country-iso';
 import { ibanValidationError, normalizeIban } from '../iban-validate';
 
 @Injectable()
@@ -85,11 +85,34 @@ export class BankDetailsService {
   }
 
   async getPrimaryForUser(userId: string) {
-    return this.bankDetailsModel.findOne({
-      userId: new Types.ObjectId(userId),
+    const uid = new Types.ObjectId(userId);
+    const primary = await this.bankDetailsModel.findOne({
+      userId: uid,
       isPrimary: true,
       isDeleted: false,
     });
+    if (primary) return primary;
+
+    const fallback = await this.bankDetailsModel
+      .findOne({
+        userId: uid,
+        isDeleted: false,
+        verificationStatus: { $ne: BankVerificationStatus.REJECTED },
+      })
+      .sort({ createdAt: -1 });
+    if (!fallback) return null;
+
+    fallback.isPrimary = true;
+    await fallback.save();
+    await this.bankDetailsModel.updateMany(
+      {
+        userId: uid,
+        isDeleted: false,
+        _id: { $ne: fallback._id },
+      },
+      { isPrimary: false },
+    );
+    return fallback;
   }
 
   async getByIdForPayout(id: string) {
@@ -133,8 +156,7 @@ export class BankDetailsService {
     if (ibanError) throw new BadRequestException(ibanError);
     if (ibanValue) dto.iban = normalizeIban(ibanValue);
 
-    const currency =
-      (dto.currency || defaultCurrencyForCountry(dto.country) || 'USD').toUpperCase();
+    const currency = sanitizePayoutCurrency(dto.currency, dto.country);
     const user = await this.usersService.findOne(userId);
     const hash = this.fingerprint({ ...dto, currency });
     const existing = await this.bankDetailsModel.findOne({
@@ -185,11 +207,6 @@ export class BankDetailsService {
       throw new BadRequestException(this.wiseService.toUserFacingError(raw));
     }
 
-    await this.bankDetailsModel.updateMany(
-      { userId: new Types.ObjectId(userId), isDeleted: false },
-      { isPrimary: false },
-    );
-
     const payload = {
       ...dto,
       currency,
@@ -209,6 +226,9 @@ export class BankDetailsService {
     let saved: BankDetailsDocument;
     if (existing) {
       Object.assign(existing, payload);
+      existing.isPrimary = true;
+      existing.isDeleted = false;
+      existing.markModified('isPrimary');
       if (!accountVerified) {
         existing.set('verifiedAt', undefined);
         existing.set('verifiedBy', undefined);
@@ -220,6 +240,15 @@ export class BankDetailsService {
         ...payload,
       });
     }
+
+    await this.bankDetailsModel.updateMany(
+      {
+        userId: new Types.ObjectId(userId),
+        isDeleted: false,
+        _id: { $ne: saved._id },
+      },
+      { isPrimary: false },
+    );
 
     await this.auditService.logApproval({
       action: ApprovalAction.BANK_DETAILS_ADDED,

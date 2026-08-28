@@ -210,6 +210,11 @@ export class WithdrawalsService {
     } catch (err) {
       const message =
         err instanceof Error ? err.message : 'Insufficient available commission balance';
+      if (/E11000|duplicate key/i.test(message)) {
+        throw new BadRequestException(
+          'Could not lock that withdrawal amount. Please try again.',
+        );
+      }
       throw new BadRequestException(message);
     }
 
@@ -1187,16 +1192,24 @@ export class WithdrawalsService {
   }
 
   async resumeWaitingWithdrawalsForUser(userId: string): Promise<number> {
-    const bank = await this.bankDetailsService.getVerifiedPrimaryOrThrow(userId);
+    const id = String(userId?.toString?.() ?? userId ?? '');
+    if (!id || !Types.ObjectId.isValid(id)) return 0;
+
+    let bank: Awaited<ReturnType<BankDetailsService['getVerifiedPrimaryOrThrow']>>;
+    try {
+      bank = await this.bankDetailsService.getVerifiedPrimaryOrThrow(id);
+    } catch {
+      return 0;
+    }
     if (!bank) return 0;
 
     const waiting = await this.withdrawalModel.find({
-      userId: new Types.ObjectId(userId),
+      userId: new Types.ObjectId(id),
       status: WithdrawalStatus.WAITING_BANK_DETAILS,
     });
     if (!waiting.length) return 0;
 
-    const user = await this.usersService.findOne(userId);
+    const user = await this.usersService.findOne(id);
     let resumed = 0;
     for (const request of waiting) {
       const updated = await this.withdrawalModel.findOneAndUpdate(
@@ -1214,7 +1227,17 @@ export class WithdrawalsService {
       );
       if (!updated) continue;
       resumed += 1;
-      if (user) await this.notifyStakeholdersOnSubmit(user as any, updated);
+      if (user) {
+        try {
+          await this.notifyStakeholdersOnSubmit(user as any, updated);
+        } catch (err) {
+          console.error(
+            '[WithdrawalsService] Hub notify failed after bank details resume',
+            request._id,
+            err,
+          );
+        }
+      }
     }
     return resumed;
   }
@@ -1228,13 +1251,22 @@ export class WithdrawalsService {
       ...new Set(stuck.map((w) => w.userId?.toString()).filter(Boolean)),
     ];
     for (const id of userIds) {
-      await this.resumeWaitingWithdrawalsForUser(id);
+      try {
+        await this.resumeWaitingWithdrawalsForUser(id);
+      } catch (err) {
+        console.error(
+          '[WithdrawalsService] Failed to resume waiting-bank withdrawal',
+          id,
+          err,
+        );
+      }
     }
   }
 
   async attachBankAndResume(withdrawalId: string, userId: string) {
     const request = await this.withdrawalModel.findById(withdrawalId);
-    if (!request || request.userId.toString() !== userId) {
+    const actorId = String(userId?.toString?.() ?? userId);
+    if (!request || request.userId.toString() !== actorId) {
       throw new NotFoundException();
     }
     if (request.status !== WithdrawalStatus.WAITING_BANK_DETAILS) {

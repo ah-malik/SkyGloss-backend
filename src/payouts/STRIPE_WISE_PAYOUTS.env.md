@@ -1,6 +1,18 @@
 # Stripe → Wise payouts (environment)
 
-This feature pays a specified amount from the **Stripe available balance** to the **configured Wise receiving bank account**. It does **not** change checkout, order payments, refunds, coupons, or partner Wise withdrawals.
+This feature pays a specified amount from the **Stripe available balance** or a **Stripe Financial Account** to the **configured Wise receiving bank account**. It does **not** change checkout, order payments, refunds, coupons, or partner Wise withdrawals.
+
+## Financial Accounts (Global Stripe)
+
+Admin **Stripe → Wise** lists Financial Accounts via Stripe Money Management API (`/v2/money_management/financial_accounts`) using preview API version `2026-04-22.preview`.
+
+Sending from a Financial Account creates an **Outbound Payment** to the Wise recipient payout method already set up in Stripe (matched by account last4 / routing).
+
+Required Stripe permissions on the secret key:
+- Money Management Financial Accounts: Read
+- Money Management Payout Methods: Read
+- Money Management Outbound Payments: Write
+- Accounts v2: Read
 
 ## Existing secrets (already used by the app)
 

@@ -8,7 +8,14 @@ import { ConfigService } from '@nestjs/config';
 import axios, { AxiosError, AxiosInstance } from 'axios';
 import { randomUUID } from 'crypto';
 import * as https from 'https';
-import { currencyFromIban, defaultCurrencyForCountry, toIsoCountryCode } from '../wise-country-iso';
+import {
+  currencyFromIban,
+  defaultCurrencyForCountry,
+  guessWiseRecipientType,
+  pickWiseAccountRequirement,
+  sanitizePayoutCurrency,
+  toIsoCountryCode,
+} from '../wise-country-iso';
 import { ibanValidationError, normalizeIban } from '../iban-validate';
 import {
   parseWiseReceivingAccounts,
@@ -206,11 +213,10 @@ export class WiseService {
     if (!iso) {
       throw new BadRequestException('Please select a valid country.');
     }
-    const target = (
-      currency ||
-      defaultCurrencyForCountry(iso) ||
-      ''
-    ).toUpperCase();
+    const target = sanitizePayoutCurrency(
+      currency || defaultCurrencyForCountry(iso),
+      iso,
+    );
     if (!target) {
       throw new BadRequestException(
         'Wise payout is not currently supported for this country or currency.',
@@ -237,11 +243,7 @@ export class WiseService {
       fields: this.flattenRequirementFields(opt),
     }));
     const selected =
-      options.find((o) => o.type === 'iban') ||
-      options.find((o) => o.type === 'aba') ||
-      options.find((o) => o.type === 'sort_code') ||
-      options.find((o) => o.type === 'swift_code') ||
-      options[0];
+      pickWiseAccountRequirement(options, target) || options[0];
     if (!selected) {
       throw new BadRequestException(
         'Wise payout is not currently supported for this country or currency.',
@@ -997,11 +999,19 @@ export class WiseService {
     const routing = this.clean(bank.routingNumber);
     const sortCode = this.clean(bank.sortCode) || routing;
     const swift = this.clean(bank.swiftBic);
-    const extra = bank.extraDetails || {};
+    const extra = this.safeExtraDetails(bank.extraDetails);
     const country =
       toIsoCountryCode(bank.country) ||
       toIsoCountryCode(user.country) ||
       (iban ? iban.slice(0, 2) : null);
+    const recipientType = guessWiseRecipientType({
+      currency,
+      iban,
+      accountNumber,
+      routingNumber: routing,
+      sortCode,
+      swiftBic: swift,
+    });
 
     if (iban) {
       const ibanError = ibanValidationError(iban, bank.country || user.country);
@@ -1029,12 +1039,39 @@ export class WiseService {
       ownedByCustomer: false,
     };
 
-    if (iban) {
+    if (recipientType === 'emirates' && iban) {
+      return {
+        ...base,
+        type: 'emirates',
+        details: {
+          ...extra,
+          legalType: 'PRIVATE',
+          IBAN: iban,
+          address: { ...address, country: country || 'AE' },
+        },
+      };
+    }
+
+    if (iban && recipientType === 'iban') {
       return {
         ...base,
         type: 'iban',
         details: {
           legalType: 'PRIVATE',
+          iban,
+          address,
+          ...extra,
+        },
+      };
+    }
+
+    if (iban && recipientType !== 'aba' && recipientType !== 'sort_code') {
+      return {
+        ...base,
+        type: recipientType,
+        details: {
+          legalType: 'PRIVATE',
+          IBAN: iban,
           iban,
           address,
           ...extra,
@@ -1157,13 +1194,36 @@ export class WiseService {
   }
 
   private resolveTargetCurrency(bank: WiseBankDetails): string {
-    const explicit = (bank.currency || '').trim().toUpperCase();
-    if (explicit && explicit !== 'USD') return explicit;
-    const fromIban = currencyFromIban(bank.iban);
-    if (fromIban) return fromIban;
-    const fromCountry = defaultCurrencyForCountry(bank.country);
-    if (fromCountry) return fromCountry;
-    return explicit || this.sourceCurrency;
+    return sanitizePayoutCurrency(
+      bank.currency || currencyFromIban(bank.iban),
+      bank.country,
+    );
+  }
+
+  private safeExtraDetails(
+    extra?: Record<string, string>,
+  ): Record<string, string> {
+    const blocked = new Set([
+      'currency',
+      'type',
+      'profile',
+      'ownedByCustomer',
+      'accountHolderName',
+      'legalType',
+      'address',
+      'iban',
+      'IBAN',
+    ]);
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(extra || {})) {
+      if (!key || blocked.has(key) || value == null) continue;
+      const leaf = key.split('.').pop() || key;
+      if (blocked.has(leaf) || leaf.toLowerCase() === 'iban') continue;
+      const text = String(value).trim();
+      if (!text) continue;
+      out[key] = text;
+    }
+    return out;
   }
 
   private flattenRequirementFields(opt: any): Array<{
