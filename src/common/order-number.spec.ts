@@ -9,6 +9,7 @@ import {
   getNextShopOrderSequence,
   getNextShopOrderSequenceForFlow,
   getShopOrderPrefix,
+  isOrderRequest,
   ORDER_SEQUENCE_START,
   ORDER_SEQUENCE_STEP,
   rebuildShopOrderNumberCountry,
@@ -163,5 +164,12 @@ describe('order-number', () => {
     expect(
       rebuildShopOrderNumberCountry('SGUSAP0110', 'England', 'purchase'),
     ).toBe('SGENGP0110');
+  });
+
+  it('detects order requests by flow and current request IDs', () => {
+    expect(isOrderRequest({ orderFlow: 'request' })).toBe(true);
+    expect(isOrderRequest({ orderFlow: 'purchase' })).toBe(false);
+    expect(isOrderRequest({ orderNumber: 'SGNEDR0110' })).toBe(true);
+    expect(isOrderRequest({ orderNumber: 'SGUSAP0110' })).toBe(false);
   });
 });

@@ -81,6 +81,7 @@ import {
   getNextRegistrationOrderSequence,
   getNextShopOrderSequenceForFlow,
   getShopOrderNumberRegex,
+  isOrderRequest,
   type ShopOrderFlow,
 } from '../common/order-number';
 import { normalizeCurrencyCode } from '../common/currency-codes';
@@ -3367,6 +3368,175 @@ export class OrdersService implements OnModuleInit {
           actor,
         )
       : updatedOrder;
+  }
+
+  private isUnpaidOrderRequestStatus(status?: string): boolean {
+    const value = (status || '').toUpperCase();
+    return (
+      value === OrderStatus.PENDING || value === OrderStatus.PENDING_PAYMENT
+    );
+  }
+
+  /**
+   * Hub (partner) may manage only orders they already own via Parent Link.
+   * Admin is always allowed. Distributor and other network roles are not.
+   */
+  private async assertHubOrAdminCanManageOrderRequest(
+    order: OrderDocument,
+    actor: UserDocument,
+  ): Promise<void> {
+    if (!actor) {
+      throw new ForbiddenException('Not authorized');
+    }
+    if (actor.role === UserRole.ADMIN) {
+      return;
+    }
+    if (actor.role !== UserRole.PARTNER) {
+      throw new ForbiddenException(
+        'Only Hub and Admin can add shipping and send invoices for order requests',
+      );
+    }
+
+    const orderUserId =
+      typeof order.user === 'object' &&
+      order.user !== null &&
+      '_id' in (order.user as object)
+        ? String((order.user as any)._id)
+        : String(order.user);
+    const inNetwork = await this.usersService.isUserInViewerNetwork(
+      actor,
+      orderUserId,
+    );
+    if (!inNetwork) {
+      throw new ForbiddenException(
+        'You can only update orders from users in your network',
+      );
+    }
+
+    const shop = (order.user || {}) as {
+      hubPartnerCode?: string;
+      country?: string;
+      role?: string;
+      parentLinkAssignedAt?: Date;
+      previousParentPartnerCode?: string;
+    };
+    const actingCode = await this.usersService.resolveActingParentForOrder({
+      actingParentPartnerCode: (order as any).actingParentPartnerCode,
+      createdAt: (order as any).createdAt,
+      user: shop,
+    });
+    const parentRoles = await this.usersService.getShopParentLinkRolesByCode([
+      actingCode,
+    ]);
+    const canManage = this.usersService.canViewerManageShopOrder(
+      actor,
+      {
+        actingParentPartnerCode: actingCode,
+        hubPartnerCode: shop.hubPartnerCode,
+      },
+      actingCode ? parentRoles.get(actingCode) : undefined,
+      shop.role,
+    );
+    if (!canManage) {
+      throw new ForbiddenException(
+        'You can only add shipping and send invoices for orders created under your Hub.',
+      );
+    }
+  }
+
+  private async returnManagedOrder(
+    order: OrderDocument,
+    actor: UserDocument,
+  ) {
+    const plain = (order as any).toObject ? (order as any).toObject() : order;
+    return this.withOrderManagementFlag(plain, actor);
+  }
+
+  async setOrderRequestShipping(
+    orderId: string,
+    shippingFeeInput: number,
+    actor: UserDocument,
+  ) {
+    const order = await this.orderModel.findById(orderId).populate('user');
+    if (!order) throw new NotFoundException('Order not found');
+
+    await this.assertHubOrAdminCanManageOrderRequest(order, actor);
+
+    if (!isOrderRequest(order)) {
+      throw new BadRequestException(
+        'Shipping can only be added on order requests',
+      );
+    }
+    if (!this.isUnpaidOrderRequestStatus(order.status)) {
+      throw new BadRequestException(
+        'Shipping can only be updated on unpaid order requests',
+      );
+    }
+
+    const shippingFee = roundMoney(Number(shippingFeeInput));
+    if (!Number.isFinite(shippingFee) || shippingFee < 0) {
+      throw new BadRequestException('Enter a valid shipping amount');
+    }
+
+    const itemsSubtotal = getItemsSubtotal(order.items);
+    const discount = order.discount ?? 0;
+    const newTotal = Math.max(0, itemsSubtotal + shippingFee - discount);
+    Object.assign(order, this.buildAmountUpdateWithLockedRate(order, newTotal));
+    order.shippingFee = shippingFee;
+    order.shippingSetAt = new Date();
+
+    const updatedOrder = await order.save();
+    return this.returnManagedOrder(updatedOrder, actor);
+  }
+
+  async sendOrderRequestInvoice(orderId: string, actor: UserDocument) {
+    const order = await this.orderModel.findById(orderId).populate('user');
+    if (!order) throw new NotFoundException('Order not found');
+
+    await this.assertHubOrAdminCanManageOrderRequest(order, actor);
+
+    if (!isOrderRequest(order)) {
+      throw new BadRequestException(
+        'Invoices can only be sent for order requests',
+      );
+    }
+    if (!this.isUnpaidOrderRequestStatus(order.status)) {
+      throw new BadRequestException(
+        'Invoices can only be sent for unpaid order requests',
+      );
+    }
+    if (!order.shippingSetAt) {
+      throw new BadRequestException(
+        'Add shipping charges before sending the invoice',
+      );
+    }
+
+    const userDoc =
+      typeof order.user === 'object' && order.user !== null
+        ? (order.user as any)
+        : await this.usersService.findOne(String(order.user));
+
+    const to = this.mailService.resolveCustomerEmail(order, userDoc);
+    if (!to) {
+      throw new BadRequestException(
+        'This order has no customer email to send the invoice to',
+      );
+    }
+
+    const invoiceBuffer = await this.generateInvoicePdf(order);
+    const viewUrl = this.getOrderPayUrl(String(order._id), userDoc?.role);
+
+    await this.mailService.sendOrderInvoiceEmail(
+      to,
+      order,
+      userDoc,
+      invoiceBuffer,
+      { payUrl: viewUrl },
+    );
+
+    order.invoiceSentAt = new Date();
+    const updatedOrder = await order.save();
+    return this.returnManagedOrder(updatedOrder, actor);
   }
 
   async createOrderRequest(userId: string, createOrderDto: CreateOrderDto) {

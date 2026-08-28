@@ -9,6 +9,7 @@ import {
   formatMoney,
   getCurrencySymbol,
   helpBlock,
+  pillCta,
   shippingAddressBlock,
   wrapLatestOrderEmail,
 } from './latest-shared';
@@ -260,4 +261,79 @@ export function buildLatestNewOrderPaidSalesHtml(
           ${buildRepresentativeFooterBlock(footerContact)}`;
 
   return wrapLatestOrderEmail('New Order – SkyGloss', body);
+}
+
+/** Customer-facing: Hub/Admin sent a formal invoice after adding shipping. */
+export function buildLatestOrderRequestInvoiceHtml(
+  order: any,
+  user: any,
+  options?: {
+    viewUrl?: string;
+    footerContact?: FooterContact | null;
+  },
+): string {
+  const currency = (order.currency || 'USD').toUpperCase();
+  const symbol = getCurrencySymbol(currency);
+  const items = order.items || [];
+  const subtotal = items.reduce(
+    (sum: number, item: any) =>
+      sum + Number(item.price || 0) * Number(item.quantity || 0),
+    0,
+  );
+  const shipping = orderShippingFee(order, subtotal);
+  const total = Number(
+    order.totalAmount != null ? order.totalAmount : subtotal + shipping,
+  );
+  const name = customerName(user, order);
+  const email = user?.email || order.shippingAddress?.email || '';
+  const company = user?.companyName || user?.shopName || '';
+  const addr = order.shippingAddress || {};
+  const viewUrl = options?.viewUrl;
+
+  const body = `
+          <tr>
+            <td bgcolor="#ffffff" style="padding:36px 40px 8px 40px; background-color:#ffffff; color:#000000; font-family: Arial, Helvetica, sans-serif; font-size:15px; line-height:1.7; text-align:left;">
+              <p style="margin:0 0 18px 0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;">Hello ${name},</p>
+              <p style="margin:0 0 18px 0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;"><strong style="font-weight:bold; color:#000000;">Your invoice is ready.</strong></p>
+              <p style="margin:0 0 18px 0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;">Please find the invoice for order <strong style="font-weight:bold;">${order.orderNumber}</strong> attached. The total includes shipping.</p>
+              <p style="margin:0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;">Complete payment using the attached invoice to proceed with your order.</p>
+            </td>
+          </tr>
+          ${detailsCard(
+            'Invoice Details',
+            detailRow('Order Number', order.orderNumber) +
+              (email ? detailRow('Email', email) : '') +
+              (company ? detailRow('Company', company) : '') +
+              detailRow(
+                'Shipping',
+                formatMoney(symbol, shipping),
+                !viewUrl,
+              ) +
+              (viewUrl
+                ? `<tr><td style="padding:16px 0 0 0;">${pillCta(viewUrl, 'VIEW ORDER')}</td></tr>`
+                : ''),
+          )}
+          ${itemsSection('Invoice Summary', items, symbol, currency, shipping, total, 'Amount Due')}
+          ${shippingAddressBlock({
+            name:
+              addr.name ||
+              [addr.firstName, addr.lastName].filter(Boolean).join(' ') ||
+              name,
+            line1: addr.line1 || addr.address,
+            line2: addr.line2,
+            city: addr.city,
+            state: addr.state,
+            zip: addr.zip || addr.zipCode,
+            country: addr.country,
+          })}
+          ${helpBlock(
+            `If you have any questions about this invoice, please contact our sales team at <a href="mailto:sales@skygloss.com" style="color:${BRAND_BLUE}; text-decoration:none;">sales@skygloss.com</a> and include your order number.`,
+          )}
+          ${blueClosingBlock([
+            'Thank you for choosing SkyGloss.',
+            'Best regards,<br>The SkyGloss Team',
+          ])}
+          ${buildRepresentativeFooterBlock(options?.footerContact)}`;
+
+  return wrapLatestOrderEmail('Order Invoice – SkyGloss', body);
 }

@@ -92,6 +92,14 @@ export class Order {
   @Prop({ default: 0 })
   shippingFee?: number;
 
+  /** Set when Hub/Admin explicitly saves shipping on an order request. */
+  @Prop()
+  shippingSetAt?: Date;
+
+  /** Set when Hub/Admin sends the order-request invoice email. */
+  @Prop()
+  invoiceSentAt?: Date;
+
   @Prop({ type: ShippingAddress, required: true })
   shippingAddress: ShippingAddress;
 

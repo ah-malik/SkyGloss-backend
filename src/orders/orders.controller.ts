@@ -13,6 +13,7 @@ import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { AddOrderItemsDto } from './dto/add-order-items.dto';
 import { CreateAdminTestOrderDto } from './dto/create-admin-test-order.dto';
+import { SetOrderRequestShippingDto } from './dto/set-order-request-shipping.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -147,6 +148,27 @@ export class OrdersController {
     @GetUser('role') role: string,
   ) {
     return this.ordersService.createPaymentSessionForOrder(id, userId, role);
+  }
+
+  @Post(':id/shipping')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.PARTNER)
+  setOrderRequestShipping(
+    @Param('id') id: string,
+    @Body() dto: SetOrderRequestShippingDto,
+    @GetUser() user: UserDocument,
+  ) {
+    return this.ordersService.setOrderRequestShipping(id, dto.shippingFee, user);
+  }
+
+  @Post(':id/send-invoice')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.PARTNER)
+  sendOrderRequestInvoice(
+    @Param('id') id: string,
+    @GetUser() user: UserDocument,
+  ) {
+    return this.ordersService.sendOrderRequestInvoice(id, user);
   }
 
   @Post(':parentId/add-items')

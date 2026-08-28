@@ -129,6 +129,8 @@ export const FRONTEND_APIS: ApiEndpointDef[] = [
   def('frontend', 'Orders', 'GET', '/orders/verify/:orderId', 'Verify order payment'),
   def('frontend', 'Orders', 'GET', '/orders/:id', 'Get order'),
   def('frontend', 'Orders', 'POST', '/orders/:id/pay', 'Pay for order'),
+  def('frontend', 'Orders', 'POST', '/orders/:id/shipping', 'Set order-request shipping'),
+  def('frontend', 'Orders', 'POST', '/orders/:id/send-invoice', 'Send order-request invoice'),
   def('frontend', 'Orders', 'POST', '/orders/:parentId/add-items', 'Add items to existing order'),
   def('frontend', 'Orders', 'POST', '/orders/request', 'Create order request'),
   def('frontend', 'Orders', 'POST', '/orders/admin/:id/status', 'Update order status'),
@@ -356,6 +358,8 @@ export const ADMIN_APIS: ApiEndpointDef[] = [
   ),
   def('admin', 'Orders', 'GET', '/orders/:id', 'Get order'),
   def('admin', 'Orders', 'POST', '/orders/request', 'Create order request'),
+  def('admin', 'Orders', 'POST', '/orders/:id/shipping', 'Set order-request shipping'),
+  def('admin', 'Orders', 'POST', '/orders/:id/send-invoice', 'Send order-request invoice'),
 
   // Certifications
   def('admin', 'Certifications', 'GET', '/certifications/admin/all', 'All certification requests'),

@@ -21,6 +21,7 @@ import {
   buildLatestOrderRequestCustomerHtml,
   buildLatestNewOrderRequestSalesHtml,
   buildLatestNewOrderPaidSalesHtml,
+  buildLatestOrderRequestInvoiceHtml,
 } from './templates/latest-order-request-emails';
 import {
   FooterContact,
@@ -1515,6 +1516,35 @@ export class MailService {
         : Math.max(0, order.totalAmount - subtotal + (order.discount || 0));
     const payUrl = options?.payUrl;
 
+    const attachments = [
+      {
+        filename: `Invoice_${order.orderNumber}.pdf`,
+        content: invoiceBuffer,
+      },
+    ];
+
+    if (await this.useLatestTemplates()) {
+      const footerContact = await this.resolveLatestFooterContact(user);
+      const mailOptions: any = {
+        from: `"SkyGloss Portal" <sales@skygloss.com>`,
+        to,
+        subject: `Order Invoice: ${order.orderNumber}`,
+        html: buildLatestOrderRequestInvoiceHtml(order, user, {
+          viewUrl: payUrl,
+          footerContact,
+        }),
+        attachments,
+      };
+      try {
+        await this.salesTransporter.sendMail(mailOptions);
+        this.logger.log(`Order invoice email sent to ${to} for ${order.orderNumber}`);
+      } catch (error) {
+        this.logger.error(`Failed to send order invoice email to ${to}`, error.stack);
+        throw error;
+      }
+      return;
+    }
+
     const mailOptions: any = {
       from: `"SkyGloss Portal" <sales@skygloss.com>`,
       to,
@@ -1566,7 +1596,7 @@ export class MailService {
                       ${
                         payUrl
                           ? `<p style="margin-top: 30px; text-align: center;">
-                              <a href="${payUrl}" style="display:inline-block; background-color:#0ea0dc; color:#ffffff; padding:14px 28px; text-decoration:none; border-radius:8px; font-weight:bold;">Pay Now</a>
+                              <a href="${payUrl}" style="display:inline-block; background-color:#0ea0dc; color:#ffffff; padding:14px 28px; text-decoration:none; border-radius:8px; font-weight:bold;">View Order</a>
                             </p>`
                           : ''
                       }
@@ -1582,12 +1612,7 @@ export class MailService {
           </table>
         </body>
       `,
-      attachments: [
-        {
-          filename: `Invoice_${order.orderNumber}.pdf`,
-          content: invoiceBuffer,
-        },
-      ],
+      attachments,
     };
 
     try {

@@ -227,6 +227,19 @@ export function isRegistrationOrderNumber(orderNumber?: string): boolean {
   );
 }
 
+/** Manual order-request flow (invoice later), including current SG{CCC}R* IDs. */
+export function isOrderRequest(order?: {
+  orderFlow?: string;
+  orderNumber?: string;
+}): boolean {
+  if (!order) return false;
+  if (order.orderFlow === 'request') return true;
+  if (order.orderFlow === 'purchase') return false;
+  return getShopOrderNumberRegex('request').test(
+    (order.orderNumber || '').trim(),
+  );
+}
+
 export function getNextShopOrderSequence(
   orderNumbers: Array<string | undefined>,
 ): number {
