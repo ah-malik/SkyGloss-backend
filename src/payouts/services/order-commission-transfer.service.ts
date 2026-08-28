@@ -28,6 +28,7 @@ import {
   summarizeCommissionTypes,
   transferStatusLabel,
 } from '../order-commission-transfer.logic';
+import { resolveShopOrderStripeAccountKey } from '../stripe-wise-payouts.logic';
 import { User, UserDocument, UserRole } from '../../users/entities/user.entity';
 import { SYSTEM_BASE_CURRENCY } from '../../common/order-monetary';
 import { isRegistrationOrder } from '../../common/order-totals';
@@ -451,8 +452,10 @@ export class OrderCommissionTransferService implements OnModuleInit {
         ? String((order.user as any)._id)
         : String(order.user);
     const user = await this.userModel.findById(userId).select('country').lean();
-    const country = String(user?.country || '').trim().toLowerCase();
-    return USA_COUNTRIES.has(country) ? 'usa' : 'global';
+    return resolveShopOrderStripeAccountKey(
+      order.shippingAddress?.country,
+      user?.country,
+    );
   }
 
   private stripeFor(key: StripeAccountKey): Stripe | undefined {

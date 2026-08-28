@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { StripeWisePayoutsService } from '../services/stripe-wise-payouts.service';
 import { CreateStripeWisePayoutDto } from '../dto/create-stripe-wise-payout.dto';
+import { CreatePaymentsToFaDto } from '../dto/create-payments-to-fa.dto';
 import { UpdateStripeWiseDestinationDto } from '../dto/update-stripe-wise-destination.dto';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -52,6 +53,25 @@ export class StripeWisePayoutsController {
       page ? parseInt(page, 10) : 1,
       limit ? parseInt(limit, 10) : 30,
     );
+  }
+
+  @Get('payments-to-fa/history')
+  listPaymentsToFaHistory(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.payouts.listPaymentsToFaHistory(
+      page ? parseInt(page, 10) : 1,
+      limit ? parseInt(limit, 10) : 30,
+    );
+  }
+
+  @Post('payments-to-fa')
+  fundFinancialAccount(
+    @GetUser('_id') adminId: string,
+    @Body() dto: CreatePaymentsToFaDto,
+  ) {
+    return this.payouts.fundFinancialAccount(String(adminId), dto);
   }
 
   @Get(':id')

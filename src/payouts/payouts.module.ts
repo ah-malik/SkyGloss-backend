@@ -41,6 +41,10 @@ import {
   StripeWisePayoutSchema,
 } from './entities/stripe-wise-payout.entity';
 import {
+  StripePaymentsToFa,
+  StripePaymentsToFaSchema,
+} from './entities/stripe-payments-to-fa.entity';
+import {
   OrderCommissionTransfer,
   OrderCommissionTransferSchema,
 } from './entities/order-commission-transfer.entity';
@@ -83,6 +87,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
       { name: WiseWebhookEvent.name, schema: WiseWebhookEventSchema },
       { name: StripeWiseDestination.name, schema: StripeWiseDestinationSchema },
       { name: StripeWisePayout.name, schema: StripeWisePayoutSchema },
+      { name: StripePaymentsToFa.name, schema: StripePaymentsToFaSchema },
       { name: OrderCommissionTransfer.name, schema: OrderCommissionTransferSchema },
       { name: Order.name, schema: OrderSchema },
       { name: User.name, schema: UserSchema },

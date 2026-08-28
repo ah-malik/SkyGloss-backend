@@ -1,6 +1,40 @@
 export const STRIPE_ACCOUNT_KEYS = ['global', 'usa'] as const;
 export type StripeAccountKey = (typeof STRIPE_ACCOUNT_KEYS)[number];
 
+const USA_COUNTRY_NAMES = new Set([
+  'united states',
+  'usa',
+  'us',
+  'united states of america',
+]);
+
+/** True when a country label refers to the United States. */
+export function isUsaCountryName(country?: string | null): boolean {
+  return USA_COUNTRY_NAMES.has(String(country || '').toLowerCase().trim());
+}
+
+/**
+ * Shop orders: shipping destination decides Stripe account when present.
+ * Falls back to the shop user's profile country when shipping is missing.
+ */
+export function resolveShopOrderStripeAccountKey(
+  shippingCountry?: string | null,
+  userCountry?: string | null,
+): StripeAccountKey {
+  const shipping = String(shippingCountry || '').trim();
+  if (shipping) {
+    return isUsaCountryName(shipping) ? 'usa' : 'global';
+  }
+  return isUsaCountryName(userCountry) ? 'usa' : 'global';
+}
+
+export function isUsaShopOrder(
+  shippingCountry?: string | null,
+  userCountry?: string | null,
+): boolean {
+  return resolveShopOrderStripeAccountKey(shippingCountry, userCountry) === 'usa';
+}
+
 export const STRIPE_WISE_PAYOUT_STATUSES = [
   'creating',
   'pending',

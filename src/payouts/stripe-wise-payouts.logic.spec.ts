@@ -4,11 +4,13 @@ import {
   computeSettlement,
   formatMoney,
   fromStripeAmount,
+  isUsaShopOrder,
   last4,
   mapStripePayoutStatus,
   maskSecret,
   normalizeCurrency,
   parsePositiveAmount,
+  resolveShopOrderStripeAccountKey,
   shouldApplyWiseReceipt,
   stripeStatusLabel,
   toStripeAmount,
@@ -116,6 +118,26 @@ describe('stripe-wise-payouts.logic', () => {
       expect(
         userFacingStripeError({ code: 'balance_insufficient' }),
       ).toMatch(/insufficient/i);
+    });
+  });
+
+  describe('resolveShopOrderStripeAccountKey', () => {
+    it('uses USA Stripe when shipping country is United States', () => {
+      expect(
+        resolveShopOrderStripeAccountKey('United States', 'United Arab Emirates'),
+      ).toBe('usa');
+      expect(isUsaShopOrder('United States', 'United Arab Emirates')).toBe(true);
+    });
+
+    it('uses Global Stripe when shipping is outside the USA', () => {
+      expect(
+        resolveShopOrderStripeAccountKey('United Arab Emirates', 'United States'),
+      ).toBe('global');
+    });
+
+    it('falls back to user country when shipping is missing', () => {
+      expect(resolveShopOrderStripeAccountKey('', 'United States')).toBe('usa');
+      expect(resolveShopOrderStripeAccountKey(undefined, 'USA')).toBe('usa');
     });
   });
 });

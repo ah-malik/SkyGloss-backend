@@ -301,6 +301,36 @@ export class StripeAccountService {
     });
   }
 
+  async createPayoutToFinancialAccount(params: {
+    key: StripeAccountKey;
+    amount: number;
+    currency: string;
+    financialAccountId: string;
+    idempotencyKey: string;
+    metadata?: Record<string, string>;
+  }): Promise<Stripe.Payout> {
+    const stripe = this.getClient(params.key);
+    if (!stripe) {
+      throw new Error(
+        params.key === 'usa'
+          ? 'USA Stripe is not configured.'
+          : 'Stripe is not configured.',
+      );
+    }
+
+    const body = {
+      amount: params.amount,
+      currency: params.currency.toLowerCase(),
+      payout_method: params.financialAccountId,
+      metadata: params.metadata,
+      statement_descriptor: 'FA FUND',
+    } as Stripe.PayoutCreateParams;
+
+    return stripe.payouts.create(body, {
+      idempotencyKey: `stripe-payments-to-fa:${params.idempotencyKey}`,
+    });
+  }
+
   async retrievePayout(
     key: StripeAccountKey,
     payoutId: string,

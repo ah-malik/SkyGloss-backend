@@ -90,6 +90,11 @@ import { CouponsService, ShopRegistrationCouponResult } from '../coupons/coupons
 import { StripeCouponSyncService } from '../coupons/stripe-coupon-sync.service';
 import { CommissionsService } from '../payouts/services/commissions.service';
 import { OrderCommissionTransferService } from '../payouts/services/order-commission-transfer.service';
+import {
+  isUsaShopOrder,
+  resolveShopOrderStripeAccountKey,
+  StripeAccountKey,
+} from '../payouts/stripe-wise-payouts.logic';
 import { RedisCacheService } from '../redis/redis-cache.service';
 import { CacheKeys, CacheTtl } from '../redis/redis.constants';
 
@@ -671,20 +676,31 @@ export class OrdersService implements OnModuleInit {
     // Fetch the logged-in user's country from database
     const currentUser = await this.usersService.findOne(userId);
     const userCountry = (currentUser?.country || '').toLowerCase().trim();
-    const isUsaUser = this.isUsaCountry(userCountry);
 
-    // Route to appropriate Stripe based on user's country
-    const stripeInstance = this.getStripeForUsaUser(isUsaUser);
+    const { items: rawItems, shippingAddress, couponCode } = createOrderDto;
+    const shippingCountry =
+      shippingAddress?.country || currentUser?.country || '';
+    const isUsaOrder = this.isUsaDestinationOrder(
+      shippingAddress?.country,
+      currentUser?.country,
+    );
+
+    // Route to appropriate Stripe based on order destination (shipping country).
+    const stripeInstance = this.getStripeForOrder(
+      shippingAddress?.country,
+      currentUser?.country,
+    );
 
     if (!stripeInstance) {
       throw new BadRequestException('Stripe is not configured on the server.');
     }
-    console.log(`[Stripe] Using ${isUsaUser ? 'USA' : 'Global'} Stripe for user country: "${currentUser?.country}"`);
+    console.log(
+      `[Stripe] Using ${isUsaOrder ? 'USA' : 'Global'} Stripe for shipping="${shippingCountry}", user="${currentUser?.country}"`,
+    );
 
     // DETERMINE CURRENCY
     const orderCurrency = await this.getCurrencyForUser(currentUser);
 
-    const { items: rawItems, shippingAddress, couponCode } = createOrderDto;
     const items = rawItems.map((item) => ({
       ...item,
       orderType: normalizeOrderItemType(item.orderType),
@@ -694,8 +710,6 @@ export class OrdersService implements OnModuleInit {
     // Note: In a real app, we should fetch product prices from DB to secure against client-side manipulation.
     // For this implementation, we'll use the prices sent from frontend but ensure strict types.
     const itemsSubtotal = getItemsSubtotal(items);
-    const shippingCountry =
-      shippingAddress?.country || currentUser?.country || '';
     const shippingFee = calculateShippingFee(shippingCountry, itemsSubtotal);
 
     let discount = 0;
@@ -736,7 +750,7 @@ export class OrdersService implements OnModuleInit {
           items,
           shippingFee,
           shippingAddress,
-          status: isUsaUser ? OrderStatus.PENDING_PAYMENT : OrderStatus.PENDING,
+          status: isUsaOrder ? OrderStatus.PENDING_PAYMENT : OrderStatus.PENDING,
           orderNumber,
           orderFlow: 'purchase',
           paymentReminderCount: 0,
@@ -777,7 +791,7 @@ export class OrdersService implements OnModuleInit {
         orderCurrency,
       );
 
-      if (isUsaUser) {
+      if (isUsaOrder) {
         const payUrl = this.getOrderPayUrl(order._id.toString(), currentUser?.role || role);
         await this.mailService
           .sendPendingPaymentReminder(order, currentUser, payUrl, false)
@@ -1022,14 +1036,16 @@ export class OrdersService implements OnModuleInit {
     }
 
     const currentUser = await this.usersService.findOne(userId);
-    const userCountry = (currentUser?.country || '').toLowerCase().trim();
-    if (!this.isUsaCountry(userCountry)) {
+    if (!this.isUsaDestinationOrder(order.shippingAddress?.country, currentUser?.country)) {
       throw new BadRequestException(
         'Online payment is only available for USA orders.',
       );
     }
 
-    const stripeInstance = this.getStripeForUsaUser(true);
+    const stripeInstance = this.getStripeForOrder(
+      order.shippingAddress?.country,
+      currentUser?.country,
+    );
     const orderCurrency = (order.currency || 'USD').toLowerCase();
 
     const session = await this.createStripeCheckoutForOrder(
@@ -1140,9 +1156,14 @@ export class OrdersService implements OnModuleInit {
 
     // Determine which Stripe to use based on the order's user country
     const orderUser = await this.usersService.findOne(String((order as any).user));
-    const userCountry = (orderUser?.country || '').toLowerCase().trim();
-    const isUsaUser = ['united states', 'usa', 'us', 'united states of america'].includes(userCountry);
-    const stripeInstance = isUsaUser && this.usaStripe ? this.usaStripe : this.stripe;
+    const isUsaOrder = this.isUsaDestinationOrder(
+      order.shippingAddress?.country,
+      orderUser?.country,
+    );
+    const stripeInstance = this.getStripeForOrder(
+      order.shippingAddress?.country,
+      orderUser?.country,
+    );
 
     const session = await stripeInstance.checkout.sessions.retrieve(
       order.stripeSessionId,
@@ -1164,7 +1185,10 @@ export class OrdersService implements OnModuleInit {
           order._id.toString(),
           OrderStatus.PAID,
         );
-        const stripeAccountKey = isUsaUser ? 'usa' : 'global';
+        const stripeAccountKey = this.resolveOrderStripeAccountKey(
+          order.shippingAddress?.country,
+          orderUser?.country,
+        );
         this.queuePaidOrderCommissionTransfer(order._id.toString(), {
           stripeAccountKey,
         });
@@ -3262,20 +3286,19 @@ export class OrdersService implements OnModuleInit {
     if (status === OrderStatus.CANCELLED && oldStatus !== OrderStatus.CANCELLED) {
       if (oldStatus === OrderStatus.PAID && order.stripeSessionId) {
         try {
-          const userCountry = ((order.user as any)?.country || '').toLowerCase().trim();
-          const isUsaUser = ['united states', 'usa', 'us', 'united states of america'].includes(userCountry);
-          const stripeInstance = isUsaUser && this.usaStripe ? this.usaStripe : this.stripe;
+          const stripeInstance = this.getStripeForOrder(
+            order.shippingAddress?.country,
+            (order.user as any)?.country,
+          );
 
-          if (stripeInstance) {
-            const session = await stripeInstance.checkout.sessions.retrieve(order.stripeSessionId);
-            if (session.payment_intent) {
-              await stripeInstance.refunds.create({
-                payment_intent: session.payment_intent as string,
-              });
-              console.log(`[Order Cancelled] Refund issued for order ${order.orderNumber}`);
-            } else {
-              console.warn(`[Order Cancelled] No payment_intent found for session ${order.stripeSessionId}`);
-            }
+          const session = await stripeInstance.checkout.sessions.retrieve(order.stripeSessionId);
+          if (session.payment_intent) {
+            await stripeInstance.refunds.create({
+              payment_intent: session.payment_intent as string,
+            });
+            console.log(`[Order Cancelled] Refund issued for order ${order.orderNumber}`);
+          } else {
+            console.warn(`[Order Cancelled] No payment_intent found for session ${order.stripeSessionId}`);
           }
         } catch (error) {
           console.error(`[Order Cancelled] Refund failed for order ${order.orderNumber}:`, error);
@@ -3710,10 +3733,14 @@ export class OrdersService implements OnModuleInit {
       throw new NotFoundException('User not found');
     }
 
-    const userCountry = (currentUser.country || '').toLowerCase().trim();
-    const isUsaUser = this.isUsaCountry(userCountry);
-    const orderCurrency = await this.getCurrencyForUser(currentUser);
     const shippingAddress = parentOrder.shippingAddress;
+    const shippingCountry =
+      shippingAddress?.country || currentUser.country || '';
+    const isUsaOrder = this.isUsaDestinationOrder(
+      shippingAddress?.country,
+      currentUser.country,
+    );
+    const orderCurrency = await this.getCurrencyForUser(currentUser);
 
     const itemsSubtotal = getItemsSubtotal(items);
     const shippingFee = 0;
@@ -3739,8 +3766,8 @@ export class OrdersService implements OnModuleInit {
         (await this.actingParentStampForUser(userId)).actingParentPartnerCode,
     });
 
-    const orderFlow: 'purchase' | 'request' = isUsaUser ? 'purchase' : 'request';
-    const initialStatus = isUsaUser
+    const orderFlow: 'purchase' | 'request' = isUsaOrder ? 'purchase' : 'request';
+    const initialStatus = isUsaOrder
       ? OrderStatus.PENDING_PAYMENT
       : OrderStatus.PENDING;
 
@@ -3799,8 +3826,11 @@ export class OrdersService implements OnModuleInit {
       await this.deductProductInventoryForOrder(order._id);
     }
 
-    if (isUsaUser) {
-      const stripeInstance = this.getStripeForUsaUser(true);
+    if (isUsaOrder) {
+      const stripeInstance = this.getStripeForOrder(
+        shippingAddress?.country,
+        currentUser.country,
+      );
       if (!stripeInstance) {
         throw new BadRequestException('Stripe is not configured on the server.');
       }
@@ -4098,18 +4128,17 @@ export class OrdersService implements OnModuleInit {
 
     if (order.status === OrderStatus.PAID && order.stripeSessionId) {
       try {
-        const userCountry = ((order.user as any)?.country || '').toLowerCase().trim();
-        const isUsaUser = ['united states', 'usa', 'us', 'united states of america'].includes(userCountry);
-        const stripeInstance = isUsaUser && this.usaStripe ? this.usaStripe : this.stripe;
+        const stripeInstance = this.getStripeForOrder(
+          order.shippingAddress?.country,
+          (order.user as any)?.country,
+        );
 
-        if (stripeInstance) {
-          const session = await stripeInstance.checkout.sessions.retrieve(order.stripeSessionId);
-          if (session.payment_intent) {
-            await stripeInstance.refunds.create({
-              payment_intent: session.payment_intent as string,
-            });
-            console.log(`[Order Deleted] Refund issued for order ${order.orderNumber}`);
-          }
+        const session = await stripeInstance.checkout.sessions.retrieve(order.stripeSessionId);
+        if (session.payment_intent) {
+          await stripeInstance.refunds.create({
+            payment_intent: session.payment_intent as string,
+          });
+          console.log(`[Order Deleted] Refund issued for order ${order.orderNumber}`);
         }
       } catch (error) {
         console.error(`[Order Deleted] Refund failed for order ${order.orderNumber}:`, error);
@@ -4131,6 +4160,29 @@ export class OrdersService implements OnModuleInit {
 
   private isUsaCountry(country: string): boolean {
     return USA_COUNTRIES.includes((country || '').toLowerCase().trim());
+  }
+
+  private isUsaDestinationOrder(
+    shippingCountry?: string | null,
+    userCountry?: string | null,
+  ): boolean {
+    return isUsaShopOrder(shippingCountry, userCountry);
+  }
+
+  private resolveOrderStripeAccountKey(
+    shippingCountry?: string | null,
+    userCountry?: string | null,
+  ): StripeAccountKey {
+    return resolveShopOrderStripeAccountKey(shippingCountry, userCountry);
+  }
+
+  private getStripeForOrder(
+    shippingCountry?: string | null,
+    userCountry?: string | null,
+  ): Stripe {
+    return this.getStripeForUsaUser(
+      this.isUsaDestinationOrder(shippingCountry, userCountry),
+    );
   }
 
   private getStripeForUsaUser(isUsaUser: boolean): Stripe {

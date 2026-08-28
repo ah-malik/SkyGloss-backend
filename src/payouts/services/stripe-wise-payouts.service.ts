@@ -16,6 +16,11 @@ import {
   StripeWisePayout,
   StripeWisePayoutDocument,
 } from '../entities/stripe-wise-payout.entity';
+import {
+  StripePaymentsToFa,
+  StripePaymentsToFaDocument,
+} from '../entities/stripe-payments-to-fa.entity';
+import { CreatePaymentsToFaDto } from '../dto/create-payments-to-fa.dto';
 import { CreateStripeWisePayoutDto } from '../dto/create-stripe-wise-payout.dto';
 import { UpdateStripeWiseDestinationDto } from '../dto/update-stripe-wise-destination.dto';
 import { StripeAccountService } from './stripe-account.service';
@@ -70,6 +75,8 @@ export class StripeWisePayoutsService implements OnModuleInit {
     private readonly destinationModel: Model<StripeWiseDestinationDocument>,
     @InjectModel(StripeWisePayout.name)
     private readonly payoutModel: Model<StripeWisePayoutDocument>,
+    @InjectModel(StripePaymentsToFa.name)
+    private readonly paymentsToFaModel: Model<StripePaymentsToFaDocument>,
     private readonly stripeAccounts: StripeAccountService,
     private readonly moneyManagement: StripeMoneyManagementService,
     private readonly wiseService: WiseService,
@@ -103,6 +110,22 @@ export class StripeWisePayoutsService implements OnModuleInit {
         } catch (err) {
           this.logger.warn(
             `Stripe→Wise payout sync failed for ${item._id}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      }
+
+      const openFaFunding = await this.paymentsToFaModel
+        .find({ status: { $in: ['creating', 'pending', 'in_transit'] } })
+        .limit(50)
+        .exec();
+      for (const item of openFaFunding) {
+        try {
+          await this.refreshPaymentsToFa(item);
+        } catch (err) {
+          this.logger.warn(
+            `Payments→FA sync failed for ${item._id}: ${
               err instanceof Error ? err.message : String(err)
             }`,
           );
@@ -624,6 +647,242 @@ export class StripeWisePayoutsService implements OnModuleInit {
       );
       throw new BadRequestException(record.failureMessage);
     }
+  }
+
+  async listPaymentsToFaHistory(page = 1, limit = 30) {
+    const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
+    const safeLimit =
+      Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 100) : 30;
+    const skip = (safePage - 1) * safeLimit;
+    const [items, total] = await Promise.all([
+      this.paymentsToFaModel
+        .find()
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(safeLimit)
+        .lean()
+        .exec(),
+      this.paymentsToFaModel.countDocuments().exec(),
+    ]);
+    return {
+      items: items.map((item) => this.toPublicPaymentsToFa(item as any)),
+      total,
+      page: safePage,
+      limit: safeLimit,
+    };
+  }
+
+  async fundFinancialAccount(adminId: string, dto: CreatePaymentsToFaDto) {
+    if (dto.confirmed !== true) {
+      throw new BadRequestException(
+        'Confirm the transfer in the admin panel before sending funds.',
+      );
+    }
+
+    let amount: number;
+    try {
+      amount = parsePositiveAmount(dto.amount);
+    } catch (err) {
+      throw new BadRequestException(
+        err instanceof Error ? err.message : 'Invalid amount.',
+      );
+    }
+
+    const currency = normalizeCurrency(dto.currency);
+    if (!isValidCurrency(currency)) {
+      throw new BadRequestException('Currency must be a 3-letter ISO code.');
+    }
+
+    const stripeAccountKey: StripeAccountKey = isStripeAccountKey(
+      dto.stripeAccountKey,
+    )
+      ? dto.stripeAccountKey
+      : 'global';
+
+    const financialAccountId = String(dto.financialAccountId || '').trim();
+    if (!financialAccountId) {
+      throw new BadRequestException('Financial Account is required.');
+    }
+
+    const existing = await this.paymentsToFaModel
+      .findOne({ idempotencyKey: dto.idempotencyKey })
+      .exec();
+    if (existing) {
+      return this.toPublicPaymentsToFa(existing);
+    }
+
+    const recent = await this.paymentsToFaModel
+      .findOne({
+        createdBy: new Types.ObjectId(adminId),
+        amount,
+        currency,
+        stripeAccountKey,
+        stripeFinancialAccountId: financialAccountId,
+        status: { $in: ['creating', 'pending', 'in_transit'] },
+        createdAt: { $gte: new Date(Date.now() - DUPLICATE_WINDOW_MS) },
+      })
+      .exec();
+    if (recent) {
+      throw new BadRequestException(
+        'A matching transfer is already in progress. Wait for it to finish before sending another.',
+      );
+    }
+
+    const overview = await this.stripeAccounts.inspect(stripeAccountKey);
+    if (!overview.configured || overview.error) {
+      throw new BadRequestException(
+        overview.error || 'Stripe is not configured.',
+      );
+    }
+    if (!overview.payoutsEnabled) {
+      throw new BadRequestException(
+        'Stripe payouts are not enabled for this account.',
+      );
+    }
+
+    const available = this.stripeAccounts.availableForCurrency(
+      overview,
+      currency,
+    );
+    try {
+      assertAmountWithinBalance(amount, available, currency);
+    } catch (err) {
+      throw new BadRequestException(
+        err instanceof Error ? err.message : 'Insufficient Stripe payments balance.',
+      );
+    }
+
+    const faList = await this.moneyManagement.listFinancialAccounts(
+      stripeAccountKey,
+    );
+    if (faList.error && !faList.accounts.length) {
+      throw new BadRequestException(faList.error);
+    }
+    const account = faList.accounts.find((row) => row.id === financialAccountId);
+    if (!account) {
+      throw new BadRequestException(
+        'Financial Account not found on this Stripe account.',
+      );
+    }
+    if (account.status !== 'open') {
+      throw new BadRequestException(
+        `Financial Account is not open (status: ${account.status}).`,
+      );
+    }
+
+    let record: StripePaymentsToFaDocument;
+    try {
+      record = await this.paymentsToFaModel.create({
+        idempotencyKey: dto.idempotencyKey,
+        createdBy: new Types.ObjectId(adminId),
+        amount,
+        currency,
+        stripeAccountKey,
+        stripeFinancialAccountId: financialAccountId,
+        financialAccountName: account.displayName || account.id,
+        status: 'creating',
+        snapshot: {
+          financialAccountType: account.type,
+          financialAccountStatus: account.status,
+        },
+      });
+    } catch (err) {
+      if (this.isDuplicateKey(err)) {
+        const dup = await this.paymentsToFaModel
+          .findOne({ idempotencyKey: dto.idempotencyKey })
+          .exec();
+        if (dup) return this.toPublicPaymentsToFa(dup);
+      }
+      throw err;
+    }
+
+    this.logger.log(
+      `Payments→FA attempt ${record._id} amount=${amount} ${currency} stripe=${stripeAccountKey} fa=${financialAccountId}`,
+    );
+
+    try {
+      const payout = await this.stripeAccounts.createPayoutToFinancialAccount({
+        key: stripeAccountKey,
+        amount: toStripeAmount(amount, currency),
+        currency,
+        financialAccountId,
+        idempotencyKey: dto.idempotencyKey,
+        metadata: {
+          skygloss_kind: 'payments_to_fa',
+          skygloss_transfer_id: String(record._id),
+        },
+      });
+      this.applyPaymentsToFaPayout(record, payout);
+      await record.save();
+      this.logger.log(
+        `Payments→FA created ${record.stripePayoutId} status=${record.status}`,
+      );
+      return this.toPublicPaymentsToFa(record);
+    } catch (err) {
+      record.status = 'failed';
+      record.failureMessage = userFacingStripeError(err);
+      record.stripeFailedAt = new Date();
+      await record.save();
+      this.logger.warn(
+        `Payments→FA ${record._id} failed: ${record.failureMessage}`,
+      );
+      throw new BadRequestException(record.failureMessage);
+    }
+  }
+
+  private async refreshPaymentsToFa(
+    record: StripePaymentsToFaDocument,
+  ): Promise<void> {
+    if (!record.stripePayoutId) return;
+    const payout = await this.stripeAccounts.retrievePayout(
+      record.stripeAccountKey,
+      record.stripePayoutId,
+    );
+    if (!payout) return;
+    this.applyPaymentsToFaPayout(record, payout);
+    await record.save();
+  }
+
+  private applyPaymentsToFaPayout(
+    record: StripePaymentsToFaDocument,
+    payout: {
+      id: string;
+      status?: string | null;
+      arrival_date?: number | null;
+      failure_code?: string | null;
+      failure_message?: string | null;
+    },
+  ): void {
+    record.stripePayoutId = payout.id;
+    record.status = mapStripePayoutStatus(payout.status);
+    if (payout.arrival_date) {
+      record.arrivalDate = new Date(payout.arrival_date * 1000);
+    }
+    if (payout.failure_code) record.failureCode = payout.failure_code;
+    if (payout.failure_message) record.failureMessage = payout.failure_message;
+    if (record.status === 'paid' && !record.stripePaidAt) {
+      record.stripePaidAt = new Date();
+    }
+    if (record.status === 'failed' && !record.stripeFailedAt) {
+      record.stripeFailedAt = new Date();
+    }
+  }
+
+  private toPublicPaymentsToFa(item: StripePaymentsToFaDocument | Record<string, any>) {
+    return {
+      id: String(item._id),
+      date: item.createdAt || null,
+      amount: item.amount,
+      currency: item.currency,
+      stripeAccountKey: item.stripeAccountKey,
+      stripeFinancialAccountId: item.stripeFinancialAccountId,
+      financialAccountName: item.financialAccountName || null,
+      stripePayoutId: item.stripePayoutId || null,
+      status: item.status,
+      statusLabel: stripeStatusLabel(item.status),
+      failureMessage: item.failureMessage || null,
+      arrivalDate: item.arrivalDate || null,
+    };
   }
 
   private async createFinancialAccountPayout(params: {
