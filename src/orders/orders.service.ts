@@ -2069,11 +2069,11 @@ export class OrdersService implements OnModuleInit {
     return this.orderModel
       .find()
       .select(
-        'orderNumber status totalAmount currency shippingFee discount couponCode items shippingAddress trackingId shippingCompany orderFlow createdAt updatedAt user commissions originalCurrency originalAmount baseCurrencyAmount',
+        'orderNumber status totalAmount currency shippingFee discount couponCode items shippingAddress trackingId shippingCompany orderFlow createdAt updatedAt user commissions originalCurrency originalAmount baseCurrencyAmount actingParentPartnerCode',
       )
       .populate(
         'user',
-        'firstName lastName email shopName role couponCode partnerCode',
+        'firstName lastName email shopName role couponCode partnerCode hubPartnerCode',
       )
       .sort({ createdAt: -1 })
       .lean()
@@ -2151,6 +2151,9 @@ export class OrdersService implements OnModuleInit {
         );
         const shop = (order.user || {}) as { hubPartnerCode?: string; role?: string };
         const actingCode = actingCodes[index];
+        if (actingCode) {
+          plain.actingParentPartnerCode = actingCode;
+        }
         plain.canManageOrderStatus = this.usersService.canViewerManageShopOrder(
           viewer,
           {
