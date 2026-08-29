@@ -70,6 +70,7 @@ import { WiseService } from './services/wise.service';
 import { StripeAccountService } from './services/stripe-account.service';
 import { StripeMoneyManagementService } from './services/stripe-money-management.service';
 import { StripeWisePayoutsService } from './services/stripe-wise-payouts.service';
+import { StripePaymentBreakdownService } from './services/stripe-payment-breakdown.service';
 import { OrderCommissionTransferService } from './services/order-commission-transfer.service';
 import { UsersModule } from '../users/users.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -118,6 +119,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     StripeAccountService,
     StripeMoneyManagementService,
     StripeWisePayoutsService,
+    StripePaymentBreakdownService,
     OrderCommissionTransferService,
   ],
   exports: [CommissionsService, WithdrawalsService, OrderCommissionTransferService],

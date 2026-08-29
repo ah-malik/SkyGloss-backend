@@ -25,6 +25,7 @@ import { CreateStripeWisePayoutDto } from '../dto/create-stripe-wise-payout.dto'
 import { UpdateStripeWiseDestinationDto } from '../dto/update-stripe-wise-destination.dto';
 import { StripeAccountService } from './stripe-account.service';
 import { StripeMoneyManagementService } from './stripe-money-management.service';
+import { StripePaymentBreakdownService } from './stripe-payment-breakdown.service';
 import { WiseService } from './wise.service';
 import {
   hasReceivingBankDetails,
@@ -79,6 +80,7 @@ export class StripeWisePayoutsService implements OnModuleInit {
     private readonly paymentsToFaModel: Model<StripePaymentsToFaDocument>,
     private readonly stripeAccounts: StripeAccountService,
     private readonly moneyManagement: StripeMoneyManagementService,
+    private readonly paymentBreakdown: StripePaymentBreakdownService,
     private readonly wiseService: WiseService,
     private readonly config: ConfigService,
   ) {}
@@ -148,7 +150,7 @@ export class StripeWisePayoutsService implements OnModuleInit {
     const destCurrency = normalizeCurrency(destination.currency) || 'USD';
     const currency = isValidCurrency(destCurrency) ? destCurrency : 'USD';
 
-    const [global, usa, wise, globalFa, usaFa, globalOutbound, usaOutbound] =
+    const [global, usa, wise, globalFa, usaFa, globalOutbound, usaOutbound, paymentBreakdown] =
       await Promise.all([
       this.stripeAccounts.inspect('global'),
       this.stripeAccounts.inspect('usa'),
@@ -157,6 +159,7 @@ export class StripeWisePayoutsService implements OnModuleInit {
       this.moneyManagement.listFinancialAccounts('usa'),
       this.moneyManagement.resolveWiseOutboundTarget('global', destination),
       this.moneyManagement.resolveWiseOutboundTarget('usa', destination),
+      this.paymentBreakdown.getBreakdown(currency),
     ]);
     const selected = selectedKey === 'usa' ? usa : global;
     const selectedOutbound =
@@ -305,6 +308,7 @@ export class StripeWisePayoutsService implements OnModuleInit {
           globalFa.error || usaFa.error || null,
       },
       wise,
+      paymentBreakdown,
       lastSettlement: latestReceived
         ? {
             payoutId: String(latestReceived._id),
