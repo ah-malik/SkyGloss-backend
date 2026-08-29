@@ -11,7 +11,7 @@ async function checkShops() {
       status: 'active'
     }).project({ email: 1 }).toArray();
 
-    console.log('Certified Active Shops with coords:', users.length);
+    console.log('Certified Active Shops with coords s:', users.length);
     process.exit(0);
   } catch (err) {
     console.error(err);
