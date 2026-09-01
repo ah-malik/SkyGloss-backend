@@ -131,7 +131,7 @@ export const FRONTEND_APIS: ApiEndpointDef[] = [
   def('frontend', 'Orders', 'POST', '/orders/:id/pay', 'Pay for order'),
   def('frontend', 'Orders', 'POST', '/orders/:id/shipping', 'Set order-request shipping'),
   def('frontend', 'Orders', 'POST', '/orders/:id/send-invoice', 'Send order-request invoice'),
-  def('frontend', 'Orders', 'POST', '/orders/:parentId/add-items', 'Add items to existing order'),
+  def('frontend', 'Orders', 'POST', '/orders/:id/add-items', 'Hub/Admin add items to existing order'),
   def('frontend', 'Orders', 'POST', '/orders/request', 'Create order request'),
   def('frontend', 'Orders', 'POST', '/orders/admin/:id/status', 'Update order status'),
 
@@ -360,6 +360,9 @@ export const ADMIN_APIS: ApiEndpointDef[] = [
   def('admin', 'Orders', 'POST', '/orders/request', 'Create order request'),
   def('admin', 'Orders', 'POST', '/orders/:id/shipping', 'Set order-request shipping'),
   def('admin', 'Orders', 'POST', '/orders/:id/send-invoice', 'Send order-request invoice'),
+  def('admin', 'Orders', 'POST', '/orders/:id/duplicate-invoice', 'Create and email duplicate invoice'),
+  def('admin', 'Orders', 'GET', '/orders/:id/duplicate-invoices', 'List duplicate invoices for order'),
+  def('admin', 'PDF', 'GET', '/pdf/duplicate-invoice/:invoiceId', 'Download duplicate invoice PDF'),
 
   // Certifications
   def('admin', 'Certifications', 'GET', '/certifications/admin/all', 'All certification requests'),

@@ -100,6 +100,13 @@ export class Order {
   @Prop()
   invoiceSentAt?: Date;
 
+  /**
+   * Amount already collected for this order (locked when items are added after payment).
+   * Remaining due = totalAmount - amountPaid.
+   */
+  @Prop({ default: 0 })
+  amountPaid?: number;
+
   @Prop({ type: ShippingAddress, required: true })
   shippingAddress: ShippingAddress;
 

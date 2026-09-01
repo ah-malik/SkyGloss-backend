@@ -14,6 +14,7 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { AddOrderItemsDto } from './dto/add-order-items.dto';
 import { CreateAdminTestOrderDto } from './dto/create-admin-test-order.dto';
 import { SetOrderRequestShippingDto } from './dto/set-order-request-shipping.dto';
+import { CreateDuplicateInvoiceDto } from './dto/create-duplicate-invoice.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -117,6 +118,16 @@ export class OrdersController {
     return this.ordersService.getCommissionOrders(user);
   }
 
+  @Get(':id/duplicate-invoices')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.PARTNER)
+  getDuplicateInvoices(
+    @Param('id') id: string,
+    @GetUser() user: UserDocument,
+  ) {
+    return this.ordersService.getDuplicateInvoicesForOrder(id, user);
+  }
+
   @Get(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -171,22 +182,26 @@ export class OrdersController {
     return this.ordersService.sendOrderRequestInvoice(id, user);
   }
 
-  @Post(':parentId/add-items')
+  @Post(':id/duplicate-invoice')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(
-    UserRole.CERTIFIED_SHOP,
-    UserRole.PARTNER,
-    UserRole.REGIONAL_PARTNER,
-    UserRole.MASTER_PARTNER,
-    UserRole.DISTRIBUTOR,
-  )
+  @Roles(UserRole.ADMIN, UserRole.PARTNER)
+  createDuplicateInvoice(
+    @Param('id') id: string,
+    @Body() dto: CreateDuplicateInvoiceDto,
+    @GetUser() user: UserDocument,
+  ) {
+    return this.ordersService.createAndSendDuplicateInvoice(id, dto, user);
+  }
+
+  @Post(':id/add-items')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.PARTNER)
   addItemsToOrder(
-    @Param('parentId') parentId: string,
-    @GetUser('_id') userId: string,
-    @GetUser('role') role: string,
+    @Param('id') id: string,
+    @GetUser() user: UserDocument,
     @Body() dto: AddOrderItemsDto,
   ) {
-    return this.ordersService.createAddOnOrder(userId, parentId, dto, role);
+    return this.ordersService.appendItemsToExistingOrder(id, dto, user);
   }
 
   @Get('verify/:orderId')

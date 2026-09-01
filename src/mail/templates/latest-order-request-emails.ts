@@ -44,7 +44,15 @@ function orderTotalsRows(
   shipping: number,
   total: number,
   totalLabel: string,
+  options?: { amountPaid?: number; remainingAmount?: number },
 ): string {
+  const amountPaid = Number(options?.amountPaid) || 0;
+  const remaining =
+    options?.remainingAmount != null
+      ? Number(options.remainingAmount)
+      : Math.max(0, total - amountPaid);
+  const showBalance = amountPaid > 0.01;
+
   return `
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:16px;">
                 <tbody>
@@ -62,6 +70,21 @@ function orderTotalsRows(
                       ${formatMoney(symbol, total)} <span style="font-size:11px; color:#666666; font-weight:normal;">${currency}</span>
                     </td>
                   </tr>
+                  ${
+                    showBalance
+                      ? `
+                  <tr>
+                    <td align="right" style="padding:8px 12px 4px 0; font-size:14px; color:#666666;">You Already Paid</td>
+                    <td align="right" width="110" style="padding:8px 0 4px 0; font-size:14px; font-weight:bold; color:#16a34a;">${formatMoney(symbol, amountPaid)}</td>
+                  </tr>
+                  <tr>
+                    <td align="right" style="padding:4px 12px 0 0; font-size:16px; font-weight:bold; color:#000000;">Remaining Amount</td>
+                    <td align="right" width="110" style="padding:4px 0 0 0; font-size:16px; font-weight:bold; color:#dc2626;">
+                      ${formatMoney(symbol, remaining)} <span style="font-size:11px; color:#666666; font-weight:normal;">${currency}</span>
+                    </td>
+                  </tr>`
+                      : ''
+                  }
                 </tbody>
               </table>`;
 }
@@ -74,6 +97,7 @@ function itemsSection(
   shipping: number,
   total: number,
   totalLabel: string,
+  options?: { amountPaid?: number; remainingAmount?: number },
 ): string {
   const subtotal = items.reduce(
     (sum: number, item: any) =>
@@ -94,7 +118,7 @@ function itemsSection(
                   ${buildLatestOrderItemsHtml(items, symbol, formatOrderItemDisplayName, formatOrderItemTypeLabel)}
                 </tbody>
               </table>
-              ${orderTotalsRows(symbol, currency, subtotal, shipping, total, totalLabel)}
+              ${orderTotalsRows(symbol, currency, subtotal, shipping, total, totalLabel, options)}
             </td>
           </tr>`;
 }
@@ -270,6 +294,8 @@ export function buildLatestOrderRequestInvoiceHtml(
   options?: {
     viewUrl?: string;
     footerContact?: FooterContact | null;
+    amountPaid?: number;
+    remainingAmount?: number;
   },
 ): string {
   const currency = (order.currency || 'USD').toUpperCase();
@@ -284,19 +310,32 @@ export function buildLatestOrderRequestInvoiceHtml(
   const total = Number(
     order.totalAmount != null ? order.totalAmount : subtotal + shipping,
   );
+  const amountPaid = Number(
+    options?.amountPaid ?? order.amountPaid ?? 0,
+  );
+  const remainingAmount =
+    options?.remainingAmount != null
+      ? Number(options.remainingAmount)
+      : Math.max(0, total - amountPaid);
   const name = customerName(user, order);
   const email = user?.email || order.shippingAddress?.email || '';
   const company = user?.companyName || user?.shopName || '';
   const addr = order.shippingAddress || {};
   const viewUrl = options?.viewUrl;
+  const hasBalance = amountPaid > 0.01;
+  const dueLabel = hasBalance ? 'Order Total' : 'Amount Due';
 
   const body = `
           <tr>
             <td bgcolor="#ffffff" style="padding:36px 40px 8px 40px; background-color:#ffffff; color:#000000; font-family: Arial, Helvetica, sans-serif; font-size:15px; line-height:1.7; text-align:left;">
               <p style="margin:0 0 18px 0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;">Hello ${name},</p>
               <p style="margin:0 0 18px 0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;"><strong style="font-weight:bold; color:#000000;">Your invoice is ready.</strong></p>
-              <p style="margin:0 0 18px 0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;">Please find the invoice for order <strong style="font-weight:bold;">${order.orderNumber}</strong> attached. The total includes shipping.</p>
-              <p style="margin:0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;">Complete payment using the attached invoice to proceed with your order.</p>
+              <p style="margin:0 0 18px 0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;">Please find the invoice for order <strong style="font-weight:bold;">${order.orderNumber}</strong> attached.${hasBalance ? ' Additional items were added to your existing order.' : ' The total includes shipping.'}</p>
+              <p style="margin:0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;">${
+                hasBalance
+                  ? `You already paid <strong>${formatMoney(symbol, amountPaid)}</strong>. Please pay the remaining amount of <strong>${formatMoney(symbol, remainingAmount)}</strong> to complete your order.`
+                  : 'Complete payment using the attached invoice to proceed with your order.'
+              }</p>
             </td>
           </tr>
           ${detailsCard(
@@ -313,7 +352,10 @@ export function buildLatestOrderRequestInvoiceHtml(
                 ? `<tr><td style="padding:16px 0 0 0;">${pillCta(viewUrl, 'VIEW ORDER')}</td></tr>`
                 : ''),
           )}
-          ${itemsSection('Invoice Summary', items, symbol, currency, shipping, total, 'Amount Due')}
+          ${itemsSection('Invoice Summary', items, symbol, currency, shipping, total, dueLabel, {
+            amountPaid,
+            remainingAmount,
+          })}
           ${shippingAddressBlock({
             name:
               addr.name ||

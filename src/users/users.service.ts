@@ -1,4 +1,10 @@
-import { Injectable, BadRequestException, OnModuleInit, Logger, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  OnModuleInit,
+  Logger,
+  ForbiddenException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import * as bcrypt from 'bcrypt';
@@ -51,6 +57,7 @@ import { RedisCacheService } from '../redis/redis-cache.service';
 import { CacheKeys, CacheTtl } from '../redis/redis.constants';
 import { UserActivityService } from '../user-activity/user-activity.service';
 import { UserActivityAction } from '../user-activity/entities/user-activity-log.entity';
+import { queueShopCommissionRecalculation } from '../common/shop-commission-recalculation';
 
 export interface NetworkUsersResult {
   shops: UserDocument[];
@@ -74,6 +81,43 @@ export class UsersService implements OnModuleInit {
     private readonly cache: RedisCacheService,
     private readonly userActivityService: UserActivityService,
   ) { }
+
+  private shouldRecalculateShopCommissions(
+    before: UserDocument,
+    after: UserDocument,
+    dto: UpdateUserDto,
+    operationalSupportProvided: boolean,
+  ): boolean {
+    if (after.role !== UserRole.CERTIFIED_SHOP) return false;
+
+    const prevOs = normalizePartnerCode(before.operationalSupportRepresentativeCode);
+    const nextOs = normalizePartnerCode(after.operationalSupportRepresentativeCode);
+    if (operationalSupportProvided && prevOs !== nextOs) return true;
+
+    if (dto.referredByPartnerCode !== undefined) {
+      const prevRef = normalizePartnerCode(before.referredByPartnerCode);
+      const nextRef = normalizePartnerCode(after.referredByPartnerCode);
+      if (prevRef !== nextRef) return true;
+    }
+
+    if (dto.operationalSupportRatePercent !== undefined) {
+      const prevRate = before.operationalSupportRatePercent ?? null;
+      const nextRate = after.operationalSupportRatePercent ?? null;
+      if (prevRate !== nextRate) return true;
+    }
+
+    if (dto.shopIntroductionFirstOrderRatePercent !== undefined) {
+      const prevRate = before.shopIntroductionFirstOrderRatePercent ?? null;
+      const nextRate = after.shopIntroductionFirstOrderRatePercent ?? null;
+      if (prevRate !== nextRate) return true;
+    }
+
+    return false;
+  }
+
+  private queueShopCommissionRecalculation(shopId: string): void {
+    queueShopCommissionRecalculation(shopId);
+  }
 
   async onModuleInit() {
     // One-time cleanup to remove null emails that cause duplicate key errors with sparse index
@@ -1356,11 +1400,20 @@ export class UsersService implements OnModuleInit {
       referredUser &&
       (referredUser.role === UserRole.MASTER_PARTNER ||
         referredUser.role === UserRole.REGIONAL_PARTNER) &&
-      referredCode &&
-      currentSi !== referredCode
+      referredCode
     ) {
-      updatePayload.shopIntroductionRepresentativeCode = referredCode;
-      updatePayload.shopIntroductionRepresentativeId = referredUser._id;
+      if (currentSi !== referredCode) {
+        updatePayload.shopIntroductionRepresentativeCode = referredCode;
+        updatePayload.shopIntroductionRepresentativeId = referredUser._id;
+      }
+    } else if (
+      shop.shopIntroductionRepresentativeCode &&
+      (!referredUser ||
+        (referredUser.role !== UserRole.MASTER_PARTNER &&
+          referredUser.role !== UserRole.REGIONAL_PARTNER))
+    ) {
+      updatePayload.shopIntroductionRepresentativeCode = null;
+      updatePayload.shopIntroductionRepresentativeId = null;
     } else if (
       !shop.shopIntroductionRepresentativeCode &&
       assignments.shopIntroductionRepresentativeCode
@@ -3140,7 +3193,40 @@ export class UsersService implements OnModuleInit {
       }
     }
 
-    return updatedUser;
+    let shopForRecalc: UserDocument | null = updatedUser;
+    if (
+      updatedUser?.role === UserRole.CERTIFIED_SHOP &&
+      (updateUserDto.referredByPartnerCode !== undefined ||
+        operationalSupportCodeRaw !== undefined ||
+        updateUserDto.shopIntroductionFirstOrderRatePercent !== undefined ||
+        updateUserDto.operationalSupportRatePercent !== undefined)
+    ) {
+      let shop = updatedUser as UserDocument;
+      shop = await this.assignShopPromoterNetworkEarnings(shop);
+      const promoterFoReady =
+        shop.partnerDevelopmentPromoterEligible === true &&
+        normalizePartnerCode(shop.shopIntroductionRepresentativeCode) ===
+          normalizePartnerCode(shop.referredByPartnerCode);
+      if (!promoterFoReady) {
+        shop = await this.assignShopEarningRepresentatives(shop);
+        shop = await this.assignShopPromoterNetworkEarnings(shop);
+      }
+      shopForRecalc = shop;
+    }
+
+    if (
+      shopForRecalc &&
+      this.shouldRecalculateShopCommissions(
+        targetUserForHierarchy,
+        shopForRecalc,
+        updateUserDto,
+        operationalSupportCodeRaw !== undefined,
+      )
+    ) {
+      this.queueShopCommissionRecalculation(shopForRecalc._id.toString());
+    }
+
+    return shopForRecalc ?? updatedUser;
   }
 
   async remove(id: string): Promise<UserDocument | null> {
@@ -4990,6 +5076,8 @@ export class UsersService implements OnModuleInit {
       shop = await this.assignShopEarningRepresentatives(shop);
       shop = await this.assignShopPromoterNetworkEarnings(shop);
     }
+
+    this.queueShopCommissionRecalculation(shop._id.toString());
     return shop;
   }
 

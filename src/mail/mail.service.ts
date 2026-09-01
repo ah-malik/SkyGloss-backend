@@ -1493,7 +1493,11 @@ export class MailService {
     order: any,
     user: any,
     invoiceBuffer: Buffer,
-    options?: { payUrl?: string },
+    options?: {
+      payUrl?: string;
+      amountPaid?: number;
+      remainingAmount?: number;
+    },
   ) {
     const currencySymbols: { [key: string]: string } = {
       USD: '$',
@@ -1515,6 +1519,12 @@ export class MailService {
         ? order.shippingFee
         : Math.max(0, order.totalAmount - subtotal + (order.discount || 0));
     const payUrl = options?.payUrl;
+    const amountPaid = Number(options?.amountPaid ?? order.amountPaid ?? 0);
+    const remainingAmount =
+      options?.remainingAmount != null
+        ? Number(options.remainingAmount)
+        : Math.max(0, Number(order.totalAmount || 0) - amountPaid);
+    const showBalance = amountPaid > 0.01;
 
     const attachments = [
       {
@@ -1528,10 +1538,14 @@ export class MailService {
       const mailOptions: any = {
         from: `"SkyGloss Portal" <sales@skygloss.com>`,
         to,
-        subject: `Order Invoice: ${order.orderNumber}`,
+        subject: showBalance
+          ? `Updated Invoice: ${order.orderNumber}`
+          : `Order Invoice: ${order.orderNumber}`,
         html: buildLatestOrderRequestInvoiceHtml(order, user, {
           viewUrl: payUrl,
           footerContact,
+          amountPaid,
+          remainingAmount,
         }),
         attachments,
       };
@@ -1548,7 +1562,9 @@ export class MailService {
     const mailOptions: any = {
       from: `"SkyGloss Portal" <sales@skygloss.com>`,
       to,
-      subject: `Order Invoice: ${order.orderNumber}`,
+      subject: showBalance
+        ? `Updated Invoice: ${order.orderNumber}`
+        : `Order Invoice: ${order.orderNumber}`,
       html: `
         <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
@@ -1589,8 +1605,21 @@ export class MailService {
                         </tr>` : ''}
                         <tr>
                           <td align="right" style="font-size: 18px; color: #272727; font-weight: bold;">Total:</td>
-                          <td align="right" style="font-size: 18px; color: #0ea0dc; font-weight: bold;">${symbol}${order.totalAmount.toFixed(2)} <span style="font-size:12px; color:#666;">${currency}</span></td>
+                          <td align="right" style="font-size: 18px; color: #0ea0dc; font-weight: bold;">${symbol}${Number(order.totalAmount).toFixed(2)} <span style="font-size:12px; color:#666;">${currency}</span></td>
                         </tr>
+                        ${
+                          showBalance
+                            ? `
+                        <tr>
+                          <td align="right" style="color: #666;">You Already Paid:</td>
+                          <td align="right" width="100" style="font-weight: bold; color: #16a34a;">${symbol}${amountPaid.toFixed(2)}</td>
+                        </tr>
+                        <tr>
+                          <td align="right" style="font-size: 16px; color: #272727; font-weight: bold;">Remaining Amount:</td>
+                          <td align="right" style="font-size: 16px; color: #dc2626; font-weight: bold;">${symbol}${remainingAmount.toFixed(2)}</td>
+                        </tr>`
+                            : ''
+                        }
                       </table>
 
                       ${
@@ -1620,6 +1649,87 @@ export class MailService {
       this.logger.log(`Order invoice email sent to ${to} for ${order.orderNumber}`);
     } catch (error) {
       this.logger.error(`Failed to send order invoice email to ${to}`, error.stack);
+      throw error;
+    }
+  }
+
+  async sendDuplicateInvoicesEmail(
+    to: string,
+    order: any,
+    user: any,
+    originalInvoiceBuffer: Buffer,
+    duplicateInvoiceBuffer: Buffer,
+    duplicateInvoiceNumber: string,
+    options?: {
+      payUrl?: string;
+      amountPaid?: number;
+      remainingAmount?: number;
+    },
+  ) {
+    const payUrl = options?.payUrl;
+    const attachments = [
+      {
+        filename: `Invoice_${order.orderNumber}.pdf`,
+        content: originalInvoiceBuffer,
+      },
+      {
+        filename: `Invoice_${duplicateInvoiceNumber}.pdf`,
+        content: duplicateInvoiceBuffer,
+      },
+    ];
+
+    const mailOptions: any = {
+      from: `"SkyGloss Portal" <sales@skygloss.com>`,
+      to,
+      subject: `Duplicate Invoice: ${duplicateInvoiceNumber} (Order ${order.orderNumber})`,
+      html: `
+        <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
+            <tr>
+              <td align="center">
+                <table width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="margin:20px 0; border-radius:8px; overflow:hidden; border: 1px solid #e0e0e0;">
+                  <tr><td align="center" bgcolor="#0ea0dc" style="padding:20px; color:#ffffff; font-size:24px; font-weight:bold;">Invoice Update</td></tr>
+                  <tr>
+                    <td style="padding:30px; color:#333333; font-size:14px; line-height:1.6;">
+                      <h2 style="color:#272727; margin-bottom: 5px;">Hi ${user?.firstName || 'there'},</h2>
+                      <p style="margin-top: 0; color: #666;">
+                        Please find your original invoice and the duplicate invoice for order
+                        <strong>${order.orderNumber}</strong> attached to this email.
+                      </p>
+                      <p style="color: #666;">
+                        Duplicate invoice number: <strong>${duplicateInvoiceNumber}</strong>
+                      </p>
+                      ${
+                        payUrl
+                          ? `<p style="margin-top: 30px; text-align: center;">
+                              <a href="${payUrl}" style="display:inline-block; background-color:#0ea0dc; color:#ffffff; padding:14px 28px; text-decoration:none; border-radius:8px; font-weight:bold;">View Order</a>
+                            </p>`
+                          : ''
+                      }
+                      <p style="margin-top: 30px; text-align: center; color: #999; font-size: 12px;">
+                        If you have any questions, please contact our support team.
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+      `,
+      attachments,
+    };
+
+    try {
+      await this.salesTransporter.sendMail(mailOptions);
+      this.logger.log(
+        `Duplicate invoice email sent to ${to} for ${order.orderNumber} (${duplicateInvoiceNumber})`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to send duplicate invoice email to ${to}`,
+        error.stack,
+      );
       throw error;
     }
   }

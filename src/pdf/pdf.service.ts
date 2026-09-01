@@ -12,6 +12,16 @@ import {
 import { formatOrderItemDisplayName, formatOrderItemTypeLabel } from '../common/order-type';
 import axios from 'axios';
 
+export interface OrderPdfOptions {
+  headerTitle?: string;
+  displayOrderNumber?: string;
+  referenceOrderNumber?: string;
+  items?: Order['items'];
+  totalAmount?: number;
+  shippingFee?: number;
+  discount?: number;
+}
+
 @Injectable()
 export class PdfService {
 
@@ -283,14 +293,25 @@ export class PdfService {
     return matches?.length ?? 0;
   }
 
-  async generateOrderDetails(order: Order): Promise<Buffer> {
+  async generateOrderDetails(
+    order: Order,
+    options?: OrderPdfOptions,
+  ): Promise<Buffer> {
     return new Promise((resolve) => {
+      const snapshot = {
+        ...order,
+        items: options?.items ?? order.items,
+        totalAmount: options?.totalAmount ?? order.totalAmount,
+        shippingFee: options?.shippingFee ?? order.shippingFee,
+        discount: options?.discount ?? order.discount,
+      };
+
       const doc = new PDFDocument({ margin: 50 });
       const chunks: Buffer[] = [];
       doc.on('data', (chunk) => chunks.push(chunk));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
 
-      const registrationOrder = isRegistrationOrder(order);
+      const registrationOrder = isRegistrationOrder(snapshot);
 
       // Unicode-capable fonts so ₹ / € / £ render (Helvetica cannot).
       const unicodeFonts = this.resolveUnicodeFonts();
@@ -301,7 +322,7 @@ export class PdfService {
         doc.registerFont(fontBold, unicodeFonts.bold);
       }
 
-      const currencyCode = this.getOrderCurrencyCode(order);
+      const currencyCode = this.getOrderCurrencyCode(snapshot);
       const currencySymbol = this.getCurrencySymbol(currencyCode);
 
       /**
@@ -318,28 +339,34 @@ export class PdfService {
 
       // Header
       doc.fontSize(24).fillColor('#0EA0DC').font(fontBold).text(
-        registrationOrder ? 'Registration Invoice' : 'Order Invoice',
+        options?.headerTitle ||
+          (registrationOrder ? 'Registration Invoice' : 'Order Invoice'),
         { align: 'center' },
       );
       doc.moveDown();
 
       doc.fontSize(12).fillColor('#272727').font(fontRegular);
-      doc.text(`Order Number: ${order.orderNumber}`);
-      doc.text(`Date: ${new Date((order as any).createdAt).toLocaleString()}`);
-      doc.text(`Status: ${order.status.toUpperCase()}`);
+      const displayOrderNumber =
+        options?.displayOrderNumber || snapshot.orderNumber;
+      doc.text(`Order Number: ${displayOrderNumber}`);
+      if (options?.referenceOrderNumber) {
+        doc.text(`Original Order: ${options.referenceOrderNumber}`);
+      }
+      doc.text(`Date: ${new Date((snapshot as any).createdAt).toLocaleString()}`);
+      doc.text(`Status: ${snapshot.status.toUpperCase()}`);
       doc.text(`Currency: ${currencyCode}`);
       doc.moveDown();
 
       // Customer Info
       doc.fontSize(14).font(fontBold).text('Customer Information:');
       doc.fontSize(12).font(fontRegular);
-      const user = order.user as any;
+      const user = snapshot.user as any;
       doc.text(`Name: ${user?.firstName} ${user?.lastName}`);
       doc.text(`Email: ${user?.email}`);
       doc.moveDown();
 
       // Shipping Info
-      const shipping = order.shippingAddress;
+      const shipping = snapshot.shippingAddress;
       doc.fontSize(14).font(fontBold).text('Shipping Address:');
       doc.fontSize(12).font(fontRegular);
       doc.text(
@@ -427,11 +454,11 @@ export class PdfService {
       doc.moveDown(0.5);
 
       console.log(
-        `[PdfService] Generating PDF for order ${order.orderNumber}. currency=${order.currency} originalCurrency=${(order as any).originalCurrency} resolved=${currencyCode} symbol=${currencySymbol} unicodeFont=${!!unicodeFonts}`,
+        `[PdfService] Generating PDF for order ${displayOrderNumber}. currency=${snapshot.currency} originalCurrency=${(snapshot as any).originalCurrency} resolved=${currencyCode} symbol=${currencySymbol} unicodeFont=${!!unicodeFonts}`,
       );
 
       doc.font(fontRegular);
-      order.items.forEach((item) => {
+      snapshot.items.forEach((item) => {
         const lineTotal = item.price * item.quantity;
         const rowValues = {
           item: formatOrderItemDisplayName(item).toUpperCase(),
@@ -462,9 +489,9 @@ export class PdfService {
       doc.lineWidth(1).moveTo(50, doc.y).lineTo(550, doc.y).stroke();
       doc.moveDown(0.5);
 
-      const userCountry = (order.user as any)?.country;
+      const userCountry = (snapshot.user as any)?.country;
       const { subtotal, shippingFee, discount, total } = getOrderTotalsBreakdown(
-        order as any,
+        snapshot as any,
         userCountry,
       );
 
@@ -491,7 +518,7 @@ export class PdfService {
       );
 
       if (discount > 0.01) {
-        const discountLabel = getDiscountDisplayLabel(order as any);
+        const discountLabel = getDiscountDisplayLabel(snapshot as any);
         drawTotalsLine(
           discountLabel,
           `-${this.formatMoney(discount, currencySymbol)}`,
@@ -517,6 +544,23 @@ export class PdfService {
         fontBold,
         16,
       );
+
+      const amountPaid = Number((snapshot as any).amountPaid) || 0;
+      if (amountPaid > 0.01) {
+        const remaining = Math.max(0, total - amountPaid);
+        drawTotalsLine(
+          'You Already Paid',
+          this.formatMoney(amountPaid, currencySymbol),
+          fontRegular,
+          12,
+        );
+        drawTotalsLine(
+          'Remaining Amount',
+          this.formatMoney(remaining, currencySymbol),
+          fontBold,
+          14,
+        );
+      }
 
       doc.end();
     });

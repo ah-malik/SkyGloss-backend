@@ -272,8 +272,14 @@ export interface CommissionOrderAmounts {
   convertedUsdAmount: number;
 }
 
+/**
+ * Platform deduction applied to (order total − shipping) before commission %.
+ * Example: $125 − $25 shipping = $100 remaining → $96.50 commissionable (3.5% off).
+ */
+export const COMMISSION_PLATFORM_DEDUCTION_RATE = 0.035;
+
 /** Order total in original currency + locked FX rate for USD credit.
- *  Commission base excludes shipping fees.
+ *  Commission base excludes shipping fees, then deducts 3.5% from the remainder.
  */
 export function resolveCommissionOrderAmounts(order: {
   totalAmount?: number;
@@ -292,7 +298,11 @@ export function resolveCommissionOrderAmounts(order: {
   const grossAmount = roundMoney(order.originalAmount ?? order.totalAmount ?? 0);
   const shippingFee = roundMoney(Math.max(0, Number(order.shippingFee) || 0));
   // Commission is on product/subtotal only — never on shipping.
-  const orderAmount = roundMoney(Math.max(0, grossAmount - shippingFee));
+  const remainingAmount = roundMoney(Math.max(0, grossAmount - shippingFee));
+  // Then deduct 3.5% from remaining → commissionable base.
+  const orderAmount = roundMoney(
+    remainingAmount * (1 - COMMISSION_PLATFORM_DEDUCTION_RATE),
+  );
 
   if (orderCurrency === SYSTEM_BASE_CURRENCY) {
     return {
@@ -643,7 +653,10 @@ export function calculateRepresentativeCommissionEntries(params: {
   if (usdBase <= 0) return [];
 
   const shopIntro = recipients.shopIntroduction;
-  if (!shopIntro) return [];
+  const operationalSupport = params.recipients.operationalSupport;
+  const partnerDev = recipients.partnerDevelopment;
+
+  if (!shopIntro && !operationalSupport && !partnerDev) return [];
 
   const context = {
     shopId,
@@ -655,55 +668,55 @@ export function calculateRepresentativeCommissionEntries(params: {
 
   const entries: CommissionEntry[] = [];
 
-  const defaultSiPercent =
-    params.defaultShopIntroductionRatePercent != null &&
-    !Number.isNaN(Number(params.defaultShopIntroductionRatePercent))
-      ? Math.max(
-          0,
-          Math.min(100, Number(params.defaultShopIntroductionRatePercent)),
-        )
-      : DEFAULT_COMMISSION_RATES_PERCENT.master_partner;
+  if (shopIntro) {
+    const defaultSiPercent =
+      params.defaultShopIntroductionRatePercent != null &&
+      !Number.isNaN(Number(params.defaultShopIntroductionRatePercent))
+        ? Math.max(
+            0,
+            Math.min(100, Number(params.defaultShopIntroductionRatePercent)),
+          )
+        : DEFAULT_COMMISSION_RATES_PERCENT.master_partner;
 
-  const siPercent = normalizeShopIntroductionFirstOrderRatePercent(
-    assignments.shopIntroductionFirstOrderRatePercent ?? defaultSiPercent,
-  );
-
-  entries.push(
-    buildCommissionEntry(
-      shopIntro,
-      'Shop Introduction',
-      siPercent,
-      usdBase * (siPercent / 100),
-      context,
-    ),
-  );
-
-  const partnerDev = recipients.partnerDevelopment;
-  const canPayPartnerIntro =
-    !!partnerDev &&
-    partnerDev._id !== shopIntro._id &&
-    assignments.partnerDevelopmentEligible !== false;
-
-  if (canPayPartnerIntro) {
-    const partnerIntroPercent = normalizePartnerDevelopmentRatePercent(
-      assignments.partnerDevelopmentRatePercent,
+    const siPercent = normalizeShopIntroductionFirstOrderRatePercent(
+      assignments.shopIntroductionFirstOrderRatePercent ?? defaultSiPercent,
     );
+
     entries.push(
       buildCommissionEntry(
-        partnerDev,
-        'Partner Development',
-        partnerIntroPercent,
-        resolvePartnerDevelopmentAmountFromChildCommission({
-          orderUsdAmount: usdBase,
-          parentPartnerDevelopmentPercent: partnerIntroPercent,
-        }),
+        shopIntro,
+        'Shop Introduction',
+        siPercent,
+        usdBase * (siPercent / 100),
         context,
       ),
     );
+
+    const canPayPartnerIntro =
+      !!partnerDev &&
+      partnerDev._id !== shopIntro._id &&
+      assignments.partnerDevelopmentEligible !== false;
+
+    if (canPayPartnerIntro) {
+      const partnerIntroPercent = normalizePartnerDevelopmentRatePercent(
+        assignments.partnerDevelopmentRatePercent,
+      );
+      entries.push(
+        buildCommissionEntry(
+          partnerDev,
+          'Partner Development',
+          partnerIntroPercent,
+          resolvePartnerDevelopmentAmountFromChildCommission({
+            orderUsdAmount: usdBase,
+            parentPartnerDevelopmentPercent: partnerIntroPercent,
+          }),
+          context,
+        ),
+      );
+    }
   }
 
   // Operational Support on every order when Admin has assigned a REP (may equal SI).
-  const operationalSupport = params.recipients.operationalSupport;
   if (operationalSupport) {
     const osPct =
       params.operationalSupportRatePercent ??

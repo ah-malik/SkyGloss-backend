@@ -17,8 +17,13 @@ import {
   OrderDocument,
   OrderStatus,
 } from './entities/order.entity';
+import {
+  DuplicateInvoice,
+  DuplicateInvoiceDocument,
+} from './entities/duplicate-invoice.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { AddOrderItemsDto } from './dto/add-order-items.dto';
+import { CreateDuplicateInvoiceDto } from './dto/create-duplicate-invoice.dto';
 import { CreateAdminTestOrderDto } from './dto/create-admin-test-order.dto';
 import { ProductsService } from '../products/products.service';
 import { ProductInventoryService } from '../inventory/product-inventory.service';
@@ -38,7 +43,7 @@ import {
   registrationOrderExclusionFilter,
   shouldHideShopRegistrationFromViewer,
 } from '../common/order-totals';
-import { isOrderModifiable } from '../common/order-modifiable';
+import { isOrderModifiable, getOrderAmountPaid, getOrderRemainingAmount } from '../common/order-modifiable';
 import {
   formatRoleLabel,
   getRegistrationFeeDescription,
@@ -89,6 +94,7 @@ import { normalizeOrderItemType } from '../common/order-type';
 import { CouponsService, ShopRegistrationCouponResult } from '../coupons/coupons.service';
 import { StripeCouponSyncService } from '../coupons/stripe-coupon-sync.service';
 import { CommissionsService } from '../payouts/services/commissions.service';
+import { registerShopCommissionRecalculationHandler } from '../common/shop-commission-recalculation';
 import { OrderCommissionTransferService } from '../payouts/services/order-commission-transfer.service';
 import {
   isUsaShopOrder,
@@ -113,6 +119,8 @@ export class OrdersService implements OnModuleInit {
 
   constructor(
     @InjectModel(Order.name) private orderModel: Model<OrderDocument>,
+    @InjectModel(DuplicateInvoice.name)
+    private duplicateInvoiceModel: Model<DuplicateInvoiceDocument>,
     @InjectModel(ProductGroup.name) private productGroupModel: Model<ProductGroupDocument>,
     private configService: ConfigService,
     private notificationsService: NotificationsService,
@@ -156,6 +164,9 @@ export class OrdersService implements OnModuleInit {
   }
 
   async onModuleInit() {
+    registerShopCommissionRecalculationHandler((shopUserId) =>
+      this.recalculateCommissionsForShop(shopUserId),
+    );
     await this.exchangeRatesService.refreshRatesFromMarket();
     await this.repairBrokenFxOrders();
   }
@@ -870,28 +881,13 @@ export class OrdersService implements OnModuleInit {
   }
 
   private async enrichOrderDetails(order: Record<string, any>): Promise<any> {
-    const orderId = String(order._id);
-    const [addOnOrders, parentOrder] = await Promise.all([
-      this.orderModel
-        .find({ parentOrderId: orderId } as any)
-        .sort({ createdAt: -1 })
-        .select(
-          'orderNumber status totalAmount shippingFee items createdAt orderKind orderFlow',
-        )
-        .lean(),
-      order.parentOrderId
-        ? this.orderModel
-            .findById(order.parentOrderId)
-            .select('orderNumber status shippingAddress')
-            .lean()
-        : Promise.resolve(null),
-    ]);
-
+    const amountPaid = getOrderAmountPaid(order);
+    const remainingAmount = getOrderRemainingAmount(order);
     return {
       ...order,
       isModifiable: isOrderModifiable(order),
-      addOnOrders: addOnOrders || [],
-      parentOrder: parentOrder || undefined,
+      amountPaid,
+      remainingAmount,
     };
   }
 
@@ -1177,6 +1173,7 @@ export class OrdersService implements OnModuleInit {
       ) {
         order.status = OrderStatus.PAID;
         order.cancellationReason = undefined;
+        order.amountPaid = order.totalAmount;
         await order.save();
 
         await this.sendPaidOrderNotificationsIfNeeded(order._id.toString());
@@ -1605,10 +1602,19 @@ export class OrdersService implements OnModuleInit {
         discount = stripeDiscount;
       }
 
-      const amountUpdate = this.buildAmountUpdateWithLockedRate(
-        existingOrder,
-        actualTotal,
-      );
+      const priorPaid = getOrderAmountPaid(existingOrder || {});
+      // Remaining-balance checkouts must not overwrite the full order total.
+      const amountUpdate =
+        priorPaid > 0.01
+          ? {
+              amountPaid:
+                Number(existingOrder?.totalAmount) ||
+                priorPaid + actualTotal,
+            }
+          : {
+              ...this.buildAmountUpdateWithLockedRate(existingOrder, actualTotal),
+              amountPaid: actualTotal,
+            };
 
       const updatedOrder = await this.orderModel
         .findByIdAndUpdate(
@@ -2018,10 +2024,18 @@ export class OrdersService implements OnModuleInit {
           discount = stripeDiscount;
         }
 
-        const amountUpdate = this.buildAmountUpdateWithLockedRate(
-          existingOrder,
-          actualTotal,
-        );
+        const priorPaid = getOrderAmountPaid(existingOrder || {});
+        const amountUpdate =
+          priorPaid > 0.01
+            ? {
+                amountPaid:
+                  Number(existingOrder?.totalAmount) ||
+                  priorPaid + actualTotal,
+              }
+            : {
+                ...this.buildAmountUpdateWithLockedRate(existingOrder, actualTotal),
+                amountPaid: actualTotal,
+              };
 
         const updatedOrder = await this.orderModel
           .findByIdAndUpdate(
@@ -2090,18 +2104,48 @@ export class OrdersService implements OnModuleInit {
 
 
   async getAllOrders(): Promise<Order[]> {
-    return this.orderModel
+    const orders = await this.orderModel
       .find()
       .select(
         'orderNumber status totalAmount currency shippingFee discount couponCode items shippingAddress trackingId shippingCompany orderFlow createdAt updatedAt user commissions originalCurrency originalAmount baseCurrencyAmount actingParentPartnerCode',
       )
       .populate(
         'user',
-        'firstName lastName email shopName role couponCode partnerCode hubPartnerCode',
+        'firstName lastName email shopName role couponCode partnerCode referredByPartnerCode country hubPartnerCode parentLinkAssignedAt previousParentPartnerCode',
       )
       .sort({ createdAt: -1 })
       .lean()
       .exec();
+
+    const actingCodes = await Promise.all(
+      orders.map((order) => {
+        const role = (order.user as { role?: string } | null)?.role;
+        if (role && role !== UserRole.CERTIFIED_SHOP) {
+          return Promise.resolve(
+            String((order as any).actingParentPartnerCode || ''),
+          );
+        }
+        return this.usersService.resolveActingParentForOrder({
+          actingParentPartnerCode: (order as any).actingParentPartnerCode,
+          createdAt: (order as any).createdAt,
+          user: order.user as {
+            hubPartnerCode?: string;
+            country?: string;
+            parentLinkAssignedAt?: Date;
+            previousParentPartnerCode?: string;
+          },
+        });
+      }),
+    );
+
+    return orders.map((order, index) => {
+      const actingCode = actingCodes[index];
+      return {
+        ...(order as any),
+        actingParentPartnerCode:
+          actingCode || (order as any).actingParentPartnerCode,
+      };
+    });
   }
 
   async getNetworkOrders(viewer: UserDocument): Promise<Order[]> {
@@ -2334,8 +2378,6 @@ export class OrdersService implements OnModuleInit {
       shopUser,
     );
 
-    if (!shopUser.shopIntroductionRepresentativeCode) return;
-
     const isFirstSuccessfulOrder = await this.isFirstSuccessfulShopOrder(
       shopUserId,
       orderId,
@@ -2421,6 +2463,17 @@ export class OrdersService implements OnModuleInit {
       !shopUser.shopIntroductionRepresentativeCode &&
       !!hierarchyChain.promoter;
 
+    const hasIntroPartner = !!normalizePartnerCode(
+      shopUser.shopIntroductionRepresentativeCode,
+    );
+    const hasOsPartner = !!normalizePartnerCode(
+      shopUser.operationalSupportRepresentativeCode,
+    );
+
+    if (!hasIntroPartner && !hasOsPartner && !useHierarchyCommission) {
+      return;
+    }
+
     if (order.commissions && order.commissions.length > 0) {
       let rebuildCommissions = false;
 
@@ -2437,12 +2490,28 @@ export class OrdersService implements OnModuleInit {
         rebuildCommissions = !hasPromSi;
       }
 
-      // Rebuild when Partner Intro or Operational Support lines are missing.
+      // Rebuild when Shop Intro, Partner Intro, or Operational Support lines are missing or stale.
       if (useFoNetwork) {
+        const expectedSi = normalizePartnerCode(
+          shopUser.shopIntroductionRepresentativeCode,
+        );
         const expectedPd = normalizePartnerCode(livePartnerIntroCode);
         const expectedOs = normalizePartnerCode(
           shopUser.operationalSupportRepresentativeCode,
         );
+        if (expectedSi) {
+          const hasSi = order.commissions.some(
+            (entry) =>
+              entry.earningType === 'Shop Introduction' &&
+              normalizePartnerCode(entry.recipientPartnerCode) === expectedSi,
+          );
+          rebuildCommissions = rebuildCommissions || !hasSi;
+        } else {
+          const hasSi = order.commissions.some(
+            (entry) => entry.earningType === 'Shop Introduction',
+          );
+          rebuildCommissions = rebuildCommissions || hasSi;
+        }
         if (expectedPd) {
           const hasPd = order.commissions.some(
             (entry) =>
@@ -2458,6 +2527,11 @@ export class OrdersService implements OnModuleInit {
               normalizePartnerCode(entry.recipientPartnerCode) === expectedOs,
           );
           rebuildCommissions = rebuildCommissions || !hasOs;
+        } else {
+          const hasOs = order.commissions.some(
+            (entry) => entry.earningType === 'Operational Support',
+          );
+          rebuildCommissions = rebuildCommissions || hasOs;
         }
       }
 
@@ -2493,7 +2567,7 @@ export class OrdersService implements OnModuleInit {
         // stamps on SHIPPED/PAID — that caused Shop Intro 10% → 20% flips when
         // shops still carried the legacy unlinked 20% stamp.
         const monetary = resolveCommissionOrderAmounts(order);
-        this.normalizeLegacyShopIntroRateOnOrder(order, monetary);
+        this.normalizeLegacyShopIntroRateOnOrder(order, monetary, shopUser);
         const commissionStatus = 'pending' as const;
         order.commissions = order.commissions.map((entry) => ({
           ...entry,
@@ -2507,9 +2581,12 @@ export class OrdersService implements OnModuleInit {
 
     const monetary = resolveCommissionOrderAmounts(order);
 
-    const shopIntroduction = await this.resolveCommissionRecipient(
+    const introPartnerCode = normalizePartnerCode(
       shopUser.shopIntroductionRepresentativeCode,
     );
+    const shopIntroduction = introPartnerCode
+      ? await this.resolveCommissionRecipient(introPartnerCode)
+      : null;
 
     const partnerDevelopment = livePartnerIntroCode
       ? await this.resolveCommissionRecipient(livePartnerIntroCode)
@@ -2608,6 +2685,87 @@ export class OrdersService implements OnModuleInit {
         `[Commission] Order ${order.orderNumber}: ${entries.length} recipient(s), status=${commissionStatus}, base=${monetary.orderAmount} ${monetary.orderCurrency} @ ${monetary.exchangeRateToUsd} → USD`,
       );
     }
+  }
+
+  /**
+   * Rebuild commissions on existing shop orders after Admin links a Representative
+   * (Operational Support / network parent). Ensures past orders pick up the
+   * current shop earning assignments and syncs payout records for shipped orders.
+   */
+  async recalculateCommissionsForShop(shopUserId: string): Promise<{
+    processed: number;
+    updated: number;
+  }> {
+    const shop = await this.usersService.findOne(shopUserId);
+    if (!shop || shop.role !== UserRole.CERTIFIED_SHOP) {
+      return { processed: 0, updated: 0 };
+    }
+
+    const orders = await this.orderModel
+      .find({
+        user: shopUserId,
+        status: {
+          $in: [
+            OrderStatus.PENDING,
+            OrderStatus.PAID,
+            OrderStatus.SHIPPED,
+            OrderStatus.DELIVERED,
+          ],
+        },
+        ...registrationOrderExclusionFilter(),
+      } as any)
+      .exec();
+
+    let updated = 0;
+    for (const order of orders) {
+      const before = JSON.stringify(order.commissions || []);
+
+      // Force a full rebuild so admin rate / rep assignment changes apply to past orders.
+      if (order.commissions?.length) {
+        order.commissions = [];
+        order.markModified('commissions');
+        await order.save();
+      }
+
+      await this.applyOrderCommissions(
+        order._id.toString(),
+        order.status as OrderStatus,
+      );
+
+      const refreshed = await this.orderModel.findById(order._id).exec();
+      if (!refreshed) continue;
+
+      const after = JSON.stringify(refreshed.commissions || []);
+      if (before !== after) {
+        updated += 1;
+      }
+
+      if (
+        refreshed.status === OrderStatus.SHIPPED ||
+        refreshed.status === OrderStatus.DELIVERED
+      ) {
+        const shippedAt =
+          refreshed.shippedAt ||
+          (refreshed as Order & { updatedAt?: Date }).updatedAt ||
+          new Date();
+        await this.commissionsService
+          .syncFromShippedOrder(refreshed._id.toString(), shippedAt)
+          .catch((err) =>
+            this.logger.error(
+              `Failed to sync commission records after shop recalc for order ${refreshed.orderNumber}`,
+              err,
+            ),
+          );
+      }
+    }
+
+    if (orders.length > 0) {
+      this.logger.log(
+        `[Commission] Shop ${shopUserId}: recalculated ${orders.length} order(s), ${updated} changed`,
+      );
+    }
+
+    return { processed: orders.length, updated };
   }
 
   /** Queue Stripe→Wise transfer using commissions already saved on the order. */
@@ -2951,9 +3109,9 @@ export class OrdersService implements OnModuleInit {
 
     const shopSi = shopUser.shopIntroductionFirstOrderRatePercent;
 
-    // Legacy unlinked SI default was 20% — treat as current default.
+    // Honor explicit per-shop Introduction Partner % (including 20% admin overrides).
     const shopIntroductionRate =
-      shopSi != null && !Number.isNaN(Number(shopSi)) && Number(shopSi) !== 20
+      shopSi != null && !Number.isNaN(Number(shopSi))
         ? Math.max(0, Math.min(100, Number(shopSi)))
         : userSi;
 
@@ -2978,8 +3136,17 @@ export class OrdersService implements OnModuleInit {
   private normalizeLegacyShopIntroRateOnOrder(
     order: any,
     monetary: { convertedUsdAmount: number },
+    shopUser?: { shopIntroductionFirstOrderRatePercent?: number | null },
   ): boolean {
     if (!order?.commissions?.length) return false;
+
+    // When Admin set a per-shop Introduction Partner %, never auto-downgrade 20→10.
+    if (
+      shopUser?.shopIntroductionFirstOrderRatePercent != null &&
+      !Number.isNaN(Number(shopUser.shopIntroductionFirstOrderRatePercent))
+    ) {
+      return false;
+    }
 
     const foSiPercent = getDefaultFirstOrderCommissionRates().shopIntroductionRate;
     const foSiAmount = roundMoney(
@@ -3384,6 +3551,9 @@ export class OrdersService implements OnModuleInit {
     if (status === OrderStatus.PAID && oldStatus !== OrderStatus.PAID) {
       await this.recordCouponUsageIfApplicable(updatedOrder.couponCode);
       await this.deductProductInventoryForOrder(updatedOrder._id);
+      // Full payment received — clear remaining balance tracking.
+      updatedOrder.amountPaid = updatedOrder.totalAmount;
+      await updatedOrder.save();
     }
 
     return actor
@@ -3419,7 +3589,7 @@ export class OrdersService implements OnModuleInit {
     }
     if (actor.role !== UserRole.PARTNER) {
       throw new ForbiddenException(
-        'Only Hub and Admin can add shipping and send invoices for order requests',
+        'Only Hub and Admin can manage shipping, invoices, and item updates for orders',
       );
     }
 
@@ -3475,7 +3645,8 @@ export class OrdersService implements OnModuleInit {
     actor: UserDocument,
   ) {
     const plain = (order as any).toObject ? (order as any).toObject() : order;
-    return this.withOrderManagementFlag(plain, actor);
+    const enriched = await this.enrichOrderDetails(plain);
+    return this.withOrderManagementFlag(enriched, actor);
   }
 
   async setOrderRequestShipping(
@@ -3521,17 +3692,29 @@ export class OrdersService implements OnModuleInit {
 
     await this.assertHubOrAdminCanManageOrderRequest(order, actor);
 
-    if (!isOrderRequest(order)) {
+    if (isRegistrationOrder(order)) {
+      throw new BadRequestException('Cannot send invoice for registration orders');
+    }
+
+    const status = String(order.status || '').toUpperCase();
+    if (
+      status === OrderStatus.SHIPPED ||
+      status === OrderStatus.DELIVERED ||
+      status === OrderStatus.CANCELLED ||
+      status === OrderStatus.FAILED
+    ) {
       throw new BadRequestException(
-        'Invoices can only be sent for order requests',
+        'Invoices cannot be sent for shipped, delivered, cancelled, or failed orders',
       );
     }
-    if (!this.isUnpaidOrderRequestStatus(order.status)) {
-      throw new BadRequestException(
-        'Invoices can only be sent for unpaid order requests',
-      );
-    }
-    if (!order.shippingSetAt) {
+
+    const amountPaid = getOrderAmountPaid(order);
+    const remaining = getOrderRemainingAmount(order);
+    const isUnpaidRequest =
+      isOrderRequest(order) && this.isUnpaidOrderRequestStatus(order.status);
+
+    // Original unpaid request flow still requires shipping to be set first.
+    if (isUnpaidRequest && amountPaid <= 0 && !order.shippingSetAt) {
       throw new BadRequestException(
         'Add shipping charges before sending the invoice',
       );
@@ -3557,12 +3740,157 @@ export class OrdersService implements OnModuleInit {
       order,
       userDoc,
       invoiceBuffer,
-      { payUrl: viewUrl },
+      {
+        payUrl: viewUrl,
+        amountPaid,
+        remainingAmount: remaining,
+      },
     );
 
     order.invoiceSentAt = new Date();
     const updatedOrder = await order.save();
     return this.returnManagedOrder(updatedOrder, actor);
+  }
+
+  /**
+   * Hub/Admin appends additional items onto the same existing order/invoice.
+   * Does not create a new order. Shipping fee is unchanged.
+   */
+  async appendItemsToExistingOrder(
+    orderId: string,
+    dto: AddOrderItemsDto,
+    actor: UserDocument,
+  ) {
+    const order = await this.orderModel.findById(orderId).populate('user');
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    await this.assertHubOrAdminCanManageOrderRequest(order, actor);
+
+    if (!isOrderModifiable(order)) {
+      throw new BadRequestException(
+        'This order cannot be modified. Items can only be added before the order is marked as shipped.',
+      );
+    }
+
+    const { items: rawItems } = dto;
+    if (!rawItems?.length) {
+      throw new BadRequestException('At least one item is required');
+    }
+
+    const newItems = rawItems.map((item) => ({
+      product: item.product,
+      name: item.name,
+      size: item.size,
+      quantity: Math.max(1, Number(item.quantity) || 1),
+      orderType: normalizeOrderItemType(item.orderType),
+      price: Number(item.price) || 0,
+      image: item.image || '',
+    }));
+
+    const shopUser =
+      typeof order.user === 'object' && order.user !== null
+        ? (order.user as any)
+        : await this.usersService.findOne(String(order.user));
+
+    await this.productInventoryService.assertStockAvailableForOrder({
+      items: newItems,
+      user: shopUser as any,
+      actingParentPartnerCode: order.actingParentPartnerCode,
+    });
+
+    const previousTotal = Number(order.totalAmount) || 0;
+    const wasPaid = String(order.status).toUpperCase() === OrderStatus.PAID;
+    const existingPaid = getOrderAmountPaid(order);
+
+    // Lock already-collected amount when amending a paid order.
+    if (wasPaid && existingPaid <= 0) {
+      order.amountPaid = previousTotal;
+    } else if (existingPaid > 0) {
+      order.amountPaid = existingPaid;
+    }
+
+    // Merge into same invoice items (increase qty when product+size+type match).
+    const mergedItems = [...(order.items || [])];
+    for (const incoming of newItems) {
+      const matchIdx = mergedItems.findIndex(
+        (existing) =>
+          String(existing.product) === String(incoming.product) &&
+          String(existing.size) === String(incoming.size) &&
+          normalizeOrderItemType(existing.orderType) === incoming.orderType,
+      );
+      if (matchIdx >= 0) {
+        mergedItems[matchIdx].quantity =
+          Number(mergedItems[matchIdx].quantity || 0) + incoming.quantity;
+      } else {
+        mergedItems.push(incoming as any);
+      }
+    }
+    order.items = mergedItems as any;
+
+    const itemsSubtotal = getItemsSubtotal(order.items);
+    const shippingFee = Number(order.shippingFee) || 0;
+    const discount = Number(order.discount) || 0;
+    const newTotal = Math.max(0, itemsSubtotal + shippingFee - discount);
+    Object.assign(order, this.buildAmountUpdateWithLockedRate(order, newTotal));
+
+    const remaining = getOrderRemainingAmount(order);
+    if (remaining > 0.01 && wasPaid) {
+      const isUsa = this.isUsaDestinationOrder(
+        order.shippingAddress?.country,
+        shopUser?.country,
+      );
+      order.status = isUsa ? OrderStatus.PENDING_PAYMENT : OrderStatus.PENDING;
+    }
+
+    const updatedOrder = await order.save();
+
+    try {
+      await this.productInventoryService.deductForOrder({
+        ...((updatedOrder as any).toObject
+          ? (updatedOrder as any).toObject()
+          : updatedOrder),
+        items: newItems,
+        user: shopUser,
+      } as any);
+    } catch (err) {
+      this.logger.error(
+        `Failed to deduct inventory for appended items on order ${orderId}`,
+        err as Error,
+      );
+    }
+
+    await this.applyOrderCommissions(
+      updatedOrder._id.toString(),
+      updatedOrder.status as OrderStatus,
+    ).catch((err) =>
+      this.logger.error(
+        `Failed to refresh commissions after append on ${orderId}`,
+        err as Error,
+      ),
+    );
+
+    try {
+      const notification = await this.notificationsService.create({
+        type: NotificationType.ORDER_PLACED,
+        title: 'Order Updated – Items Added',
+        message: `Additional items were added to order ${updatedOrder.orderNumber}.`,
+        metadata: {
+          orderId: updatedOrder._id,
+          orderNumber: updatedOrder.orderNumber,
+        },
+        user: String(shopUser?._id || order.user),
+        triggeredBy: String(actor._id),
+        link: `/orders/${updatedOrder._id}`,
+      });
+      this.notificationsGateway.broadcastNotification(notification);
+    } catch (notifErr) {
+      console.error('Failed to create notification for order append:', notifErr);
+    }
+
+    const refreshed = await this.orderModel.findById(updatedOrder._id).populate('user');
+    return this.returnManagedOrder(refreshed as OrderDocument, actor);
   }
 
   async createOrderRequest(userId: string, createOrderDto: CreateOrderDto) {
@@ -3693,232 +4021,6 @@ export class OrdersService implements OnModuleInit {
       }
       throw new BadRequestException(`Failed to create order request: ${error.message}`);
     }
-  }
-
-  async createAddOnOrder(
-    userId: string,
-    parentOrderId: string,
-    dto: AddOrderItemsDto,
-    role?: string,
-  ) {
-    const parentOrder = await this.orderModel.findById(parentOrderId);
-    if (!parentOrder) {
-      throw new NotFoundException('Parent order not found');
-    }
-
-    if (String(parentOrder.user) !== String(userId)) {
-      throw new ForbiddenException(
-        'You can only add items to your own orders',
-      );
-    }
-
-    if (!isOrderModifiable(parentOrder)) {
-      throw new BadRequestException(
-        'This order cannot be modified. Only unshipped orders can receive additional items.',
-      );
-    }
-
-    const { items: rawItems, couponCode } = dto;
-    if (!rawItems?.length) {
-      throw new BadRequestException('At least one item is required');
-    }
-
-    const items = rawItems.map((item) => ({
-      ...item,
-      orderType: normalizeOrderItemType(item.orderType),
-    }));
-
-    const currentUser = await this.usersService.findOne(userId);
-    if (!currentUser) {
-      throw new NotFoundException('User not found');
-    }
-
-    const shippingAddress = parentOrder.shippingAddress;
-    const shippingCountry =
-      shippingAddress?.country || currentUser.country || '';
-    const isUsaOrder = this.isUsaDestinationOrder(
-      shippingAddress?.country,
-      currentUser.country,
-    );
-    const orderCurrency = await this.getCurrencyForUser(currentUser);
-
-    const itemsSubtotal = getItemsSubtotal(items);
-    const shippingFee = 0;
-
-    let discount = 0;
-    let appliedCouponCode: string | undefined;
-    if (couponCode?.trim()) {
-      const validation = await this.couponsService.validateForCheckout(
-        couponCode,
-        itemsSubtotal,
-      );
-      discount = validation.discountAmount;
-      appliedCouponCode = validation.code;
-    }
-
-    const orderTotal = Math.max(0, itemsSubtotal + shippingFee - discount);
-
-    await this.productInventoryService.assertStockAvailableForOrder({
-      items,
-      user: currentUser as any,
-      actingParentPartnerCode:
-        parentOrder.actingParentPartnerCode ||
-        (await this.actingParentStampForUser(userId)).actingParentPartnerCode,
-    });
-
-    const orderFlow: 'purchase' | 'request' = isUsaOrder ? 'purchase' : 'request';
-    const initialStatus = isUsaOrder
-      ? OrderStatus.PENDING_PAYMENT
-      : OrderStatus.PENDING;
-
-    let order: OrderDocument | undefined;
-    let retries = 3;
-    while (retries > 0) {
-      try {
-        const shippingCountry =
-          shippingAddress?.country || currentUser.country || '';
-        const orderNumber = await this.generateShopOrderNumber(
-          shippingCountry,
-          orderFlow,
-        );
-        const monetary = await this.buildMonetaryFieldsForNewOrder(
-          orderTotal,
-          orderCurrency,
-        );
-        const newOrder = new this.orderModel({
-          user: userId,
-          items,
-          shippingFee,
-          shippingAddress,
-          status: initialStatus,
-          orderNumber,
-          orderFlow,
-          orderKind: 'add_on',
-          parentOrderId: parentOrder._id,
-          paymentReminderCount: 0,
-          discount,
-          couponCode: appliedCouponCode,
-          actingParentPartnerCode: parentOrder.actingParentPartnerCode,
-          ...monetary,
-        });
-        order = await newOrder.save();
-        break;
-      } catch (saveError: any) {
-        if (saveError.code === 11000 && retries > 1) {
-          retries--;
-          continue;
-        }
-        throw new BadRequestException(
-          `Failed to create add-on order: ${saveError.message}`,
-        );
-      }
-    }
-
-    if (!order) {
-      throw new BadRequestException('Failed to create add-on order');
-    }
-
-    if (order.status === OrderStatus.PENDING) {
-      await this.applyOrderCommissions(
-        order._id.toString(),
-        OrderStatus.PENDING,
-      );
-      await this.deductProductInventoryForOrder(order._id);
-    }
-
-    if (isUsaOrder) {
-      const stripeInstance = this.getStripeForOrder(
-        shippingAddress?.country,
-        currentUser.country,
-      );
-      if (!stripeInstance) {
-        throw new BadRequestException('Stripe is not configured on the server.');
-      }
-
-      try {
-        const session = await this.createStripeCheckoutForOrder(
-          order,
-          currentUser,
-          role,
-          stripeInstance,
-          orderCurrency,
-        );
-
-        const payUrl = this.getOrderPayUrl(
-          order._id.toString(),
-          currentUser?.role || role,
-        );
-        await this.mailService
-          .sendPendingPaymentReminder(order, currentUser, payUrl, false)
-          .catch((err) =>
-            console.error(
-              'Failed to send pending payment email for add-on order',
-              err,
-            ),
-          );
-
-        if (!session.url) {
-          throw new BadRequestException(
-            'Failed to create Stripe checkout session.',
-          );
-        }
-
-        return {
-          orderId: order._id,
-          orderNumber: order.orderNumber,
-          url: session.url,
-        };
-      } catch (error: any) {
-        console.error('Add-on Stripe session creation error:', error);
-        throw new BadRequestException(
-          `Stripe session creation failed: ${error.message}`,
-        );
-      }
-    }
-
-    try {
-      const notification = await this.notificationsService.create({
-        type: NotificationType.ORDER_PLACED,
-        title: 'Additional Items Request',
-        message: `Additional items request ${order.orderNumber} for order ${parentOrder.orderNumber} has been submitted.`,
-        metadata: {
-          orderId: order._id,
-          orderNumber: order.orderNumber,
-          parentOrderId: parentOrder._id,
-          parentOrderNumber: parentOrder.orderNumber,
-        },
-        user: userId,
-        triggeredBy: userId,
-        link: `/orders/${order._id}`,
-      });
-      this.notificationsGateway.broadcastNotification(notification);
-    } catch (notifErr) {
-      console.error(
-        'Failed to create notification for add-on order request:',
-        notifErr,
-      );
-    }
-
-    await this.mailService
-      .sendNewOrderRequestNotification(order, currentUser)
-      .catch((err) =>
-        console.error('Failed to send add-on order request email to sales', err),
-      );
-
-    await this.mailService
-      .sendOrderRequestCustomerConfirmation(order, currentUser)
-      .catch((err) =>
-        console.error(
-          'Failed to send add-on order confirmation email to customer',
-          err,
-        ),
-      );
-
-    return {
-      orderId: order._id,
-      orderNumber: order.orderNumber,
-      order,
-    };
   }
 
   private assertTestOrdersAllowed(): void {
@@ -4227,21 +4329,42 @@ export class OrdersService implements OnModuleInit {
     stripeInstance: Stripe,
     orderCurrency: string,
   ): Promise<Stripe.Checkout.Session> {
-    const items = order.items;
-    const itemsSubtotal = getItemsSubtotal(items);
-    const discount = order.discount ?? 0;
-    const discountedSubtotal = Math.max(0, itemsSubtotal - discount);
-    const priceRatio =
-      itemsSubtotal > 0 ? discountedSubtotal / itemsSubtotal : 1;
-    const shippingFee =
-      order.shippingFee != null && order.shippingFee >= 0
-        ? order.shippingFee
-        : Math.max(0, order.totalAmount - itemsSubtotal + discount);
-    const shippingCountry =
-      order.shippingAddress?.country || currentUser?.country || '';
+    const amountPaid = getOrderAmountPaid(order);
+    const remaining = getOrderRemainingAmount(order);
+    const chargeRemainingOnly = amountPaid > 0.01 && remaining > 0.01;
 
-    const line_items: Stripe.Checkout.SessionCreateParams.LineItem[] = items.map(
-      (item) => {
+    let line_items: Stripe.Checkout.SessionCreateParams.LineItem[];
+
+    if (chargeRemainingOnly) {
+      // Amended paid order — charge only the outstanding balance.
+      line_items = [
+        {
+          price_data: {
+            currency: orderCurrency,
+            product_data: {
+              name: `Balance due – Order ${order.orderNumber}`,
+              description: `Additional items (already paid: ${amountPaid.toFixed(2)})`,
+            },
+            unit_amount: Math.round(remaining * 100),
+          },
+          quantity: 1,
+        },
+      ];
+    } else {
+      const items = order.items;
+      const itemsSubtotal = getItemsSubtotal(items);
+      const discount = order.discount ?? 0;
+      const discountedSubtotal = Math.max(0, itemsSubtotal - discount);
+      const priceRatio =
+        itemsSubtotal > 0 ? discountedSubtotal / itemsSubtotal : 1;
+      const shippingFee =
+        order.shippingFee != null && order.shippingFee >= 0
+          ? order.shippingFee
+          : Math.max(0, order.totalAmount - itemsSubtotal + discount);
+      const shippingCountry =
+        order.shippingAddress?.country || currentUser?.country || '';
+
+      line_items = items.map((item) => {
         const images: string[] = [];
         if (item.image && typeof item.image === 'string' && item.image.startsWith('http')) {
           images.push(item.image);
@@ -4264,24 +4387,24 @@ export class OrdersService implements OnModuleInit {
           },
           quantity: Math.max(1, Number(item.quantity || 1)),
         };
-      },
-    );
-
-    if (shippingFee > 0) {
-      const shippingRegion = getShippingRegion(
-        shippingCountry.toLowerCase().trim(),
-      );
-      line_items.push({
-        price_data: {
-          currency: orderCurrency,
-          product_data: {
-            name: 'Shipping',
-            description: `Standard shipping for orders under ${shippingRegion === 'EU' ? '€' : '$'}500`,
-          },
-          unit_amount: Math.round(shippingFee * 100),
-        },
-        quantity: 1,
       });
+
+      if (shippingFee > 0) {
+        const shippingRegion = getShippingRegion(
+          shippingCountry.toLowerCase().trim(),
+        );
+        line_items.push({
+          price_data: {
+            currency: orderCurrency,
+            product_data: {
+              name: 'Shipping',
+              description: `Standard shipping for orders under ${shippingRegion === 'EU' ? '€' : '$'}500`,
+            },
+            unit_amount: Math.round(shippingFee * 100),
+          },
+          quantity: 1,
+        });
+      }
     }
 
     const baseUrl = this.getFrontendBaseUrl();
@@ -4293,7 +4416,7 @@ export class OrdersService implements OnModuleInit {
 
     const session = await stripeInstance.checkout.sessions.create({
       payment_method_types: ['card'],
-      allow_promotion_codes: true,
+      allow_promotion_codes: !chargeRemainingOnly,
       line_items,
       mode: 'payment',
       success_url: `${baseUrl}${dashboardPath}?success=true&order_id=${order._id}`,
@@ -4364,5 +4487,218 @@ export class OrdersService implements OnModuleInit {
       ),
     );
     return formatRegistrationOrderNumber(nextNumber);
+  }
+
+  private itemLineKey(item: {
+    product?: string;
+    size?: string;
+    orderType?: string;
+  }): string {
+    return `${item.product || ''}|${item.size || ''}|${item.orderType || 'unit'}`;
+  }
+
+  private validateDuplicateInvoiceItems(
+    orderItems: { product: string; size: string; quantity: number; orderType?: string }[],
+    dtoItems: CreateDuplicateInvoiceDto['items'],
+  ) {
+    if (!dtoItems?.length) {
+      throw new BadRequestException('At least one item is required');
+    }
+    if (dtoItems.length !== orderItems.length) {
+      throw new BadRequestException(
+        'Duplicate invoice must include the same items as the original order',
+      );
+    }
+
+    dtoItems.forEach((item, index) => {
+      const original = orderItems[index];
+      if (!original) {
+        throw new BadRequestException('Item mismatch with original order');
+      }
+      if (this.itemLineKey(item) !== this.itemLineKey(original)) {
+        throw new BadRequestException(
+          'Items must match the original order (only prices may be changed)',
+        );
+      }
+      if (Number(item.quantity) !== Number(original.quantity)) {
+        throw new BadRequestException(
+          'Item quantities must match the original order',
+        );
+      }
+      const price = Number(item.price);
+      if (!Number.isFinite(price) || price < 0) {
+        throw new BadRequestException('Enter a valid price for each item');
+      }
+    });
+  }
+
+  private buildDuplicateInvoiceSnapshot(
+    order: OrderDocument,
+    duplicate: DuplicateInvoiceDocument,
+  ) {
+    return {
+      ...(order.toObject ? order.toObject() : order),
+      items: duplicate.items,
+      totalAmount: duplicate.totalAmount,
+      shippingFee: duplicate.shippingFee,
+      discount: duplicate.discount,
+      orderNumber: duplicate.invoiceNumber,
+    };
+  }
+
+  async getDuplicateInvoicesForOrder(
+    orderId: string,
+    actor: UserDocument,
+  ) {
+    const order = await this.orderModel.findById(orderId);
+    if (!order) throw new NotFoundException('Order not found');
+    await this.assertHubOrAdminCanManageOrderRequest(order, actor);
+
+    return this.duplicateInvoiceModel
+      .find({ orderId: order._id })
+      .sort({ sequence: 1 })
+      .lean()
+      .exec();
+  }
+
+  async getDuplicateInvoiceById(invoiceId: string) {
+    const duplicate = await this.duplicateInvoiceModel
+      .findById(invoiceId)
+      .populate({
+        path: 'orderId',
+        populate: { path: 'user' },
+      })
+      .exec();
+    if (!duplicate) {
+      throw new NotFoundException('Duplicate invoice not found');
+    }
+    return duplicate;
+  }
+
+  async createAndSendDuplicateInvoice(
+    orderId: string,
+    dto: CreateDuplicateInvoiceDto,
+    actor: UserDocument,
+  ) {
+    const order = await this.orderModel.findById(orderId).populate('user');
+    if (!order) throw new NotFoundException('Order not found');
+
+    await this.assertHubOrAdminCanManageOrderRequest(order, actor);
+
+    if (isRegistrationOrder(order)) {
+      throw new BadRequestException(
+        'Cannot create duplicate invoice for registration orders',
+      );
+    }
+
+    const status = String(order.status || '').toUpperCase();
+    if (
+      status === OrderStatus.SHIPPED ||
+      status === OrderStatus.DELIVERED ||
+      status === OrderStatus.CANCELLED ||
+      status === OrderStatus.FAILED
+    ) {
+      throw new BadRequestException(
+        'Duplicate invoices cannot be created for shipped, delivered, cancelled, or failed orders',
+      );
+    }
+
+    this.validateDuplicateInvoiceItems(order.items, dto.items);
+
+    const items = dto.items.map((item) => ({
+      product: item.product,
+      name: item.name,
+      size: item.size,
+      quantity: Math.max(1, Number(item.quantity) || 1),
+      orderType: normalizeOrderItemType(item.orderType),
+      price: roundMoney(Number(item.price) || 0),
+      image: item.image || '',
+    }));
+
+    const discount = roundMoney(order.discount ?? 0);
+    const shippingFee =
+      dto.shippingFee != null
+        ? roundMoney(Number(dto.shippingFee))
+        : roundMoney(order.shippingFee ?? 0);
+
+    if (!Number.isFinite(shippingFee) || shippingFee < 0) {
+      throw new BadRequestException('Enter a valid shipping amount');
+    }
+
+    const subtotal = getItemsSubtotal(items);
+    const totalAmount = roundMoney(
+      Math.max(0, subtotal + shippingFee - discount),
+    );
+
+    const existingCount = await this.duplicateInvoiceModel.countDocuments({
+      orderId: order._id,
+    });
+    const sequence = existingCount + 1;
+    const invoiceNumber = `${order.orderNumber}-D${sequence}`;
+
+    const duplicate = await this.duplicateInvoiceModel.create({
+      orderId: order._id as Types.ObjectId,
+      invoiceNumber,
+      sequence,
+      items,
+      totalAmount,
+      shippingFee,
+      discount,
+      currency: order.currency || 'USD',
+      shippingAddress: order.shippingAddress,
+      createdBy: actor._id as Types.ObjectId,
+    });
+
+    const userDoc =
+      typeof order.user === 'object' && order.user !== null
+        ? (order.user as any)
+        : await this.usersService.findOne(String(order.user));
+
+    const to = this.mailService.resolveCustomerEmail(order, userDoc);
+    if (!to) {
+      throw new BadRequestException(
+        'This order has no customer email to send the invoice to',
+      );
+    }
+
+    const originalBuffer = await this.generateInvoicePdf(order);
+    const duplicateSnapshot = this.buildDuplicateInvoiceSnapshot(
+      order,
+      duplicate,
+    );
+    const duplicateBuffer = await this.pdfService.generateOrderDetails(
+      duplicateSnapshot as any,
+      {
+        headerTitle: 'Duplicate Invoice',
+        displayOrderNumber: duplicate.invoiceNumber,
+        referenceOrderNumber: order.orderNumber,
+      },
+    );
+
+    const amountPaid = getOrderAmountPaid(order);
+    const remaining = getOrderRemainingAmount(order);
+    const viewUrl = this.getOrderPayUrl(String(order._id), userDoc?.role);
+
+    await this.mailService.sendDuplicateInvoicesEmail(
+      to,
+      order,
+      userDoc,
+      originalBuffer,
+      duplicateBuffer,
+      duplicate.invoiceNumber,
+      {
+        payUrl: viewUrl,
+        amountPaid,
+        remainingAmount: remaining,
+      },
+    );
+
+    duplicate.sentAt = new Date();
+    await duplicate.save();
+
+    return {
+      duplicateInvoice: duplicate.toObject(),
+      order: await this.returnManagedOrder(order, actor),
+    };
   }
 }

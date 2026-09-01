@@ -50,4 +50,38 @@ export class PdfController {
 
     res.end(buffer);
   }
+
+  @Get('duplicate-invoice/:invoiceId')
+  @Roles(UserRole.ADMIN)
+  async downloadDuplicateInvoice(
+    @Param('invoiceId') invoiceId: string,
+    @Res() res: Response,
+  ) {
+    const duplicate = await this.ordersService.getDuplicateInvoiceById(invoiceId);
+    const order = duplicate.orderId as any;
+    if (!order) throw new NotFoundException('Order not found');
+
+    const snapshot = {
+      ...(order.toObject ? order.toObject() : order),
+      items: duplicate.items,
+      totalAmount: duplicate.totalAmount,
+      shippingFee: duplicate.shippingFee,
+      discount: duplicate.discount,
+      orderNumber: duplicate.invoiceNumber,
+    };
+
+    const buffer = await this.pdfService.generateOrderDetails(snapshot, {
+      headerTitle: 'Duplicate Invoice',
+      displayOrderNumber: duplicate.invoiceNumber,
+      referenceOrderNumber: order.orderNumber,
+    });
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename=Invoice_${duplicate.invoiceNumber}.pdf`,
+      'Content-Length': buffer.length,
+    });
+
+    res.end(buffer);
+  }
 }

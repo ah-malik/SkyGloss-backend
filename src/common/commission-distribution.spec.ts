@@ -20,11 +20,12 @@ describe('resolveCommissionOrderAmounts', () => {
       exchangeRateAtOrderTime: 0.0035,
       baseCurrencyAmount: 35,
     });
+    // 10000 − 3.5% = 9650; USD = 9650 × 0.0035 = 33.775 → 33.78
     expect(result).toEqual({
-      orderAmount: 10000,
+      orderAmount: 9650,
       orderCurrency: 'PKR',
       exchangeRateToUsd: 0.0035,
-      convertedUsdAmount: 35,
+      convertedUsdAmount: 33.78,
     });
   });
 
@@ -33,25 +34,27 @@ describe('resolveCommissionOrderAmounts', () => {
       totalAmount: 100,
       currency: 'USD',
     });
+    // 100 − 3.5% = 96.5
     expect(result).toEqual({
-      orderAmount: 100,
+      orderAmount: 96.5,
       orderCurrency: 'USD',
       exchangeRateToUsd: 1,
-      convertedUsdAmount: 100,
+      convertedUsdAmount: 96.5,
     });
   });
 
-  it('excludes shipping fee from commission base', () => {
+  it('excludes shipping fee then deducts 3.5% from remaining', () => {
+    // $125 − $25 shipping = $100; $100 − 3.5% = $96.50
     const result = resolveCommissionOrderAmounts({
-      totalAmount: 120,
-      shippingFee: 20,
+      totalAmount: 125,
+      shippingFee: 25,
       currency: 'USD',
     });
     expect(result).toEqual({
-      orderAmount: 100,
+      orderAmount: 96.5,
       orderCurrency: 'USD',
       exchangeRateToUsd: 1,
-      convertedUsdAmount: 100,
+      convertedUsdAmount: 96.5,
     });
   });
 
@@ -62,8 +65,9 @@ describe('resolveCommissionOrderAmounts', () => {
       originalCurrency: 'EUR',
       exchangeRateAtOrderTime: 1.1,
     });
-    expect(result.orderAmount).toBe(100);
-    expect(result.convertedUsdAmount).toBe(110);
+    // 100 − 3.5% = 96.5; USD = 96.5 × 1.1 = 106.15
+    expect(result.orderAmount).toBe(96.5);
+    expect(result.convertedUsdAmount).toBe(106.15);
   });
 });
 
@@ -173,6 +177,28 @@ describe('calculateRepresentativeCommissionEntries (10/5/10 of order $)', () => 
       recipientPartnerCode: 'REP0002',
       percentage: 10,
       amount: 10,
+    });
+  });
+
+  it('pays Operational Support only when Shop Introduction partner is unassigned', () => {
+    const entries = calculateRepresentativeCommissionEntries({
+      shopId: 'shop-os-only',
+      assignments: {},
+      recipients: {
+        shopIntroduction: null,
+        partnerDevelopment: null,
+        operationalSupport: rep2,
+      },
+      monetary: monetary(100),
+      operationalSupportRatePercent: 20,
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      recipientPartnerCode: 'REP0002',
+      earningType: 'Operational Support',
+      percentage: 20,
+      amount: 20,
     });
   });
 
