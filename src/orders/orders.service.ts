@@ -5149,6 +5149,7 @@ export class OrdersService implements OnModuleInit {
     }
 
     try {
+      const originalBuffer = await this.generateInvoicePdf(order);
       const duplicateSnapshot = this.buildDuplicateInvoiceSnapshot(
         order,
         duplicate,
@@ -5161,7 +5162,25 @@ export class OrdersService implements OnModuleInit {
         },
       );
 
+      const amountPaid = getOrderAmountPaid(order);
+      const remaining = getOrderRemainingAmount(order);
+      const originalPayUrl =
+        remaining > 0.01
+          ? this.getOrderDirectPayUrl(String(order._id))
+          : this.getOrderPayUrl(String(order._id), userDoc?.role);
       const viewUrl = this.getOrderPayUrl(String(order._id), userDoc?.role);
+
+      await this.mailService.sendOrderInvoiceEmail(
+        to,
+        order,
+        userDoc,
+        originalBuffer,
+        {
+          payUrl: originalPayUrl,
+          amountPaid,
+          remainingAmount: remaining,
+        },
+      );
 
       await this.mailService.sendOrderInvoiceEmail(
         to,
