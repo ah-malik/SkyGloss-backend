@@ -150,20 +150,39 @@ export class StripeWisePayoutsService implements OnModuleInit {
     const destCurrency = normalizeCurrency(destination.currency) || 'USD';
     const currency = isValidCurrency(destCurrency) ? destCurrency : 'USD';
 
-    const [global, usa, wise, globalFa, usaFa, globalOutbound, usaOutbound, paymentBreakdown] =
-      await Promise.all([
+    const [
+      global,
+      usa,
+      europe,
+      wise,
+      globalFa,
+      usaFa,
+      europeFa,
+      globalOutbound,
+      usaOutbound,
+      europeOutbound,
+      paymentBreakdown,
+    ] = await Promise.all([
       this.stripeAccounts.inspect('global'),
       this.stripeAccounts.inspect('usa'),
+      this.stripeAccounts.inspect('europe'),
       this.safeWiseSummary(currency),
       this.moneyManagement.listFinancialAccounts('global'),
       this.moneyManagement.listFinancialAccounts('usa'),
+      this.moneyManagement.listFinancialAccounts('europe'),
       this.moneyManagement.resolveWiseOutboundTarget('global', destination),
       this.moneyManagement.resolveWiseOutboundTarget('usa', destination),
+      this.moneyManagement.resolveWiseOutboundTarget('europe', destination),
       this.paymentBreakdown.getBreakdown(currency),
     ]);
-    const selected = selectedKey === 'usa' ? usa : global;
+    const selected =
+      selectedKey === 'europe' ? europe : selectedKey === 'usa' ? usa : global;
     const selectedOutbound =
-      selectedKey === 'usa' ? usaOutbound : globalOutbound;
+      selectedKey === 'europe'
+        ? europeOutbound
+        : selectedKey === 'usa'
+          ? usaOutbound
+          : globalOutbound;
     let destResolution = selected.configured
       ? this.stripeAccounts.resolveDestination(selected, destination)
       : { ok: false as const, error: selected.error || 'Stripe is not configured.' };
@@ -215,6 +234,14 @@ export class StripeWisePayoutsService implements OnModuleInit {
       ...(usaFa.accounts || []).map((account) => ({
         ...account,
         stripeAccountKey: 'usa' as const,
+        availableForCurrency: this.moneyManagement.availableOnAccount(
+          account,
+          currency,
+        ),
+      })),
+      ...(europeFa.accounts || []).map((account) => ({
+        ...account,
+        stripeAccountKey: 'europe' as const,
         availableForCurrency: this.moneyManagement.availableOnAccount(
           account,
           currency,
@@ -291,6 +318,7 @@ export class StripeWisePayoutsService implements OnModuleInit {
         accounts: [
           buildAccountSummary(global, globalOutbound),
           buildAccountSummary(usa, usaOutbound),
+          buildAccountSummary(europe, europeOutbound),
         ],
         available: stripeAvailable,
         availableBalances: selected.available || [],
@@ -305,7 +333,7 @@ export class StripeWisePayoutsService implements OnModuleInit {
               (selectedOutbound.ok ? null : selectedOutbound.error),
         financialAccounts,
         financialAccountsError:
-          globalFa.error || usaFa.error || null,
+          globalFa.error || usaFa.error || europeFa.error || null,
       },
       wise,
       paymentBreakdown,

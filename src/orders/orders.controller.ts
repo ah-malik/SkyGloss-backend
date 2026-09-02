@@ -6,9 +6,12 @@ import {
   Get,
   Param,
   Req,
+  Query,
+  Res,
   BadRequestException,
   Delete,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { AddOrderItemsDto } from './dto/add-order-items.dto';
@@ -126,6 +129,16 @@ export class OrdersController {
     @GetUser() user: UserDocument,
   ) {
     return this.ordersService.getDuplicateInvoicesForOrder(id, user);
+  }
+
+  @Get(':id/pay-now')
+  async payNowCheckout(
+    @Param('id') id: string,
+    @Query('token') token: string,
+    @Res() res: Response,
+  ) {
+    const url = await this.ordersService.createPaymentCheckoutRedirect(id, token);
+    return res.redirect(302, url);
   }
 
   @Get(':id')
@@ -327,6 +340,25 @@ export class OrdersController {
 
     console.log(`[USA Stripe Webhook] Payload size: ${req.rawBody.length} bytes`);
     return this.ordersService.handleUsaWebhook(sig as string, req.rawBody);
+  }
+
+  @Post('webhook-europe')
+  async handleEuropeWebhook(@Req() req: RawBodyRequest<any>) {
+    console.log('[Europe Stripe Webhook] Received request at /orders/webhook-europe');
+    const sig = req.headers['stripe-signature'];
+
+    if (!sig) {
+      console.error('[Europe Stripe Webhook] Missing stripe-signature header');
+      throw new BadRequestException('Missing stripe-signature header');
+    }
+
+    if (!req.rawBody) {
+      console.error('[Europe Stripe Webhook] CRITICAL: req.rawBody is MISSING.');
+      throw new BadRequestException('No webhook payload provided');
+    }
+
+    console.log(`[Europe Stripe Webhook] Payload size: ${req.rawBody.length} bytes`);
+    return this.ordersService.handleEuropeWebhook(sig as string, req.rawBody);
   }
 
   @Post('request')

@@ -58,8 +58,8 @@ export class UpdateStripeWiseDestinationDto {
   swiftBic?: string;
 
   @IsOptional()
-  @IsIn(['global', 'usa'])
-  stripeAccountKey?: 'global' | 'usa';
+  @IsIn(['global', 'usa', 'europe'])
+  stripeAccountKey?: 'global' | 'usa' | 'europe';
 
   @IsOptional()
   @IsBoolean()

@@ -4,6 +4,7 @@ import {
   computeSettlement,
   formatMoney,
   fromStripeAmount,
+  isEuropeShopOrder,
   isUsaShopOrder,
   last4,
   mapStripePayoutStatus,
@@ -11,6 +12,7 @@ import {
   normalizeCurrency,
   parsePositiveAmount,
   resolveShopOrderStripeAccountKey,
+  resolveStripeApiVersion,
   shouldApplyWiseReceipt,
   stripeStatusLabel,
   toStripeAmount,
@@ -121,6 +123,25 @@ describe('stripe-wise-payouts.logic', () => {
     });
   });
 
+  describe('resolveStripeApiVersion', () => {
+    it('uses the Europe Dahlia API version by default', () => {
+      expect(resolveStripeApiVersion('europe')).toBe('2026-07-29.dahlia');
+    });
+
+    it('uses STRIPE_API_VERSION for global and usa accounts', () => {
+      const getEnv = (key: string) =>
+        key === 'STRIPE_API_VERSION' ? '2025-01-27.acacia' : undefined;
+      expect(resolveStripeApiVersion('global', getEnv)).toBe('2025-01-27.acacia');
+      expect(resolveStripeApiVersion('usa', getEnv)).toBe('2025-01-27.acacia');
+    });
+
+    it('allows EUROPE_STRIPE_API_VERSION override', () => {
+      const getEnv = (key: string) =>
+        key === 'EUROPE_STRIPE_API_VERSION' ? '2026-08-01.custom' : undefined;
+      expect(resolveStripeApiVersion('europe', getEnv)).toBe('2026-08-01.custom');
+    });
+  });
+
   describe('resolveShopOrderStripeAccountKey', () => {
     it('uses USA Stripe when shipping country is United States', () => {
       expect(
@@ -129,15 +150,26 @@ describe('stripe-wise-payouts.logic', () => {
       expect(isUsaShopOrder('United States', 'United Arab Emirates')).toBe(true);
     });
 
-    it('uses Global Stripe when shipping is outside the USA', () => {
+    it('uses Global Stripe when shipping is outside the USA and Europe', () => {
       expect(
         resolveShopOrderStripeAccountKey('United Arab Emirates', 'United States'),
       ).toBe('global');
     });
 
+    it('uses Europe Stripe for supported European countries', () => {
+      expect(resolveShopOrderStripeAccountKey('Germany', 'Pakistan')).toBe(
+        'europe',
+      );
+      expect(resolveShopOrderStripeAccountKey('Netherlands', 'United States')).toBe(
+        'europe',
+      );
+      expect(isEuropeShopOrder('France', 'United States')).toBe(true);
+    });
+
     it('falls back to user country when shipping is missing', () => {
       expect(resolveShopOrderStripeAccountKey('', 'United States')).toBe('usa');
       expect(resolveShopOrderStripeAccountKey(undefined, 'USA')).toBe('usa');
+      expect(resolveShopOrderStripeAccountKey('', 'Germany')).toBe('europe');
     });
   });
 });

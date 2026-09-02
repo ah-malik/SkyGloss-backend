@@ -6,6 +6,7 @@ import {
   fromStripeAmount,
   last4,
   normalizeCurrency,
+  resolveStripeApiVersion,
   StripeAccountKey,
   unsupportedDestinationMessage,
   userFacingStripeError,
@@ -64,16 +65,16 @@ export class StripeAccountService {
   private readonly clients = new Map<StripeAccountKey, Stripe>();
 
   constructor(private readonly config: ConfigService) {
-    const apiVersion =
-      this.config.get<string>('STRIPE_API_VERSION') || '2022-11-15';
+    const getEnv = (key: string) => this.config.get<string>(key);
     const globalKey = this.config.get<string>('STRIPE_SECRET_KEY');
     const usaKey = this.config.get<string>('USA_STRIPE_SECRET_KEY');
+    const europeKey = this.config.get<string>('EUROPE_STRIPE_SECRET_KEY');
 
     if (globalKey) {
       this.clients.set(
         'global',
         new Stripe(globalKey, {
-          apiVersion: apiVersion as Stripe.LatestApiVersion,
+          apiVersion: resolveStripeApiVersion('global', getEnv) as Stripe.LatestApiVersion,
         }),
       );
     }
@@ -81,7 +82,15 @@ export class StripeAccountService {
       this.clients.set(
         'usa',
         new Stripe(usaKey, {
-          apiVersion: apiVersion as Stripe.LatestApiVersion,
+          apiVersion: resolveStripeApiVersion('usa', getEnv) as Stripe.LatestApiVersion,
+        }),
+      );
+    }
+    if (europeKey) {
+      this.clients.set(
+        'europe',
+        new Stripe(europeKey, {
+          apiVersion: resolveStripeApiVersion('europe', getEnv) as Stripe.LatestApiVersion,
         }),
       );
     }
@@ -112,7 +121,9 @@ export class StripeAccountService {
         error:
           key === 'usa'
             ? 'USA Stripe is not configured (USA_STRIPE_SECRET_KEY).'
-            : 'Stripe is not configured (STRIPE_SECRET_KEY).',
+            : key === 'europe'
+              ? 'Europe Stripe is not configured (EUROPE_STRIPE_SECRET_KEY).'
+              : 'Stripe is not configured (STRIPE_SECRET_KEY).',
       };
     }
 
@@ -278,7 +289,9 @@ export class StripeAccountService {
       throw new Error(
         params.key === 'usa'
           ? 'USA Stripe is not configured.'
-          : 'Stripe is not configured.',
+          : params.key === 'europe'
+            ? 'Europe Stripe is not configured.'
+            : 'Stripe is not configured.',
       );
     }
 
@@ -314,7 +327,9 @@ export class StripeAccountService {
       throw new Error(
         params.key === 'usa'
           ? 'USA Stripe is not configured.'
-          : 'Stripe is not configured.',
+          : params.key === 'europe'
+            ? 'Europe Stripe is not configured.'
+            : 'Stripe is not configured.',
       );
     }
 
@@ -361,6 +376,12 @@ export class StripeAccountService {
       return (
         this.config.get<string>('USA_STRIPE_WISE_PAYOUT_WEBHOOK_SECRET') ||
         this.config.get<string>('USA_STRIPE_WEBHOOK_SECRET')
+      );
+    }
+    if (key === 'europe') {
+      return (
+        this.config.get<string>('EUROPE_STRIPE_WISE_PAYOUT_WEBHOOK_SECRET') ||
+        this.config.get<string>('EUROPE_STRIPE_WEBHOOK_SECRET')
       );
     }
     return (

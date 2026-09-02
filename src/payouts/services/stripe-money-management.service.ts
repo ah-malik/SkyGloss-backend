@@ -65,6 +65,9 @@ export class StripeMoneyManagementService {
     if (key === 'usa') {
       return this.config.get<string>('USA_STRIPE_SECRET_KEY') || undefined;
     }
+    if (key === 'europe') {
+      return this.config.get<string>('EUROPE_STRIPE_SECRET_KEY') || undefined;
+    }
     return this.config.get<string>('STRIPE_SECRET_KEY') || undefined;
   }
 
@@ -83,7 +86,9 @@ export class StripeMoneyManagementService {
         error:
           key === 'usa'
             ? 'USA Stripe is not configured.'
-            : 'Stripe is not configured.',
+            : key === 'europe'
+              ? 'Europe Stripe is not configured.'
+              : 'Stripe is not configured.',
       };
     }
     try {

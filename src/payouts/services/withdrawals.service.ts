@@ -27,6 +27,7 @@ import { WITHDRAWAL_ELIGIBLE_ROLES } from '../payout-roles';
 import { isShopParentLinkRole } from '../../common/user-hierarchy';
 import { WisePayoutError, WisePayoutResult, WiseService } from './wise.service';
 import { randomUUID } from 'crypto';
+import { MailService } from '../../mail/mail.service';
 
 @Injectable()
 export class WithdrawalsService {
@@ -43,6 +44,7 @@ export class WithdrawalsService {
     private notificationsService: NotificationsService,
     private notificationsGateway: NotificationsGateway,
     private wiseService: WiseService,
+    private mailService: MailService,
   ) {}
 
   getWiseAccountMeta() {
@@ -257,6 +259,16 @@ export class WithdrawalsService {
       sourceCollection: 'WithdrawalRequest',
       snapshot: { status: initialStatus },
     });
+
+    try {
+      await this.mailService.sendWithdrawalRequestNotification(request, user);
+    } catch (err) {
+      console.error(
+        '[WithdrawalsService] Withdrawal request email failed',
+        request.requestNumber,
+        err,
+      );
+    }
 
     if (initialStatus !== WithdrawalStatus.WAITING_BANK_DETAILS) {
       await this.notifyStakeholdersOnSubmit(user, request);

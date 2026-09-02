@@ -33,16 +33,21 @@ export class TransformInterceptor<T>
     if (
       path === '/orders/webhook' ||
       path === '/orders/webhook-usa' ||
+      path === '/orders/webhook-europe' ||
+      path.includes('/pay-now') ||
       path === '/stripe/webhook' ||
       path.endsWith('/orders/webhook') ||
       path.endsWith('/orders/webhook-usa') ||
+      path.endsWith('/orders/webhook-europe') ||
       path.endsWith('/stripe/webhook') ||
       path === '/webhooks/wise' ||
       path.endsWith('/webhooks/wise') ||
       path === '/webhooks/stripe-wise-payouts' ||
       path.endsWith('/webhooks/stripe-wise-payouts') ||
       path === '/webhooks/stripe-wise-payouts-usa' ||
-      path.endsWith('/webhooks/stripe-wise-payouts-usa')
+      path.endsWith('/webhooks/stripe-wise-payouts-usa') ||
+      path === '/webhooks/stripe-wise-payouts-europe' ||
+      path.endsWith('/webhooks/stripe-wise-payouts-europe')
     ) {
       return next.handle();
     }

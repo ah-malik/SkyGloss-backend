@@ -23,7 +23,10 @@ STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
 USA_STRIPE_SECRET_KEY=
 USA_STRIPE_WEBHOOK_SECRET=
+EUROPE_STRIPE_SECRET_KEY=
+EUROPE_STRIPE_WEBHOOK_SECRET=
 STRIPE_API_VERSION=2025-01-27.acacia
+EUROPE_STRIPE_API_VERSION=2026-07-29.dahlia
 
 WISE_API_TOKEN=
 WISE_PROFILE_ID=
@@ -38,9 +41,10 @@ If you add a dedicated Stripe webhook endpoint, you can set:
 ```
 STRIPE_WISE_PAYOUT_WEBHOOK_SECRET=
 USA_STRIPE_WISE_PAYOUT_WEBHOOK_SECRET=
+EUROPE_STRIPE_WISE_PAYOUT_WEBHOOK_SECRET=
 ```
 
-If these are unset, the existing `STRIPE_WEBHOOK_SECRET` / `USA_STRIPE_WEBHOOK_SECRET` values are used.
+If these are unset, the existing `STRIPE_WEBHOOK_SECRET` / `USA_STRIPE_WEBHOOK_SECRET` / `EUROPE_STRIPE_WEBHOOK_SECRET` values are used.
 
 ### Stripe webhook endpoints to register
 
@@ -48,6 +52,7 @@ Add these URLs in the Stripe Dashboard (payout events only: `payout.created`, `p
 
 - Global: `https://<backend-host>/webhooks/stripe-wise-payouts`
 - USA: `https://<backend-host>/webhooks/stripe-wise-payouts-usa`
+- Europe: `https://<backend-host>/webhooks/stripe-wise-payouts-europe`
 
 Do **not** point these at `/orders/webhook`. Order payment webhooks stay unchanged.
 

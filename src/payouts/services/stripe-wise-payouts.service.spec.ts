@@ -129,12 +129,29 @@ describe('StripeWisePayoutsService', () => {
       getReceivingAccountDetails: jest.fn(),
     };
 
+    const paymentsToFaModel = {
+      findOne: jest.fn().mockReturnValue(query(null)),
+      find: jest.fn().mockReturnValue(query([])),
+      create: jest.fn(),
+    };
+    const paymentBreakdown = {
+      getBreakdown: jest.fn().mockResolvedValue({
+        accounts: {},
+        combined: {},
+        note: '',
+      }),
+    };
+    const config = { get: jest.fn() };
+
     service = new StripeWisePayoutsService(
       destinationModel,
       payoutModel,
+      paymentsToFaModel,
       stripeAccounts,
       moneyManagement,
+      paymentBreakdown,
       wiseService,
+      config,
     );
   });
 

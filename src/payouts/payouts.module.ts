@@ -74,6 +74,7 @@ import { StripePaymentBreakdownService } from './services/stripe-payment-breakdo
 import { OrderCommissionTransferService } from './services/order-commission-transfer.service';
 import { UsersModule } from '../users/users.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { MailModule } from '../mail/mail.module';
 
 @Module({
   imports: [
@@ -95,6 +96,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     ]),
     UsersModule,
     NotificationsModule,
+    MailModule,
   ],
   controllers: [
     CommissionsController,

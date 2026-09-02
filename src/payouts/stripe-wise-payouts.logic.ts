@@ -1,5 +1,19 @@
-export const STRIPE_ACCOUNT_KEYS = ['global', 'usa'] as const;
+export const STRIPE_ACCOUNT_KEYS = ['global', 'usa', 'europe'] as const;
 export type StripeAccountKey = (typeof STRIPE_ACCOUNT_KEYS)[number];
+
+export const DEFAULT_STRIPE_API_VERSION = '2022-11-15';
+export const DEFAULT_EUROPE_STRIPE_API_VERSION = '2026-07-29.dahlia';
+
+/** Stripe API version for global/usa vs Europe accounts. */
+export function resolveStripeApiVersion(
+  account: StripeAccountKey,
+  getEnv: (key: string) => string | undefined = () => undefined,
+): string {
+  if (account === 'europe') {
+    return getEnv('EUROPE_STRIPE_API_VERSION') || DEFAULT_EUROPE_STRIPE_API_VERSION;
+  }
+  return getEnv('STRIPE_API_VERSION') || DEFAULT_STRIPE_API_VERSION;
+}
 
 const USA_COUNTRY_NAMES = new Set([
   'united states',
@@ -8,9 +22,56 @@ const USA_COUNTRY_NAMES = new Set([
   'united states of america',
 ]);
 
+const EUROPE_COUNTRY_NAMES = new Set([
+  'austria',
+  'belgium',
+  'bulgaria',
+  'croatia',
+  'cyprus',
+  'czech republic',
+  'czechia',
+  'denmark',
+  'estonia',
+  'finland',
+  'france',
+  'germany',
+  'greece',
+  'hungary',
+  'ireland',
+  'italy',
+  'latvia',
+  'lithuania',
+  'luxembourg',
+  'malta',
+  'netherlands',
+  'holland',
+  'norway',
+  'poland',
+  'portugal',
+  'romania',
+  'slovakia',
+  'slovenia',
+  'spain',
+  'sweden',
+  'switzerland',
+]);
+
 /** True when a country label refers to the United States. */
 export function isUsaCountryName(country?: string | null): boolean {
   return USA_COUNTRY_NAMES.has(String(country || '').toLowerCase().trim());
+}
+
+/** True when a country label refers to a supported European Stripe region. */
+export function isEuropeCountryName(country?: string | null): boolean {
+  return EUROPE_COUNTRY_NAMES.has(String(country || '').toLowerCase().trim());
+}
+
+function resolveStripeAccountKeyFromCountry(
+  country?: string | null,
+): StripeAccountKey {
+  if (isUsaCountryName(country)) return 'usa';
+  if (isEuropeCountryName(country)) return 'europe';
+  return 'global';
 }
 
 /**
@@ -23,9 +84,9 @@ export function resolveShopOrderStripeAccountKey(
 ): StripeAccountKey {
   const shipping = String(shippingCountry || '').trim();
   if (shipping) {
-    return isUsaCountryName(shipping) ? 'usa' : 'global';
+    return resolveStripeAccountKeyFromCountry(shipping);
   }
-  return isUsaCountryName(userCountry) ? 'usa' : 'global';
+  return resolveStripeAccountKeyFromCountry(userCountry);
 }
 
 export function isUsaShopOrder(
@@ -33,6 +94,13 @@ export function isUsaShopOrder(
   userCountry?: string | null,
 ): boolean {
   return resolveShopOrderStripeAccountKey(shippingCountry, userCountry) === 'usa';
+}
+
+export function isEuropeShopOrder(
+  shippingCountry?: string | null,
+  userCountry?: string | null,
+): boolean {
+  return resolveShopOrderStripeAccountKey(shippingCountry, userCountry) === 'europe';
 }
 
 export const STRIPE_WISE_PAYOUT_STATUSES = [
@@ -306,5 +374,5 @@ function looksInternal(message: string): boolean {
 }
 
 export function isStripeAccountKey(value: unknown): value is StripeAccountKey {
-  return value === 'global' || value === 'usa';
+  return value === 'global' || value === 'usa' || value === 'europe';
 }

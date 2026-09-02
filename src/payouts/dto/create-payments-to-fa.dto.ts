@@ -21,8 +21,8 @@ export class CreatePaymentsToFaDto {
   currency: string;
 
   @IsOptional()
-  @IsIn(['global', 'usa'])
-  stripeAccountKey?: 'global' | 'usa';
+  @IsIn(['global', 'usa', 'europe'])
+  stripeAccountKey?: 'global' | 'usa' | 'europe';
 
   @IsString()
   @MaxLength(120)

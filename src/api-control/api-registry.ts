@@ -129,6 +129,7 @@ export const FRONTEND_APIS: ApiEndpointDef[] = [
   def('frontend', 'Orders', 'GET', '/orders/verify/:orderId', 'Verify order payment'),
   def('frontend', 'Orders', 'GET', '/orders/:id', 'Get order'),
   def('frontend', 'Orders', 'POST', '/orders/:id/pay', 'Pay for order'),
+  def('frontend', 'Orders', 'GET', '/orders/:id/pay-now', 'One-click invoice Pay Now → Stripe'),
   def('frontend', 'Orders', 'POST', '/orders/:id/shipping', 'Set order-request shipping'),
   def('frontend', 'Orders', 'POST', '/orders/:id/send-invoice', 'Send order-request invoice'),
   def('frontend', 'Orders', 'POST', '/orders/:id/add-items', 'Hub/Admin add items to existing order'),
@@ -360,9 +361,9 @@ export const ADMIN_APIS: ApiEndpointDef[] = [
   def('admin', 'Orders', 'POST', '/orders/request', 'Create order request'),
   def('admin', 'Orders', 'POST', '/orders/:id/shipping', 'Set order-request shipping'),
   def('admin', 'Orders', 'POST', '/orders/:id/send-invoice', 'Send order-request invoice'),
-  def('admin', 'Orders', 'POST', '/orders/:id/duplicate-invoice', 'Create and email duplicate invoice'),
-  def('admin', 'Orders', 'GET', '/orders/:id/duplicate-invoices', 'List duplicate invoices for order'),
-  def('admin', 'PDF', 'GET', '/pdf/duplicate-invoice/:invoiceId', 'Download duplicate invoice PDF'),
+  def('admin', 'Orders', 'POST', '/orders/:id/duplicate-invoice', 'Create and email D-Value invoice'),
+  def('admin', 'Orders', 'GET', '/orders/:id/duplicate-invoices', 'List D-Value invoices for order'),
+  def('admin', 'PDF', 'GET', '/pdf/duplicate-invoice/:invoiceId', 'Download D-Value invoice PDF'),
 
   // Certifications
   def('admin', 'Certifications', 'GET', '/certifications/admin/all', 'All certification requests'),
@@ -540,12 +541,13 @@ export function isAlwaysAllowedPath(pathname: string, method: string): boolean {
   if (path.startsWith('/api-control')) return true;
   if (path.startsWith('/api/docs')) return true;
   if (path === '/stripe/webhook') return true;
-  if (path === '/orders/webhook' || path === '/orders/webhook-usa') return true;
+  if (path === '/orders/webhook' || path === '/orders/webhook-usa' || path === '/orders/webhook-europe') return true;
   if (path === '/certifications/webhook') return true;
   if (path === '/webhooks/wise') return true;
   if (
     path === '/webhooks/stripe-wise-payouts' ||
-    path === '/webhooks/stripe-wise-payouts-usa'
+    path === '/webhooks/stripe-wise-payouts-usa' ||
+    path === '/webhooks/stripe-wise-payouts-europe'
   ) {
     return true;
   }

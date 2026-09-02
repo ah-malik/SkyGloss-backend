@@ -296,6 +296,9 @@ export function buildLatestOrderRequestInvoiceHtml(
     footerContact?: FooterContact | null;
     amountPaid?: number;
     remainingAmount?: number;
+    dValue?: {
+      originalOrderNumber: string;
+    };
   },
 ): string {
   const currency = (order.currency || 'USD').toUpperCase();
@@ -324,31 +327,47 @@ export function buildLatestOrderRequestInvoiceHtml(
   const viewUrl = options?.viewUrl;
   const hasBalance = amountPaid > 0.01;
   const dueLabel = hasBalance ? 'Order Total' : 'Amount Due';
+  const isDValue = !!options?.dValue?.originalOrderNumber;
+  const originalOrderNumber = options?.dValue?.originalOrderNumber || '';
+  const needsPayment = !isDValue && remainingAmount > 0.01;
 
   const body = `
           <tr>
             <td bgcolor="#ffffff" style="padding:36px 40px 8px 40px; background-color:#ffffff; color:#000000; font-family: Arial, Helvetica, sans-serif; font-size:15px; line-height:1.7; text-align:left;">
               <p style="margin:0 0 18px 0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;">Hello ${name},</p>
-              <p style="margin:0 0 18px 0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;"><strong style="font-weight:bold; color:#000000;">Your invoice is ready.</strong></p>
-              <p style="margin:0 0 18px 0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;">Please find the invoice for order <strong style="font-weight:bold;">${order.orderNumber}</strong> attached.${hasBalance ? ' Additional items were added to your existing order.' : ' The total includes shipping.'}</p>
-              <p style="margin:0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;">${
-                hasBalance
-                  ? `You already paid <strong>${formatMoney(symbol, amountPaid)}</strong>. Please pay the remaining amount of <strong>${formatMoney(symbol, remainingAmount)}</strong> to complete your order.`
-                  : 'Complete payment using the attached invoice to proceed with your order.'
+              <p style="margin:0 0 18px 0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;"><strong style="font-weight:bold; color:#000000;">${
+                isDValue ? 'Your D-Value invoice is ready.' : 'Your invoice is ready.'
+              }</strong></p>
+              <p style="margin:0 0 18px 0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;">${
+                isDValue
+                  ? `Please find the D-Value invoice <strong style="font-weight:bold;">${order.orderNumber}</strong> for order <strong style="font-weight:bold;">${originalOrderNumber}</strong> attached. The total includes shipping.`
+                  : `Please find the invoice for order <strong style="font-weight:bold;">${order.orderNumber}</strong> attached.${hasBalance ? ' Additional items were added to your existing order.' : ' The total includes shipping.'}`
               }</p>
+              ${
+                isDValue
+                  ? ''
+                  : `<p style="margin:0; font-weight:normal; font-size:15px; line-height:1.7; color:#000000;">${
+                      hasBalance
+                        ? `You already paid <strong>${formatMoney(symbol, amountPaid)}</strong>. Please pay the remaining amount of <strong>${formatMoney(symbol, remainingAmount)}</strong> to complete your order.`
+                        : 'Complete payment using the attached invoice to proceed with your order.'
+                    }</p>`
+              }
             </td>
           </tr>
           ${detailsCard(
             'Invoice Details',
-            detailRow('Order Number', order.orderNumber) +
+            (isDValue
+              ? detailRow('Invoice Number', order.orderNumber) +
+                detailRow('Original Order', originalOrderNumber)
+              : detailRow('Order Number', order.orderNumber)) +
               (email ? detailRow('Email', email) : '') +
               (company ? detailRow('Company', company) : '') +
               detailRow(
                 'Shipping',
                 formatMoney(symbol, shipping),
-                !viewUrl,
+                !viewUrl || needsPayment,
               ) +
-              (viewUrl
+              (viewUrl && !needsPayment
                 ? `<tr><td style="padding:16px 0 0 0;">${pillCta(viewUrl, 'VIEW ORDER')}</td></tr>`
                 : ''),
           )}
@@ -356,6 +375,16 @@ export function buildLatestOrderRequestInvoiceHtml(
             amountPaid,
             remainingAmount,
           })}
+          ${
+            needsPayment && viewUrl
+              ? `
+          <tr>
+            <td align="center" bgcolor="#ffffff" style="padding:8px 40px 24px 40px; background-color:#ffffff;">
+              ${pillCta(viewUrl, 'PAY NOW')}
+            </td>
+          </tr>`
+              : ''
+          }
           ${shippingAddressBlock({
             name:
               addr.name ||
@@ -377,5 +406,8 @@ export function buildLatestOrderRequestInvoiceHtml(
           ])}
           ${buildRepresentativeFooterBlock(options?.footerContact)}`;
 
-  return wrapLatestOrderEmail('Order Invoice – SkyGloss', body);
+  return wrapLatestOrderEmail(
+    isDValue ? 'D-Value Invoice – SkyGloss' : 'Order Invoice – SkyGloss',
+    body,
+  );
 }

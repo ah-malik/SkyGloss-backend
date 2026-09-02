@@ -28,7 +28,7 @@ import {
   summarizeCommissionTypes,
   transferStatusLabel,
 } from '../order-commission-transfer.logic';
-import { resolveShopOrderStripeAccountKey } from '../stripe-wise-payouts.logic';
+import { resolveShopOrderStripeAccountKey, resolveStripeApiVersion } from '../stripe-wise-payouts.logic';
 import { User, UserDocument, UserRole } from '../../users/entities/user.entity';
 import { SYSTEM_BASE_CURRENCY } from '../../common/order-monetary';
 import { isRegistrationOrder } from '../../common/order-totals';
@@ -53,6 +53,7 @@ export class OrderCommissionTransferService implements OnModuleInit {
   private syncing = false;
   private stripe?: Stripe;
   private usaStripe?: Stripe;
+  private europeStripe?: Stripe;
   private systemAdminId?: Types.ObjectId;
 
   constructor(
@@ -69,16 +70,21 @@ export class OrderCommissionTransferService implements OnModuleInit {
   ) {
     const stripeSecretKey = this.config.get<string>('STRIPE_SECRET_KEY');
     const usaStripeSecretKey = this.config.get<string>('USA_STRIPE_SECRET_KEY');
-    const stripeApiVersion =
-      this.config.get<string>('STRIPE_API_VERSION') || '2022-11-15';
+    const europeStripeSecretKey = this.config.get<string>('EUROPE_STRIPE_SECRET_KEY');
+    const getEnv = (key: string) => this.config.get<string>(key);
     if (stripeSecretKey) {
       this.stripe = new Stripe(stripeSecretKey, {
-        apiVersion: stripeApiVersion as Stripe.LatestApiVersion,
+        apiVersion: resolveStripeApiVersion('global', getEnv) as Stripe.LatestApiVersion,
       });
     }
     if (usaStripeSecretKey) {
       this.usaStripe = new Stripe(usaStripeSecretKey, {
-        apiVersion: stripeApiVersion as Stripe.LatestApiVersion,
+        apiVersion: resolveStripeApiVersion('usa', getEnv) as Stripe.LatestApiVersion,
+      });
+    }
+    if (europeStripeSecretKey) {
+      this.europeStripe = new Stripe(europeStripeSecretKey, {
+        apiVersion: resolveStripeApiVersion('europe', getEnv) as Stripe.LatestApiVersion,
       });
     }
   }
@@ -459,7 +465,9 @@ export class OrderCommissionTransferService implements OnModuleInit {
   }
 
   private stripeFor(key: StripeAccountKey): Stripe | undefined {
-    return key === 'usa' ? this.usaStripe : this.stripe;
+    if (key === 'usa') return this.usaStripe;
+    if (key === 'europe') return this.europeStripe;
+    return this.stripe;
   }
 
   private async resolveStripePaymentId(

@@ -21,8 +21,8 @@ export class CreateStripeWisePayoutDto {
   currency: string;
 
   @IsOptional()
-  @IsIn(['global', 'usa'])
-  stripeAccountKey?: 'global' | 'usa';
+  @IsIn(['global', 'usa', 'europe'])
+  stripeAccountKey?: 'global' | 'usa' | 'europe';
 
   /** payments_balance = classic Stripe payout; financial_account = FA → Wise outbound. */
   @IsOptional()

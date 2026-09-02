@@ -1,6 +1,6 @@
 /**
  * Shop / registration order IDs:
- * - Order request:  SG{CCC}R0110  (e.g. SGPAKR0110, SGNEDR0117, SGENGR0124)
+ * - Order request:  SG{CCC}0110  (e.g. SGPAK0110, SGNED0117, SGENG0124)
  * - Paid / purchase: SG{CCC}P0110 (e.g. SGUSAP0110, SGFRAP0117)
  * - Registration:   SGREG0110, SGREG0117, …
  *
@@ -13,12 +13,12 @@ export const SHOP_ORDER_LEGACY_REQ_BASE = 254700;
 
 export type ShopOrderFlow = 'request' | 'purchase';
 
-/** Flow letter after the country code: R = request, P = purchase. */
-export const SHOP_ORDER_REQUEST_FLOW_LETTER = 'R';
+/** Flow letter after the country code: request has none, P = purchase. */
+export const SHOP_ORDER_REQUEST_FLOW_LETTER = '';
 export const SHOP_ORDER_PURCHASE_FLOW_LETTER = 'P';
 
 /** @deprecated Fixed prefixes kept for older imports / docs. Prefer getShopOrderPrefix. */
-export const SHOP_ORDER_REQUEST_PREFIX = 'SGPAKR';
+export const SHOP_ORDER_REQUEST_PREFIX = 'SGPAK';
 export const SHOP_ORDER_PURCHASE_PREFIX = 'SGUSAP';
 export const REGISTRATION_ORDER_PREFIX = 'SGREG';
 
@@ -113,17 +113,21 @@ export function getShopOrderFlowLetter(flow: ShopOrderFlow): string {
     : SHOP_ORDER_PURCHASE_FLOW_LETTER;
 }
 
-/** Prefix for a shop order: SG + country (3) + R|P (e.g. SGNEDR, SGUSAP). */
+/** Prefix for a shop order: SG + country (3) + optional P (e.g. SGNED, SGUSAP). */
 export function getShopOrderPrefix(
   flow: ShopOrderFlow,
   country?: string,
 ): string {
   const countryCode = resolveOrderCountryCode(country);
-  return `SG${countryCode}${getShopOrderFlowLetter(flow)}`;
+  const flowLetter = getShopOrderFlowLetter(flow);
+  return flowLetter ? `SG${countryCode}${flowLetter}` : `SG${countryCode}`;
 }
 
 /** Regex matching any current-format shop order for a flow (any country). */
 export function getShopOrderNumberRegex(flow: ShopOrderFlow): RegExp {
+  if (flow === 'request') {
+    return /^SG(?!REG)[A-Z]{3}\d+$/i;
+  }
   const letter = getShopOrderFlowLetter(flow);
   return new RegExp(`^SG[A-Z]{3}${letter}\\d+$`, 'i');
 }
@@ -132,7 +136,7 @@ function padOrderSequence(sequence: number): string {
   return String(sequence).padStart(ORDER_SEQUENCE_DIGITS, '0');
 }
 
-/** Format shop order ID: SGNEDR0110 (request) or SGUSAP0110 (purchase). */
+/** Format shop order ID: SGNED0110 (request) or SGUSAP0110 (purchase). */
 export function formatShopOrderNumber(
   flow: ShopOrderFlow,
   sequence: number,
@@ -148,7 +152,7 @@ export function formatRegistrationOrderNumber(sequence: number): string {
 
 /**
  * Extract sequence from current shop ID formats only
- * (SG{CCC}R0110 / SG{CCC}P0110). Legacy formats are ignored so counters can reset.
+ * (SG{CCC}0110 / SG{CCC}P0110). Legacy formats are ignored so counters can reset.
  */
 export function extractCurrentShopOrderSequence(
   orderNumber?: string,
@@ -157,14 +161,26 @@ export function extractCurrentShopOrderSequence(
   if (!orderNumber) return null;
   const value = orderNumber.trim().toUpperCase();
 
-  const letters = flow
-    ? [getShopOrderFlowLetter(flow)]
-    : [SHOP_ORDER_REQUEST_FLOW_LETTER, SHOP_ORDER_PURCHASE_FLOW_LETTER];
+  if (!flow || flow === 'request') {
+    const currentRequest = value.match(/^SG(?!REG)[A-Z]{3}(\d+)$/);
+    if (currentRequest) {
+      const seq = parseInt(currentRequest[1], 10);
+      if (!Number.isNaN(seq)) return seq;
+    }
 
-  for (const letter of letters) {
-    const match = value.match(new RegExp(`^SG[A-Z]{3}${letter}(\\d+)$`));
-    if (!match) continue;
-    const seq = parseInt(match[1], 10);
+    const legacyRequest = value.match(/^SG[A-Z]{3}R(\d+)$/);
+    if (legacyRequest) {
+      const seq = parseInt(legacyRequest[1], 10);
+      if (!Number.isNaN(seq)) return seq;
+    }
+
+    if (flow === 'request') return null;
+  }
+
+  if (!flow || flow === 'purchase') {
+    const purchase = value.match(/^SG[A-Z]{3}P(\d+)$/);
+    if (!purchase) return null;
+    const seq = parseInt(purchase[1], 10);
     return Number.isNaN(seq) ? null : seq;
   }
 
@@ -227,7 +243,7 @@ export function isRegistrationOrderNumber(orderNumber?: string): boolean {
   );
 }
 
-/** Manual order-request flow (invoice later), including current SG{CCC}R* IDs. */
+/** Manual order-request flow (invoice later), including current SG{CCC}* IDs. */
 export function isOrderRequest(order?: {
   orderFlow?: string;
   orderNumber?: string;
@@ -235,8 +251,10 @@ export function isOrderRequest(order?: {
   if (!order) return false;
   if (order.orderFlow === 'request') return true;
   if (order.orderFlow === 'purchase') return false;
-  return getShopOrderNumberRegex('request').test(
-    (order.orderNumber || '').trim(),
+  const orderNumber = (order.orderNumber || '').trim();
+  return (
+    getShopOrderNumberRegex('request').test(orderNumber) ||
+    /^SG[A-Z]{3}R\d+$/i.test(orderNumber)
   );
 }
 
@@ -261,7 +279,7 @@ function nextSequenceFromMax(maxNum: number, start: number): number {
 }
 
 /**
- * Next sequence for request (SG*R*) or purchase (SG*P*).
+ * Next sequence for request (SG{CCC}*) or purchase (SG{CCC}P*).
  * Sequences are shared across countries within the same flow.
  * Only current-format IDs count, so the series resets to 0110.
  */

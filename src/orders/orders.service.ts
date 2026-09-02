@@ -45,6 +45,10 @@ import {
 } from '../common/order-totals';
 import { isOrderModifiable, getOrderAmountPaid, getOrderRemainingAmount } from '../common/order-modifiable';
 import {
+  createOrderPaymentToken,
+  verifyOrderPaymentToken,
+} from '../common/order-payment-token';
+import {
   formatRoleLabel,
   getRegistrationFeeDescription,
   getRegistrationFeeName,
@@ -99,6 +103,7 @@ import { OrderCommissionTransferService } from '../payouts/services/order-commis
 import {
   isUsaShopOrder,
   resolveShopOrderStripeAccountKey,
+  resolveStripeApiVersion,
   StripeAccountKey,
 } from '../payouts/stripe-wise-payouts.logic';
 import { RedisCacheService } from '../redis/redis-cache.service';
@@ -116,6 +121,7 @@ export class OrdersService implements OnModuleInit {
   private readonly logger = new Logger(OrdersService.name);
   private stripe: Stripe;
   private usaStripe: Stripe;
+  private europeStripe: Stripe;
 
   constructor(
     @InjectModel(Order.name) private orderModel: Model<OrderDocument>,
@@ -141,15 +147,15 @@ export class OrdersService implements OnModuleInit {
   ) {
     const stripeSecretKey = this.configService.get<string>('STRIPE_SECRET_KEY');
     const usaStripeSecretKey = this.configService.get<string>('USA_STRIPE_SECRET_KEY');
-    const stripeApiVersion =
-      this.configService.get<string>('STRIPE_API_VERSION') || '2022-11-15';
+    const europeStripeSecretKey = this.configService.get<string>('EUROPE_STRIPE_SECRET_KEY');
+    const getEnv = (key: string) => this.configService.get<string>(key);
 
     if (!stripeSecretKey) {
       console.warn('STRIPE_SECRET_KEY is not defined');
       this.stripe = undefined as any;
     } else {
       this.stripe = new Stripe(stripeSecretKey, {
-        apiVersion: stripeApiVersion as Stripe.LatestApiVersion,
+        apiVersion: resolveStripeApiVersion('global', getEnv) as Stripe.LatestApiVersion,
       });
     }
 
@@ -158,7 +164,16 @@ export class OrdersService implements OnModuleInit {
       this.usaStripe = undefined as any;
     } else {
       this.usaStripe = new Stripe(usaStripeSecretKey, {
-        apiVersion: stripeApiVersion as Stripe.LatestApiVersion,
+        apiVersion: resolveStripeApiVersion('usa', getEnv) as Stripe.LatestApiVersion,
+      });
+    }
+
+    if (!europeStripeSecretKey) {
+      console.warn('EUROPE_STRIPE_SECRET_KEY is not defined');
+      this.europeStripe = undefined as any;
+    } else {
+      this.europeStripe = new Stripe(europeStripeSecretKey, {
+        apiVersion: resolveStripeApiVersion('europe', getEnv) as Stripe.LatestApiVersion,
       });
     }
   }
@@ -401,18 +416,16 @@ export class OrdersService implements OnModuleInit {
     const type = additionalMetadata.type || 'partner_registration';
     const country =
       additionalMetadata.country || user?.country || '';
-    const isUsaUser = this.isUsaCountry(country);
-    const stripeInstance = this.getStripeForUsaUser(isUsaUser);
+    const stripeAccountKey = resolveShopOrderStripeAccountKey(undefined, country);
+    const stripeInstance = this.getStripeForAccountKey(stripeAccountKey);
     const baseUrl = this.getFrontendBaseUrl();
     const isShopRegistration = type === 'shop_registration';
 
-    const keyMode = ((isUsaUser
-      ? this.configService.get<string>('USA_STRIPE_SECRET_KEY')
-      : this.configService.get<string>('STRIPE_SECRET_KEY')) || '').startsWith('sk_live')
+    const keyMode = (this.getStripeSecretKeyForAccount(stripeAccountKey) || '').startsWith('sk_live')
       ? 'live'
       : 'test';
     console.log(
-      `[Stripe Registration] Using ${isUsaUser ? 'USA' : 'Global'} Stripe (${keyMode}) for country="${country}", frontend="${baseUrl}"`,
+      `[Stripe Registration] Using ${stripeAccountKey.toUpperCase()} Stripe (${keyMode}) for country="${country}", frontend="${baseUrl}"`,
     );
 
     const success_path =
@@ -464,7 +477,7 @@ export class OrdersService implements OnModuleInit {
         try {
           registrationProductId = await this.stripeCouponSync.syncShopRegistrationPromos(
             stripeInstance,
-            isUsaUser ? 'usa' : 'global',
+            stripeAccountKey,
             currency,
           );
         } catch (syncErr) {
@@ -695,18 +708,19 @@ export class OrdersService implements OnModuleInit {
       shippingAddress?.country,
       currentUser?.country,
     );
-
-    // Route to appropriate Stripe based on order destination (shipping country).
-    const stripeInstance = this.getStripeForOrder(
+    const stripeAccountKey = this.resolveOrderStripeAccountKey(
       shippingAddress?.country,
       currentUser?.country,
     );
+
+    // Route to appropriate Stripe based on order destination (shipping country).
+    const stripeInstance = this.getStripeForAccountKey(stripeAccountKey);
 
     if (!stripeInstance) {
       throw new BadRequestException('Stripe is not configured on the server.');
     }
     console.log(
-      `[Stripe] Using ${isUsaOrder ? 'USA' : 'Global'} Stripe for shipping="${shippingCountry}", user="${currentUser?.country}"`,
+      `[Stripe] Using ${stripeAccountKey.toUpperCase()} Stripe for shipping="${shippingCountry}", user="${currentUser?.country}"`,
     );
 
     // DETERMINE CURRENCY
@@ -803,7 +817,7 @@ export class OrdersService implements OnModuleInit {
       );
 
       if (isUsaOrder) {
-        const payUrl = this.getOrderPayUrl(order._id.toString(), currentUser?.role || role);
+        const payUrl = this.getOrderDirectPayUrl(order._id.toString());
         await this.mailService
           .sendPendingPaymentReminder(order, currentUser, payUrl, false)
           .catch((err) =>
@@ -1024,25 +1038,79 @@ export class OrdersService implements OnModuleInit {
       throw new ForbiddenException('You do not have access to this order');
     }
 
-    const payableStatuses = [OrderStatus.PENDING_PAYMENT, OrderStatus.PENDING];
-    if (!payableStatuses.includes(order.status)) {
-      throw new BadRequestException(
-        'This order is not awaiting payment.',
-      );
-    }
-
     const currentUser = await this.usersService.findOne(userId);
-    if (!this.isUsaDestinationOrder(order.shippingAddress?.country, currentUser?.country)) {
-      throw new BadRequestException(
-        'Online payment is only available for USA orders.',
-      );
+    const url = await this.buildPaymentCheckoutUrlForOrder(
+      order,
+      currentUser,
+      role,
+    );
+    return { url };
+  }
+
+  async createPaymentCheckoutRedirect(
+    orderId: string,
+    token?: string,
+  ): Promise<string> {
+    if (!verifyOrderPaymentToken(orderId, token, this.getOrderPayTokenSecret())) {
+      throw new ForbiddenException('Invalid or expired payment link.');
     }
 
-    const stripeInstance = this.getStripeForOrder(
-      order.shippingAddress?.country,
-      currentUser?.country,
+    const order = await this.orderModel.findById(orderId).populate('user');
+    if (!order) throw new NotFoundException('Order not found');
+
+    const userDoc =
+      typeof order.user === 'object' && order.user !== null
+        ? (order.user as any)
+        : await this.usersService.findOne(String(order.user));
+
+    return this.buildPaymentCheckoutUrlForOrder(order, userDoc, userDoc?.role);
+  }
+
+  private getOrderPayTokenSecret(): string {
+    return (
+      this.configService.get<string>('ORDER_PAY_TOKEN_SECRET') ||
+      this.configService.get<string>('JWT_SECRET') ||
+      'skygloss-order-pay'
     );
+  }
+
+  private assertOrderCanAcceptOnlinePayment(order: OrderDocument): number {
+    const remaining = getOrderRemainingAmount(order);
+    if (remaining <= 0.01) {
+      throw new BadRequestException('This order has no outstanding balance.');
+    }
+
+    const status = String(order.status || '').toUpperCase();
+    const payableStatuses = [
+      OrderStatus.PENDING_PAYMENT,
+      OrderStatus.PENDING,
+      OrderStatus.PAID,
+    ];
+    if (!payableStatuses.includes(status as OrderStatus)) {
+      throw new BadRequestException('This order is not awaiting payment.');
+    }
+
+    return remaining;
+  }
+
+  private async buildPaymentCheckoutUrlForOrder(
+    order: OrderDocument,
+    currentUser: any,
+    role?: string,
+  ): Promise<string> {
+    const remaining = this.assertOrderCanAcceptOnlinePayment(order);
+    const shippingCountry = order.shippingAddress?.country;
+    const userCountry = currentUser?.country;
+    const stripeAccountKey = this.resolveOrderStripeAccountKey(
+      shippingCountry,
+      userCountry,
+    );
+    const stripeInstance = this.getStripeForAccountKey(stripeAccountKey);
     const orderCurrency = (order.currency || 'USD').toLowerCase();
+
+    this.logger.log(
+      `[Stripe] Pay existing order ${order.orderNumber}: account=${stripeAccountKey}, shipping="${shippingCountry}", user="${userCountry}", remaining=${remaining} ${orderCurrency.toUpperCase()}`,
+    );
 
     const session = await this.createStripeCheckoutForOrder(
       order,
@@ -1056,7 +1124,7 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException('Failed to create Stripe checkout session.');
     }
 
-    return { url: session.url };
+    return session.url;
   }
 
   async cancelExpiredPendingPaymentOrders(): Promise<number> {
@@ -1121,10 +1189,7 @@ export class OrdersService implements OnModuleInit {
       const user = order.user as any;
       if (!user?.email) continue;
 
-      const payUrl = this.getOrderPayUrl(
-        order._id.toString(),
-        user?.role,
-      );
+      const payUrl = this.getOrderDirectPayUrl(order._id.toString());
       await this.mailService
         .sendPendingPaymentReminder(order, user, payUrl, true)
         .catch((err) =>
@@ -1156,9 +1221,11 @@ export class OrdersService implements OnModuleInit {
       order.shippingAddress?.country,
       orderUser?.country,
     );
-    const stripeInstance = this.getStripeForOrder(
-      order.shippingAddress?.country,
-      orderUser?.country,
+    const stripeInstance = this.getStripeForAccountKey(
+      this.resolveOrderStripeAccountKey(
+        order.shippingAddress?.country,
+        orderUser?.country,
+      ),
     );
 
     const session = await stripeInstance.checkout.sessions.retrieve(
@@ -1251,8 +1318,10 @@ export class OrdersService implements OnModuleInit {
         stripeSessionId = stripeSessionOrId;
         if (this.stripe) {
           try {
-            const isUsa = user.country?.toLowerCase() === 'united states' || user.country?.toLowerCase() === 'usa';
-            const stripeInstance = this.getStripeForUsaUser(isUsa) || this.stripe;
+            const stripeInstance =
+              this.getStripeForAccountKey(
+                resolveShopOrderStripeAccountKey(undefined, user.country),
+              ) || this.stripe;
             const session = await stripeInstance.checkout.sessions.retrieve(stripeSessionId);
             if (session) {
               totalAmount = (session.amount_total || 0) / 100;
@@ -1339,24 +1408,17 @@ export class OrdersService implements OnModuleInit {
     stripeSessionId: string,
     country?: string,
   ): Promise<Stripe.Checkout.Session> {
-    const isUsaUser = this.isUsaCountry(country || '');
-    const primary = this.getStripeForUsaUser(isUsaUser);
-    try {
-      return await primary.checkout.sessions.retrieve(stripeSessionId);
-    } catch (primaryError) {
-      // Fallback: session may have been created on the other Stripe account
-      // before country routing was added for registration fees.
-      const fallback =
-        isUsaUser && this.stripe
-          ? this.stripe
-          : !isUsaUser && this.usaStripe
-            ? this.usaStripe
-            : null;
-      if (!fallback || fallback === primary) {
-        throw primaryError;
+    const primaryKey = resolveShopOrderStripeAccountKey(undefined, country);
+    const candidates = this.getConfiguredStripeClients(primaryKey);
+    let lastError: unknown;
+    for (const stripeInstance of candidates) {
+      try {
+        return await stripeInstance.checkout.sessions.retrieve(stripeSessionId);
+      } catch (err) {
+        lastError = err;
       }
-      return await fallback.checkout.sessions.retrieve(stripeSessionId);
     }
+    throw lastError;
   }
 
   /**
@@ -1368,19 +1430,8 @@ export class OrdersService implements OnModuleInit {
     userId: string,
     country?: string,
   ): Promise<Stripe.Checkout.Session | null> {
-    const isUsaUser = this.isUsaCountry(country || '');
-    const primary = this.getStripeForUsaUser(isUsaUser);
-    const secondary =
-      isUsaUser && this.stripe
-        ? this.stripe
-        : !isUsaUser && this.usaStripe
-          ? this.usaStripe
-          : null;
-
-    const candidates = [primary, secondary].filter(
-      (stripeInstance, index, arr): stripeInstance is Stripe =>
-        !!stripeInstance && arr.indexOf(stripeInstance) === index,
-    );
+    const primaryKey = resolveShopOrderStripeAccountKey(undefined, country);
+    const candidates = this.getConfiguredStripeClients(primaryKey);
 
     for (const stripeInstance of candidates) {
       try {
@@ -1466,7 +1517,9 @@ export class OrdersService implements OnModuleInit {
       console.log(`[Manual Verify] Payment confirmed for user ${userId}. Activating...`);
 
       const couponInfo = await this.resolvePaidShopRegistrationCoupon(
-        this.getStripeForUsaUser(this.isUsaCountry(user.country || '')),
+        this.getStripeForAccountKey(
+          resolveShopOrderStripeAccountKey(undefined, user.country || ''),
+        ),
         session,
         user,
       );
@@ -1789,6 +1842,252 @@ export class OrdersService implements OnModuleInit {
       } else {
         console.error(
           `[USA Stripe Webhook] CRITICAL: Could not find/update shop ${userId} for shop_registration type.`,
+        );
+      }
+      return { received: true };
+    }
+
+    return { received: true };
+  }
+
+  async handleEuropeWebhook(sig: string, payload: Buffer) {
+    const endpointSecret = this.configService.get<string>(
+      'EUROPE_STRIPE_WEBHOOK_SECRET',
+    );
+    if (!endpointSecret)
+      throw new BadRequestException('Europe Webhook secret not configured');
+
+    if (!this.europeStripe)
+      throw new BadRequestException('Europe Stripe is not configured on the server.');
+
+    let event: Stripe.Event;
+    try {
+      event = this.europeStripe.webhooks.constructEvent(payload, sig, endpointSecret);
+    } catch (err) {
+      console.error(`[Europe Stripe Webhook] Verification Failed: ${err.message}`);
+      throw new BadRequestException(`Webhook Error: ${err.message}`);
+    }
+
+    const session = event.data.object as Stripe.Checkout.Session;
+    console.log(`[Europe Stripe Webhook] Received event: ${event.type}`);
+    const metadata = session.metadata;
+
+    if (event.type === 'checkout.session.completed' && metadata?.type === 'shop_order') {
+      const orderId = metadata.orderId;
+      console.log(`[Europe Stripe Webhook] Processing shop_order for orderId: ${orderId}`);
+
+      if (!orderId) {
+        console.error('[Europe Stripe Webhook] No orderId found in metadata.');
+        return { received: true };
+      }
+
+      const existingOrder = await this.orderModel.findById(orderId);
+      if (existingOrder && existingOrder.status === OrderStatus.PAID) {
+        console.log(`[Europe Stripe Webhook] Order ${existingOrder.orderNumber} is already PAID. Skipping duplicate notifications/emails.`);
+        await this.sendPaidOrderNotificationsIfNeeded(orderId);
+        this.queuePaidOrderCommissionTransfer(orderId, {
+          stripeAccountKey: 'europe',
+          stripePaymentId:
+            typeof session.payment_intent === 'string'
+              ? session.payment_intent
+              : session.payment_intent?.id || session.id,
+        });
+        return { received: true };
+      }
+
+      const actualTotal = (session.amount_total || 0) / 100;
+      const stripeDiscount = (session.total_details?.amount_discount || 0) / 100;
+      let discount = existingOrder?.discount ?? 0;
+      let couponCode = existingOrder?.couponCode;
+      if (stripeDiscount > 0.01 && !couponCode) {
+        couponCode = 'STRIPECOUPON';
+        discount = stripeDiscount;
+      }
+
+      const priorPaid = getOrderAmountPaid(existingOrder || {});
+      const amountUpdate =
+        priorPaid > 0.01
+          ? {
+              amountPaid:
+                Number(existingOrder?.totalAmount) ||
+                priorPaid + actualTotal,
+            }
+          : {
+              ...this.buildAmountUpdateWithLockedRate(existingOrder, actualTotal),
+              amountPaid: actualTotal,
+            };
+
+      const updatedOrder = await this.orderModel
+        .findByIdAndUpdate(
+          orderId,
+          {
+            status: OrderStatus.PAID,
+            discount,
+            couponCode,
+            ...amountUpdate,
+          },
+          { new: true },
+        )
+        .populate('user', 'firstName lastName email');
+
+      if (updatedOrder) {
+        console.log(`[Europe Stripe Webhook] Order ${updatedOrder.orderNumber} marked as PAID.`);
+
+        await this.recordCouponUsageIfApplicable(updatedOrder.couponCode);
+
+        await this.sendPaidOrderNotificationsIfNeeded(updatedOrder._id.toString());
+
+        await this.applyOrderCommissions(
+          updatedOrder._id.toString(),
+          OrderStatus.PAID,
+        );
+        this.queuePaidOrderCommissionTransfer(updatedOrder._id.toString(), {
+          stripeAccountKey: 'europe',
+          stripePaymentId:
+            typeof session.payment_intent === 'string'
+              ? session.payment_intent
+              : session.payment_intent?.id || session.id,
+        });
+        await this.deductProductInventoryForOrder(updatedOrder._id);
+      } else {
+        console.error(`[Europe Stripe Webhook] Order ${orderId} not found in DB.`);
+      }
+      return { received: true };
+    }
+
+    if (
+      event.type === 'checkout.session.async_payment_failed' ||
+      event.type === 'checkout.session.expired'
+    ) {
+      const orderId = metadata?.orderId;
+      if (orderId) {
+        const existing = await this.orderModel.findById(orderId);
+        if (
+          existing &&
+          existing.status !== OrderStatus.PENDING_PAYMENT
+        ) {
+          console.log(
+            `[Europe Stripe Webhook] Marking order ${orderId} as FAILED due to: ${event.type}`,
+          );
+          await this.orderModel.findByIdAndUpdate(orderId, {
+            status: OrderStatus.FAILED,
+          });
+        } else {
+          console.log(
+            `[Europe Stripe Webhook] Checkout session expired for ${orderId}; order remains pending payment until auto-cancel.`,
+          );
+        }
+      }
+    }
+
+    if (
+      event.type === 'checkout.session.completed' &&
+      metadata?.type === 'shop_registration'
+    ) {
+      const userId = session.client_reference_id || metadata.userId;
+      const partnerCode = metadata.referredByPartnerCode;
+      console.log(
+        `[Europe Stripe Webhook] Processing shop_registration for userId: ${userId}, referredBy: ${partnerCode}`,
+      );
+
+      const existingShop = await this.usersService.findOne(userId).catch(() => null);
+      if (existingShop?.isPartnerPaid) {
+        console.log(
+          `[Europe Stripe Webhook] Shop ${userId} already paid. Skipping duplicate activation/emails.`,
+        );
+        return { received: true };
+      }
+
+      const couponInfo = await this.resolvePaidShopRegistrationCoupon(
+        this.europeStripe || this.stripe,
+        session,
+        existingShop,
+      );
+
+      const updatedUser = await this.usersService.update(
+        userId,
+        {
+          status: UserStatus.ACTIVE,
+          isPartnerPaid: true,
+        } as any,
+        { role: UserRole.ADMIN } as any,
+      );
+
+      if (updatedUser) {
+        console.log(`[Europe Stripe Webhook] Shop ${userId} activated.`);
+
+        let invoiceBuffer: Buffer | undefined;
+        let orderNumber: string | undefined;
+        try {
+          const couponCode = couponInfo.couponCode || updatedUser.couponCode;
+          const regOrder = await this.createRegistrationOrder(
+            updatedUser,
+            session,
+            couponCode
+              ? { couponCode, discount: couponInfo.discount }
+              : undefined,
+          );
+          invoiceBuffer = await this.generateInvoicePdf(regOrder);
+          orderNumber = regOrder.orderNumber;
+          await this.recordCouponUsageIfApplicable(couponCode);
+        } catch (orderErr) {
+          console.error(
+            '[Europe Stripe Webhook] Failed to create registration order:',
+            orderErr,
+          );
+        }
+
+        await this.mailService.sendDistributorPaymentCompletedAdminNotification(
+          [],
+          updatedUser,
+        );
+
+        if (updatedUser.email) {
+          const partnerContact =
+            await this.usersService.getPartnerContactForShop(updatedUser);
+          await this.mailService.sendDistributorPaymentConfirmation(
+            updatedUser.email,
+            updatedUser,
+            invoiceBuffer,
+            orderNumber,
+            partnerContact,
+          );
+        }
+
+        if (partnerCode) {
+          const partner = await (this.usersService as any).userModel.findOne({
+            partnerCode,
+          });
+          if (partner) {
+            const partnerNotification = await this.notificationsService.create({
+              type: NotificationType.ORDER_PAID,
+              title: 'New Shop Referral Active',
+              message: `Shop "${updatedUser.firstName} ${updatedUser.lastName}" has completed registration and is now part of your network.`,
+              metadata: {
+                shopId: updatedUser._id,
+                shopName: `${updatedUser.firstName} ${updatedUser.lastName}`,
+              },
+              user: partner._id,
+              triggeredBy: updatedUser._id as any,
+              link: `/dashboard/partner/network`,
+            });
+            this.notificationsGateway.broadcastNotification(partnerNotification);
+          }
+        }
+
+        const notification = await this.notificationsService.create({
+          type: NotificationType.ORDER_PAID,
+          title: 'Shop Registration Paid',
+          message: `Shop ${updatedUser.firstName} ${updatedUser.lastName} has paid the registration fee and is now active.`,
+          metadata: { userId: updatedUser._id },
+          user: updatedUser._id as any,
+          triggeredBy: updatedUser._id as any,
+          link: `/dashboard/shop`,
+        });
+        this.notificationsGateway.broadcastNotification(notification);
+      } else {
+        console.error(
+          `[Europe Stripe Webhook] CRITICAL: Could not find/update shop ${userId} for shop_registration type.`,
         );
       }
       return { received: true };
@@ -2772,7 +3071,7 @@ export class OrdersService implements OnModuleInit {
   private queuePaidOrderCommissionTransfer(
     orderId: string,
     context?: {
-      stripeAccountKey?: 'global' | 'usa';
+      stripeAccountKey?: StripeAccountKey;
       stripePaymentId?: string;
     },
   ): void {
@@ -3453,9 +3752,11 @@ export class OrdersService implements OnModuleInit {
     if (status === OrderStatus.CANCELLED && oldStatus !== OrderStatus.CANCELLED) {
       if (oldStatus === OrderStatus.PAID && order.stripeSessionId) {
         try {
-          const stripeInstance = this.getStripeForOrder(
-            order.shippingAddress?.country,
-            (order.user as any)?.country,
+          const stripeInstance = this.getStripeForAccountKey(
+            this.resolveOrderStripeAccountKey(
+              order.shippingAddress?.country,
+              (order.user as any)?.country,
+            ),
           );
 
           const session = await stripeInstance.checkout.sessions.retrieve(order.stripeSessionId);
@@ -3683,7 +3984,66 @@ export class OrdersService implements OnModuleInit {
     order.shippingSetAt = new Date();
 
     const updatedOrder = await order.save();
-    return this.returnManagedOrder(updatedOrder, actor);
+    await this.tryAutoSendUpdatedInvoice(String(updatedOrder._id));
+    const latest = await this.orderModel.findById(updatedOrder._id).populate('user');
+    return this.returnManagedOrder(latest as OrderDocument, actor);
+  }
+
+  private async tryAutoSendUpdatedInvoice(orderId: string): Promise<boolean> {
+    try {
+      const order = await this.orderModel.findById(orderId).populate('user');
+      if (!order) return false;
+
+      if (isRegistrationOrder(order)) return false;
+
+      const status = String(order.status || '').toUpperCase();
+      if (
+        status === OrderStatus.SHIPPED ||
+        status === OrderStatus.DELIVERED ||
+        status === OrderStatus.CANCELLED ||
+        status === OrderStatus.FAILED
+      ) {
+        return false;
+      }
+
+      const userDoc =
+        typeof order.user === 'object' && order.user !== null
+          ? (order.user as any)
+          : await this.usersService.findOne(String(order.user));
+
+      const to = this.mailService.resolveCustomerEmail(order, userDoc);
+      if (!to) return false;
+
+      const amountPaid = getOrderAmountPaid(order);
+      const remaining = getOrderRemainingAmount(order);
+      const invoiceBuffer = await this.generateInvoicePdf(order);
+      const payUrl =
+        remaining > 0.01
+          ? this.getOrderDirectPayUrl(String(order._id))
+          : this.getOrderPayUrl(String(order._id), userDoc?.role);
+
+      await this.mailService.sendOrderInvoiceEmail(
+        to,
+        order,
+        userDoc,
+        invoiceBuffer,
+        {
+          payUrl,
+          amountPaid,
+          remainingAmount: remaining,
+        },
+      );
+
+      order.invoiceSentAt = new Date();
+      await order.save();
+      return true;
+    } catch (err) {
+      this.logger.error(
+        `Failed to auto-send updated invoice for order ${orderId}`,
+        (err as Error)?.stack || err,
+      );
+      return false;
+    }
   }
 
   async sendOrderRequestInvoice(orderId: string, actor: UserDocument) {
@@ -3732,20 +4092,45 @@ export class OrdersService implements OnModuleInit {
       );
     }
 
-    const invoiceBuffer = await this.generateInvoicePdf(order);
-    const viewUrl = this.getOrderPayUrl(String(order._id), userDoc?.role);
+    let invoiceBuffer: Buffer;
+    try {
+      invoiceBuffer = await this.generateInvoicePdf(order);
+    } catch (err) {
+      this.logger.error(
+        `Failed to generate invoice PDF for ${order.orderNumber}`,
+        (err as Error)?.stack || err,
+      );
+      throw new BadRequestException(
+        'Failed to generate the invoice PDF. Please try again.',
+      );
+    }
 
-    await this.mailService.sendOrderInvoiceEmail(
-      to,
-      order,
-      userDoc,
-      invoiceBuffer,
-      {
-        payUrl: viewUrl,
-        amountPaid,
-        remainingAmount: remaining,
-      },
-    );
+    const payUrl =
+      remaining > 0.01
+        ? this.getOrderDirectPayUrl(String(order._id))
+        : this.getOrderPayUrl(String(order._id), userDoc?.role);
+
+    try {
+      await this.mailService.sendOrderInvoiceEmail(
+        to,
+        order,
+        userDoc,
+        invoiceBuffer,
+        {
+          payUrl,
+          amountPaid,
+          remainingAmount: remaining,
+        },
+      );
+    } catch (err) {
+      this.logger.error(
+        `Failed to send order invoice email for ${order.orderNumber}`,
+        (err as Error)?.stack || err,
+      );
+      throw new BadRequestException(
+        'Failed to send the invoice email. Please try again.',
+      );
+    }
 
     order.invoiceSentAt = new Date();
     const updatedOrder = await order.save();
@@ -3889,8 +4274,9 @@ export class OrdersService implements OnModuleInit {
       console.error('Failed to create notification for order append:', notifErr);
     }
 
-    const refreshed = await this.orderModel.findById(updatedOrder._id).populate('user');
-    return this.returnManagedOrder(refreshed as OrderDocument, actor);
+    await this.tryAutoSendUpdatedInvoice(String(updatedOrder._id));
+    const latest = await this.orderModel.findById(updatedOrder._id).populate('user');
+    return this.returnManagedOrder(latest as OrderDocument, actor);
   }
 
   async createOrderRequest(userId: string, createOrderDto: CreateOrderDto) {
@@ -4278,21 +4664,56 @@ export class OrdersService implements OnModuleInit {
     return resolveShopOrderStripeAccountKey(shippingCountry, userCountry);
   }
 
-  private getStripeForOrder(
-    shippingCountry?: string | null,
-    userCountry?: string | null,
-  ): Stripe {
-    return this.getStripeForUsaUser(
-      this.isUsaDestinationOrder(shippingCountry, userCountry),
-    );
+  private getStripeSecretKeyForAccount(key: StripeAccountKey): string | undefined {
+    if (key === 'usa') {
+      return this.configService.get<string>('USA_STRIPE_SECRET_KEY');
+    }
+    if (key === 'europe') {
+      return this.configService.get<string>('EUROPE_STRIPE_SECRET_KEY');
+    }
+    return this.configService.get<string>('STRIPE_SECRET_KEY');
   }
 
-  private getStripeForUsaUser(isUsaUser: boolean): Stripe {
-    const stripeInstance = isUsaUser && this.usaStripe ? this.usaStripe : this.stripe;
+  private getStripeClientOrNull(key: StripeAccountKey): Stripe | null {
+    if (key === 'usa') return this.usaStripe || null;
+    if (key === 'europe') return this.europeStripe || null;
+    return this.stripe || null;
+  }
+
+  private getConfiguredStripeClients(primaryKey?: StripeAccountKey): Stripe[] {
+    const orderedKeys: StripeAccountKey[] = primaryKey
+      ? [
+          primaryKey,
+          ...(['global', 'usa', 'europe'] as StripeAccountKey[]).filter(
+            (key) => key !== primaryKey,
+          ),
+        ]
+      : (['global', 'usa', 'europe'] as StripeAccountKey[]);
+    const instances: Stripe[] = [];
+    for (const key of orderedKeys) {
+      const client = this.getStripeClientOrNull(key);
+      if (client && !instances.includes(client)) {
+        instances.push(client);
+      }
+    }
+    return instances;
+  }
+
+  private getStripeForAccountKey(key: StripeAccountKey): Stripe {
+    const stripeInstance = this.getStripeClientOrNull(key) || this.stripe;
     if (!stripeInstance) {
       throw new BadRequestException('Stripe is not configured on the server.');
     }
     return stripeInstance;
+  }
+
+  private getStripeForOrder(
+    shippingCountry?: string | null,
+    userCountry?: string | null,
+  ): Stripe {
+    return this.getStripeForAccountKey(
+      this.resolveOrderStripeAccountKey(shippingCountry, userCountry),
+    );
   }
 
   private getFrontendBaseUrl(): string {
@@ -4316,10 +4737,43 @@ export class OrdersService implements OnModuleInit {
     return isPartner ? '/dashboard/partner' : '/dashboard/shop';
   }
 
+  private getApiBaseUrl(): string {
+    let baseUrl = (
+      this.configService.get<string>('BACKEND_URL') ||
+      this.configService.get<string>('API_URL') ||
+      ''
+    ).replace(/\/+$/, '');
+
+    if (!baseUrl && process.env.RAILWAY_PUBLIC_DOMAIN) {
+      baseUrl = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
+    }
+
+    if (!baseUrl) {
+      const port = this.configService.get<string>('PORT') || '3001';
+      baseUrl =
+        process.env.NODE_ENV === 'production'
+          ? ''
+          : `http://localhost:${port}`;
+    }
+
+    if (!baseUrl) {
+      throw new BadRequestException(
+        'BACKEND_URL is not configured for payment links.',
+      );
+    }
+    return baseUrl;
+  }
+
   getOrderPayUrl(orderId: string, role?: string): string {
     const baseUrl = this.getFrontendBaseUrl();
     const dashboardPath = this.getDashboardPath(role);
     return `${baseUrl}${dashboardPath}/receipt/${orderId}`;
+  }
+
+  /** Signed one-click link for invoice emails — redirects straight to Stripe Checkout. */
+  getOrderDirectPayUrl(orderId: string): string {
+    const token = createOrderPaymentToken(orderId, this.getOrderPayTokenSecret());
+    return `${this.getApiBaseUrl()}/orders/${orderId}/pay-now?token=${encodeURIComponent(token)}`;
   }
 
   private async createStripeCheckoutForOrder(
@@ -4494,7 +4948,7 @@ export class OrdersService implements OnModuleInit {
     size?: string;
     orderType?: string;
   }): string {
-    return `${item.product || ''}|${item.size || ''}|${item.orderType || 'unit'}`;
+    return `${String(item.product || '')}|${String(item.size || '')}|${normalizeOrderItemType(item.orderType)}`;
   }
 
   private validateDuplicateInvoiceItems(
@@ -4506,7 +4960,7 @@ export class OrdersService implements OnModuleInit {
     }
     if (dtoItems.length !== orderItems.length) {
       throw new BadRequestException(
-        'Duplicate invoice must include the same items as the original order',
+        'D-Value invoice must include the same items as the original order',
       );
     }
 
@@ -4536,13 +4990,22 @@ export class OrdersService implements OnModuleInit {
     order: OrderDocument,
     duplicate: DuplicateInvoiceDocument,
   ) {
+    const orderPlain = order.toObject
+      ? order.toObject({ virtuals: true })
+      : { ...(order as any) };
+    const duplicatePlain = duplicate.toObject
+      ? duplicate.toObject()
+      : { ...(duplicate as any) };
+
     return {
-      ...(order.toObject ? order.toObject() : order),
-      items: duplicate.items,
-      totalAmount: duplicate.totalAmount,
-      shippingFee: duplicate.shippingFee,
-      discount: duplicate.discount,
-      orderNumber: duplicate.invoiceNumber,
+      ...orderPlain,
+      user: orderPlain.user || (order as any).user,
+      status: orderPlain.status || order.status || OrderStatus.PENDING,
+      items: duplicatePlain.items || duplicate.items,
+      totalAmount: duplicatePlain.totalAmount ?? duplicate.totalAmount,
+      shippingFee: duplicatePlain.shippingFee ?? duplicate.shippingFee,
+      discount: duplicatePlain.discount ?? duplicate.discount,
+      orderNumber: duplicatePlain.invoiceNumber || duplicate.invoiceNumber,
     };
   }
 
@@ -4570,7 +5033,7 @@ export class OrdersService implements OnModuleInit {
       })
       .exec();
     if (!duplicate) {
-      throw new NotFoundException('Duplicate invoice not found');
+      throw new NotFoundException('D-Value invoice not found');
     }
     return duplicate;
   }
@@ -4587,7 +5050,7 @@ export class OrdersService implements OnModuleInit {
 
     if (isRegistrationOrder(order)) {
       throw new BadRequestException(
-        'Cannot create duplicate invoice for registration orders',
+        'Cannot create D-Value invoice for registration orders',
       );
     }
 
@@ -4599,7 +5062,7 @@ export class OrdersService implements OnModuleInit {
       status === OrderStatus.FAILED
     ) {
       throw new BadRequestException(
-        'Duplicate invoices cannot be created for shipped, delivered, cancelled, or failed orders',
+        'D-Value invoices cannot be created for shipped, delivered, cancelled, or failed orders',
       );
     }
 
@@ -4656,42 +5119,48 @@ export class OrdersService implements OnModuleInit {
 
     const to = this.mailService.resolveCustomerEmail(order, userDoc);
     if (!to) {
+      await this.duplicateInvoiceModel.deleteOne({ _id: duplicate._id });
       throw new BadRequestException(
         'This order has no customer email to send the invoice to',
       );
     }
 
-    const originalBuffer = await this.generateInvoicePdf(order);
-    const duplicateSnapshot = this.buildDuplicateInvoiceSnapshot(
-      order,
-      duplicate,
-    );
-    const duplicateBuffer = await this.pdfService.generateOrderDetails(
-      duplicateSnapshot as any,
-      {
-        headerTitle: 'Duplicate Invoice',
-        displayOrderNumber: duplicate.invoiceNumber,
-        referenceOrderNumber: order.orderNumber,
-      },
-    );
+    try {
+      const duplicateSnapshot = this.buildDuplicateInvoiceSnapshot(
+        order,
+        duplicate,
+      );
+      const duplicateBuffer = await this.pdfService.generateOrderDetails(
+        duplicateSnapshot as any,
+        {
+          headerTitle: 'Invoice',
+          displayOrderNumber: duplicate.invoiceNumber,
+        },
+      );
 
-    const amountPaid = getOrderAmountPaid(order);
-    const remaining = getOrderRemainingAmount(order);
-    const viewUrl = this.getOrderPayUrl(String(order._id), userDoc?.role);
+      const viewUrl = this.getOrderPayUrl(String(order._id), userDoc?.role);
 
-    await this.mailService.sendDuplicateInvoicesEmail(
-      to,
-      order,
-      userDoc,
-      originalBuffer,
-      duplicateBuffer,
-      duplicate.invoiceNumber,
-      {
-        payUrl: viewUrl,
-        amountPaid,
-        remainingAmount: remaining,
-      },
-    );
+      await this.mailService.sendOrderInvoiceEmail(
+        to,
+        duplicateSnapshot,
+        userDoc,
+        duplicateBuffer,
+        {
+          payUrl: viewUrl,
+          amountPaid: 0,
+          dValue: { originalOrderNumber: order.orderNumber },
+        },
+      );
+    } catch (err) {
+      await this.duplicateInvoiceModel.deleteOne({ _id: duplicate._id });
+      this.logger.error(
+        `Failed to create and send D-Value invoice for order ${orderId}`,
+        (err as Error)?.stack || err,
+      );
+      throw new BadRequestException(
+        'Failed to generate or email the D-Value invoice. Please try again.',
+      );
+    }
 
     duplicate.sentAt = new Date();
     await duplicate.save();

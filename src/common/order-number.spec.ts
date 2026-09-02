@@ -28,10 +28,10 @@ describe('order-number', () => {
   });
 
   it('builds country-based shop prefixes', () => {
-    expect(getShopOrderPrefix('request', 'Netherlands')).toBe('SGNEDR');
-    expect(getShopOrderPrefix('request', 'Pakistan')).toBe('SGPAKR');
-    expect(getShopOrderPrefix('request', 'England')).toBe('SGENGR');
-    expect(getShopOrderPrefix('request', 'France')).toBe('SGFRAR');
+    expect(getShopOrderPrefix('request', 'Netherlands')).toBe('SGNED');
+    expect(getShopOrderPrefix('request', 'Pakistan')).toBe('SGPAK');
+    expect(getShopOrderPrefix('request', 'England')).toBe('SGENG');
+    expect(getShopOrderPrefix('request', 'France')).toBe('SGFRA');
     expect(getShopOrderPrefix('purchase', 'United States')).toBe('SGUSAP');
   });
 
@@ -49,10 +49,10 @@ describe('order-number', () => {
   it('formats shop and registration IDs with country + 4-digit sequence', () => {
     expect(
       formatShopOrderNumber('request', ORDER_SEQUENCE_START, 'Pakistan'),
-    ).toBe('SGPAKR0110');
+    ).toBe('SGPAK0110');
     expect(
       formatShopOrderNumber('request', ORDER_SEQUENCE_START, 'Netherlands'),
-    ).toBe('SGNEDR0110');
+    ).toBe('SGNED0110');
     expect(
       formatShopOrderNumber('purchase', ORDER_SEQUENCE_START, 'United States'),
     ).toBe('SGUSAP0110');
@@ -65,12 +65,13 @@ describe('order-number', () => {
         ORDER_SEQUENCE_START + ORDER_SEQUENCE_STEP,
         'England',
       ),
-    ).toBe('SGENGR0117');
+    ).toBe('SGENG0117');
   });
 
   it('extracts sequences from the current country+flow formats', () => {
+    expect(extractCurrentShopOrderSequence('SGPAK0110', 'request')).toBe(110);
+    expect(extractCurrentShopOrderSequence('SGNED0117', 'request')).toBe(117);
     expect(extractCurrentShopOrderSequence('SGPAKR0110', 'request')).toBe(110);
-    expect(extractCurrentShopOrderSequence('SGNEDR0201', 'request')).toBe(201);
     expect(extractCurrentShopOrderSequence('SGUSAP0117', 'purchase')).toBe(117);
     expect(extractCurrentShopOrderSequence('SGUSA-0000007', 'purchase')).toBeNull();
     expect(extractCurrentRegistrationOrderSequence('SGREG0110')).toBe(110);
@@ -89,15 +90,15 @@ describe('order-number', () => {
     );
     expect(
       getNextShopOrderSequenceForFlow(
-        [{ orderNumber: 'SGPAKR0110', orderFlow: 'request' }],
+        [{ orderNumber: 'SGPAK0110', orderFlow: 'request' }],
         'request',
       ),
     ).toBe(117);
     expect(
       getNextShopOrderSequenceForFlow(
         [
-          { orderNumber: 'SGPAKR0110', orderFlow: 'request' },
-          { orderNumber: 'SGNEDR0117', orderFlow: 'request' },
+          { orderNumber: 'SGPAK0110', orderFlow: 'request' },
+          { orderNumber: 'SGNED0117', orderFlow: 'request' },
         ],
         'request',
       ),
@@ -118,7 +119,7 @@ describe('order-number', () => {
 
   it('keeps request and purchase counters separate', () => {
     const orders = [
-      { orderNumber: 'SGPAKR0110', orderFlow: 'request' as const },
+      { orderNumber: 'SGPAK0110', orderFlow: 'request' as const },
       { orderNumber: 'SGUSAP0110', orderFlow: 'purchase' as const },
     ];
     expect(getNextShopOrderSequenceForFlow(orders, 'request')).toBe(117);
@@ -144,10 +145,10 @@ describe('order-number', () => {
 
   it('migrates legacy order numbers onto the country+flow series', () => {
     expect(buildMigratedShopOrderNumber('REQ-254752', 'Pakistan')).toBe(
-      'SGPAKR254752',
+      'SGPAK254752',
     );
     expect(buildMigratedShopOrderNumber('REQ-254752', 'Netherlands')).toBe(
-      'SGNEDR254752',
+      'SGNED254752',
     );
     expect(
       buildMigratedShopOrderNumber('SG000043', 'United States', 'purchase'),
@@ -156,10 +157,10 @@ describe('order-number', () => {
 
   it('rebuilds country codes on existing shop IDs without changing sequence', () => {
     expect(
-      rebuildShopOrderNumberCountry('SGPAKR0201', 'Netherlands', 'request'),
-    ).toBe('SGNEDR0201');
+      rebuildShopOrderNumberCountry('SGPAK0201', 'Netherlands', 'request'),
+    ).toBe('SGNED0201');
     expect(
-      rebuildShopOrderNumberCountry('SGPAKR0201', 'Pakistan', 'request'),
+      rebuildShopOrderNumberCountry('SGPAK0201', 'Pakistan', 'request'),
     ).toBeNull();
     expect(
       rebuildShopOrderNumberCountry('SGUSAP0110', 'England', 'purchase'),
@@ -169,6 +170,7 @@ describe('order-number', () => {
   it('detects order requests by flow and current request IDs', () => {
     expect(isOrderRequest({ orderFlow: 'request' })).toBe(true);
     expect(isOrderRequest({ orderFlow: 'purchase' })).toBe(false);
+    expect(isOrderRequest({ orderNumber: 'SGNED0110' })).toBe(true);
     expect(isOrderRequest({ orderNumber: 'SGNEDR0110' })).toBe(true);
     expect(isOrderRequest({ orderNumber: 'SGUSAP0110' })).toBe(false);
   });

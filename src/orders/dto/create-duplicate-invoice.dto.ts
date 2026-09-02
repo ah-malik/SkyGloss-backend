@@ -6,7 +6,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
 
 export class DuplicateInvoiceItemDto {
   @IsString()
@@ -18,6 +18,7 @@ export class DuplicateInvoiceItemDto {
   @IsString()
   size: string;
 
+  @Type(() => Number)
   @IsNumber()
   @Min(1)
   quantity: number;
@@ -26,6 +27,12 @@ export class DuplicateInvoiceItemDto {
   @IsString()
   orderType?: 'unit' | 'case';
 
+  @Type(() => Number)
+  @Transform(({ value }) =>
+    value === '' || value === null || value === undefined
+      ? value
+      : Number(value),
+  )
   @IsNumber()
   @Min(0)
   price: number;
@@ -42,6 +49,12 @@ export class CreateDuplicateInvoiceDto {
   items: DuplicateInvoiceItemDto[];
 
   @IsOptional()
+  @Type(() => Number)
+  @Transform(({ value }) =>
+    value === '' || value === null || value === undefined
+      ? undefined
+      : Number(value),
+  )
   @IsNumber()
   @Min(0)
   shippingFee?: number;

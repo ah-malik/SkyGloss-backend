@@ -33,6 +33,14 @@ export class StripeWisePayoutWebhookController {
     return this.handle('usa', req, signature);
   }
 
+  @Post('stripe-wise-payouts-europe')
+  handleEurope(
+    @Req() req: RawBodyRequest<{ rawBody?: Buffer }>,
+    @Headers('stripe-signature') signature?: string,
+  ) {
+    return this.handle('europe', req, signature);
+  }
+
   private async handle(
     key: StripeAccountKey,
     req: RawBodyRequest<{ rawBody?: Buffer }>,

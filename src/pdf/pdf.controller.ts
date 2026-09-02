@@ -52,7 +52,7 @@ export class PdfController {
   }
 
   @Get('duplicate-invoice/:invoiceId')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.PARTNER)
   async downloadDuplicateInvoice(
     @Param('invoiceId') invoiceId: string,
     @Res() res: Response,
@@ -71,9 +71,8 @@ export class PdfController {
     };
 
     const buffer = await this.pdfService.generateOrderDetails(snapshot, {
-      headerTitle: 'Duplicate Invoice',
+      headerTitle: 'Invoice',
       displayOrderNumber: duplicate.invoiceNumber,
-      referenceOrderNumber: order.orderNumber,
     });
 
     res.set({

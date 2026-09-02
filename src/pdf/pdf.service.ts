@@ -25,6 +25,30 @@ export interface OrderPdfOptions {
 @Injectable()
 export class PdfService {
 
+  private toOrderPdfSnapshot(order: Order | any, options?: OrderPdfOptions) {
+    const orderPlain =
+      typeof order?.toObject === 'function'
+        ? order.toObject({ virtuals: true })
+        : { ...(order || {}) };
+
+    return {
+      ...orderPlain,
+      user: orderPlain.user ?? order?.user,
+      shippingAddress: orderPlain.shippingAddress ?? order?.shippingAddress,
+      items: options?.items ?? orderPlain.items ?? order?.items ?? [],
+      totalAmount:
+        options?.totalAmount ?? orderPlain.totalAmount ?? order?.totalAmount,
+      shippingFee:
+        options?.shippingFee ?? orderPlain.shippingFee ?? order?.shippingFee,
+      discount: options?.discount ?? orderPlain.discount ?? order?.discount,
+      orderNumber: orderPlain.orderNumber ?? order?.orderNumber,
+      status: orderPlain.status ?? order?.status,
+      createdAt: orderPlain.createdAt ?? order?.createdAt,
+      currency: orderPlain.currency ?? order?.currency,
+      amountPaid: orderPlain.amountPaid ?? order?.amountPaid,
+    };
+  }
+
   private withCloudinaryQuality(url: string, transforms: string): string {
     if (!url.includes('/upload/')) return url;
     if (url.includes('/upload/' + transforms + '/')) return url;
@@ -298,13 +322,7 @@ export class PdfService {
     options?: OrderPdfOptions,
   ): Promise<Buffer> {
     return new Promise((resolve) => {
-      const snapshot = {
-        ...order,
-        items: options?.items ?? order.items,
-        totalAmount: options?.totalAmount ?? order.totalAmount,
-        shippingFee: options?.shippingFee ?? order.shippingFee,
-        discount: options?.discount ?? order.discount,
-      };
+      const snapshot = this.toOrderPdfSnapshot(order, options);
 
       const doc = new PDFDocument({ margin: 50 });
       const chunks: Buffer[] = [];
@@ -353,7 +371,7 @@ export class PdfService {
         doc.text(`Original Order: ${options.referenceOrderNumber}`);
       }
       doc.text(`Date: ${new Date((snapshot as any).createdAt).toLocaleString()}`);
-      doc.text(`Status: ${snapshot.status.toUpperCase()}`);
+      doc.text(`Status: ${String(snapshot.status || 'PENDING').toUpperCase()}`);
       doc.text(`Currency: ${currencyCode}`);
       doc.moveDown();
 
@@ -366,7 +384,7 @@ export class PdfService {
       doc.moveDown();
 
       // Shipping Info
-      const shipping = snapshot.shippingAddress;
+      const shipping = snapshot.shippingAddress || {};
       doc.fontSize(14).font(fontBold).text('Shipping Address:');
       doc.fontSize(12).font(fontRegular);
       doc.text(

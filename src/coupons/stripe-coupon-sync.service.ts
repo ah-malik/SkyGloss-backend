@@ -10,8 +10,9 @@ import {
   CouponUsageType,
 } from './entities/coupon.entity';
 import { isCouponCurrentlyValid } from '../common/coupon-discount';
+import { resolveStripeApiVersion } from '../payouts/stripe-wise-payouts.logic';
 
-export type StripeAccountKey = 'global' | 'usa';
+export type StripeAccountKey = 'global' | 'usa' | 'europe';
 
 const REGISTRATION_PRODUCT_META = 'shop_registration_fee';
 
@@ -20,31 +21,39 @@ export class StripeCouponSyncService {
   private readonly logger = new Logger(StripeCouponSyncService.name);
   private globalStripe?: Stripe;
   private usaStripe?: Stripe;
+  private europeStripe?: Stripe;
 
   constructor(
     @InjectModel(Coupon.name)
     private couponModel: Model<CouponDocument>,
     private configService: ConfigService,
   ) {
-    const apiVersion =
-      this.configService.get<string>('STRIPE_API_VERSION') || '2022-11-15';
+    const getEnv = (key: string) => this.configService.get<string>(key);
     const globalKey = this.configService.get<string>('STRIPE_SECRET_KEY');
     const usaKey = this.configService.get<string>('USA_STRIPE_SECRET_KEY');
+    const europeKey = this.configService.get<string>('EUROPE_STRIPE_SECRET_KEY');
 
     if (globalKey) {
       this.globalStripe = new Stripe(globalKey, {
-        apiVersion: apiVersion as Stripe.LatestApiVersion,
+        apiVersion: resolveStripeApiVersion('global', getEnv) as Stripe.LatestApiVersion,
       });
     }
     if (usaKey) {
       this.usaStripe = new Stripe(usaKey, {
-        apiVersion: apiVersion as Stripe.LatestApiVersion,
+        apiVersion: resolveStripeApiVersion('usa', getEnv) as Stripe.LatestApiVersion,
+      });
+    }
+    if (europeKey) {
+      this.europeStripe = new Stripe(europeKey, {
+        apiVersion: resolveStripeApiVersion('europe', getEnv) as Stripe.LatestApiVersion,
       });
     }
   }
 
   getStripe(account: StripeAccountKey): Stripe | undefined {
-    return account === 'usa' ? this.usaStripe : this.globalStripe;
+    if (account === 'usa') return this.usaStripe;
+    if (account === 'europe') return this.europeStripe;
+    return this.globalStripe;
   }
 
   async syncShopRegistrationPromos(
@@ -76,7 +85,7 @@ export class StripeCouponSyncService {
     if ((coupon.usageType || CouponUsageType.ORDER) !== CouponUsageType.SHOP_REGISTRATION) {
       return;
     }
-    for (const account of ['global', 'usa'] as StripeAccountKey[]) {
+    for (const account of ['global', 'usa', 'europe'] as StripeAccountKey[]) {
       const stripe = this.getStripe(account);
       if (!stripe) continue;
       try {
@@ -98,7 +107,7 @@ export class StripeCouponSyncService {
     });
     if (!coupon?.stripeSync) return;
 
-    for (const account of ['global', 'usa'] as StripeAccountKey[]) {
+    for (const account of ['global', 'usa', 'europe'] as StripeAccountKey[]) {
       const stripe = this.getStripe(account);
       const promoId = coupon.stripeSync?.[account]?.promotionCodeId;
       if (!stripe || !promoId) continue;

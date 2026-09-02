@@ -62,6 +62,7 @@ export function buildStripePaymentBreakdown(
   const accounts: Record<StripeAccountKey, StripeAccountPaymentBreakdown> = {
     global: emptyAccount('global'),
     usa: emptyAccount('usa'),
+    europe: emptyAccount('europe'),
   };
 
   for (const order of orders) {
@@ -88,7 +89,7 @@ export function buildStripePaymentBreakdown(
     shopOrder: emptyBucket(),
     total: emptyBucket(),
   };
-  for (const key of ['global', 'usa'] as const) {
+  for (const key of ['global', 'usa', 'europe'] as const) {
     combined.registration.count += accounts[key].registration.count;
     combined.registration.amount = Math.round(
       (combined.registration.amount + accounts[key].registration.amount) * 100,
