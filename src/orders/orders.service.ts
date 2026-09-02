@@ -102,6 +102,7 @@ import { registerShopCommissionRecalculationHandler } from '../common/shop-commi
 import { OrderCommissionTransferService } from '../payouts/services/order-commission-transfer.service';
 import {
   isUsaShopOrder,
+  requiresOnlinePaymentShopOrder,
   resolveShopOrderStripeAccountKey,
   resolveStripeApiVersion,
   StripeAccountKey,
@@ -704,7 +705,7 @@ export class OrdersService implements OnModuleInit {
     const { items: rawItems, shippingAddress, couponCode } = createOrderDto;
     const shippingCountry =
       shippingAddress?.country || currentUser?.country || '';
-    const isUsaOrder = this.isUsaDestinationOrder(
+    const requiresOnlinePayment = this.requiresOnlinePaymentDestinationOrder(
       shippingAddress?.country,
       currentUser?.country,
     );
@@ -775,7 +776,9 @@ export class OrdersService implements OnModuleInit {
           items,
           shippingFee,
           shippingAddress,
-          status: isUsaOrder ? OrderStatus.PENDING_PAYMENT : OrderStatus.PENDING,
+          status: requiresOnlinePayment
+            ? OrderStatus.PENDING_PAYMENT
+            : OrderStatus.PENDING,
           orderNumber,
           orderFlow: 'purchase',
           paymentReminderCount: 0,
@@ -816,7 +819,7 @@ export class OrdersService implements OnModuleInit {
         orderCurrency,
       );
 
-      if (isUsaOrder) {
+      if (requiresOnlinePayment) {
         const payUrl = this.getOrderDirectPayUrl(order._id.toString());
         await this.mailService
           .sendPendingPaymentReminder(order, currentUser, payUrl, false)
@@ -4222,11 +4225,13 @@ export class OrdersService implements OnModuleInit {
 
     const remaining = getOrderRemainingAmount(order);
     if (remaining > 0.01 && wasPaid) {
-      const isUsa = this.isUsaDestinationOrder(
+      const requiresOnlinePayment = this.requiresOnlinePaymentDestinationOrder(
         order.shippingAddress?.country,
         shopUser?.country,
       );
-      order.status = isUsa ? OrderStatus.PENDING_PAYMENT : OrderStatus.PENDING;
+      order.status = requiresOnlinePayment
+        ? OrderStatus.PENDING_PAYMENT
+        : OrderStatus.PENDING;
     }
 
     const updatedOrder = await order.save();
@@ -4309,6 +4314,17 @@ export class OrdersService implements OnModuleInit {
       const itemsSubtotal = getItemsSubtotal(items);
       const shippingCountry =
         shippingAddress?.country || currentUser?.country || '';
+      if (
+        this.requiresOnlinePaymentDestinationOrder(
+          shippingAddress?.country,
+          currentUser?.country,
+        )
+      ) {
+        throw new BadRequestException(
+          'Online payment is required for orders in your region. Please complete checkout instead of submitting an order request.',
+        );
+      }
+
       const shippingFee = calculateShippingFee(shippingCountry, itemsSubtotal);
 
       let discount = 0;
@@ -4655,6 +4671,13 @@ export class OrdersService implements OnModuleInit {
     userCountry?: string | null,
   ): boolean {
     return isUsaShopOrder(shippingCountry, userCountry);
+  }
+
+  private requiresOnlinePaymentDestinationOrder(
+    shippingCountry?: string | null,
+    userCountry?: string | null,
+  ): boolean {
+    return requiresOnlinePaymentShopOrder(shippingCountry, userCountry);
   }
 
   private resolveOrderStripeAccountKey(

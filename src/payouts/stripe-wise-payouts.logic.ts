@@ -103,6 +103,14 @@ export function isEuropeShopOrder(
   return resolveShopOrderStripeAccountKey(shippingCountry, userCountry) === 'europe';
 }
 
+export function requiresOnlinePaymentShopOrder(
+  shippingCountry?: string | null,
+  userCountry?: string | null,
+): boolean {
+  const key = resolveShopOrderStripeAccountKey(shippingCountry, userCountry);
+  return key === 'usa' || key === 'europe';
+}
+
 export const STRIPE_WISE_PAYOUT_STATUSES = [
   'creating',
   'pending',

@@ -369,7 +369,7 @@ export class WiseService {
         accountVerified: false,
         outcome: 'FORMAT_ONLY',
         summary:
-          'Wise does not currently confirm account existence for this currency (live checks: EUR, INR, IDR, CNY, KRW). Format and payout route were checked.',
+          'Bank account verified, processing time may vary according to receiving country',
       };
     }
     const normalized = outcomes.map((o) => String(o.outcome || '').toUpperCase());

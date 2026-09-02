@@ -6,6 +6,7 @@ import {
   fromStripeAmount,
   isEuropeShopOrder,
   isUsaShopOrder,
+  requiresOnlinePaymentShopOrder,
   last4,
   mapStripePayoutStatus,
   maskSecret,
@@ -164,6 +165,12 @@ describe('stripe-wise-payouts.logic', () => {
         'europe',
       );
       expect(isEuropeShopOrder('France', 'United States')).toBe(true);
+    });
+
+    it('requires online payment for USA and Europe Stripe regions', () => {
+      expect(requiresOnlinePaymentShopOrder('Germany', 'Pakistan')).toBe(true);
+      expect(requiresOnlinePaymentShopOrder('United States', 'Germany')).toBe(true);
+      expect(requiresOnlinePaymentShopOrder('Pakistan', 'Germany')).toBe(false);
     });
 
     it('falls back to user country when shipping is missing', () => {
