@@ -137,6 +137,16 @@ export const OPEN_PAYOUT_STATUSES: StripeWisePayoutStatus[] = [
 ];
 
 export const DUPLICATE_WINDOW_MS = 30_000;
+
+/** Fixed extra USD moved with every payments_balance → financial_account transfer. */
+export const PAYMENTS_TO_FA_EXTRA_AMOUNT = 1.5;
+
+/** Commission/base amount + fixed $1.50 for payments → FA funding. */
+export function applyPaymentsToFaExtra(amount: number): number {
+  const base = Number(amount);
+  if (!Number.isFinite(base) || base <= 0) return base;
+  return Math.round((base + PAYMENTS_TO_FA_EXTRA_AMOUNT) * 100) / 100;
+}
 export const WISE_AMOUNT_TOLERANCE_PCT = 5;
 
 const ZERO_DECIMAL_CURRENCIES = new Set([

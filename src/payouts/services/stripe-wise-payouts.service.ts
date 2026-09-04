@@ -35,6 +35,7 @@ import {
   assertAmountWithinBalance,
   computeSettlement,
   DUPLICATE_WINDOW_MS,
+  applyPaymentsToFaExtra,
   formatMoney,
   isStripeAccountKey,
   isValidCurrency,
@@ -757,7 +758,8 @@ export class StripeWisePayoutsService implements OnModuleInit {
 
     let amount: number;
     try {
-      amount = parsePositiveAmount(dto.amount);
+      // Always send base amount + fixed $1.50 on payments → FA.
+      amount = applyPaymentsToFaExtra(parsePositiveAmount(dto.amount));
     } catch (err) {
       throw new BadRequestException(
         err instanceof Error ? err.message : 'Invalid amount.',
@@ -1305,7 +1307,11 @@ export class StripeWisePayoutsService implements OnModuleInit {
       currency,
     );
     try {
-      assertAmountWithinBalance(amount, paymentsAvailable, currency);
+      assertAmountWithinBalance(
+        applyPaymentsToFaExtra(amount),
+        paymentsAvailable,
+        currency,
+      );
     } catch (err) {
       throw new BadRequestException(
         err instanceof Error
@@ -1315,7 +1321,7 @@ export class StripeWisePayoutsService implements OnModuleInit {
     }
 
     this.logger.log(
-      `Auto funding FA ${financialAccountId} with commission ${amount} ${currency} from payments balance (${fundKey})`,
+      `Auto funding FA ${financialAccountId} with commission ${amount} ${currency} (+$1.50) from payments balance (${fundKey})`,
     );
 
     await this.fundFinancialAccount(adminId, {

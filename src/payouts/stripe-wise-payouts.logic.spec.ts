@@ -15,6 +15,8 @@ import {
   resolveShopOrderStripeAccountKey,
   resolveStripeApiVersion,
   resolveAutomatedCommissionSourceType,
+  applyPaymentsToFaExtra,
+  PAYMENTS_TO_FA_EXTRA_AMOUNT,
   shouldApplyWiseReceipt,
   stripeStatusLabel,
   toStripeAmount,
@@ -23,6 +25,14 @@ import {
 } from './stripe-wise-payouts.logic';
 
 describe('stripe-wise-payouts.logic', () => {
+  describe('applyPaymentsToFaExtra', () => {
+    it('adds a fixed $1.50 to payments → FA transfers', () => {
+      expect(applyPaymentsToFaExtra(8.2)).toBe(9.7);
+      expect(applyPaymentsToFaExtra(10)).toBe(11.5);
+      expect(PAYMENTS_TO_FA_EXTRA_AMOUNT).toBe(1.5);
+    });
+  });
+
   describe('parsePositiveAmount', () => {
     it('accepts a valid amount', () => {
       expect(parsePositiveAmount(500)).toBe(500);
