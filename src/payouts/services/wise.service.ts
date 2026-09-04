@@ -15,6 +15,7 @@ import {
   pickWiseAccountRequirement,
   sanitizePayoutCurrency,
   toIsoCountryCode,
+  wiseSupportsLiveAccountCheck,
 } from '../wise-country-iso';
 import { ibanValidationError, normalizeIban } from '../iban-validate';
 import {
@@ -312,30 +313,52 @@ export class WiseService {
     }
 
     let result = this.interpretConfirmations(confirmations);
+    const liveCheck = wiseSupportsLiveAccountCheck(targetCurrency);
 
     if (input.force) {
-      const quote = await this.createQuote({
-        profileId,
-        targetCurrency,
-        sourceAmount: 100,
-        targetAccount: created.id,
-      });
       try {
-        const compat = await this.request<{ confirmations?: WiseConfirmations }>(
-          'POST',
-          `/v1/accounts/${created.id}/quotes/${quote.id}/compatibility`,
-        );
-        const fromCompat = this.interpretConfirmations(compat.confirmations);
-        result = this.mergeVerification(result, fromCompat);
+        const quote = await this.createQuote({
+          profileId,
+          targetCurrency,
+          sourceAmount: 1,
+          targetAccount: created.id,
+          requireEnabledBalance: liveCheck,
+        });
+        if (liveCheck) {
+          try {
+            const compat = await this.request<{ confirmations?: WiseConfirmations }>(
+              'POST',
+              `/v1/accounts/${created.id}/quotes/${quote.id}/compatibility`,
+            );
+            const fromCompat = this.interpretConfirmations(compat.confirmations);
+            result = this.mergeVerification(result, fromCompat);
+          } catch (err) {
+            this.logger.warn(
+              `Wise compatibility check skipped: ${this.errorMessage(err)}`,
+            );
+          }
+        }
       } catch (err) {
+        if (liveCheck) throw err;
         this.logger.warn(
-          `Wise compatibility check skipped: ${this.errorMessage(err)}`,
+          `Wise verify quote skipped for ${targetCurrency}: ${this.errorMessage(err)}`,
         );
       }
     }
 
-    if (result.outcome === 'FAILURE' || result.outcome === 'PARTIAL_FAILURE') {
+    if (
+      liveCheck &&
+      (result.outcome === 'FAILURE' || result.outcome === 'PARTIAL_FAILURE')
+    ) {
       throw new BadRequestException(result.summary);
+    }
+    if (!liveCheck && (result.outcome === 'FAILURE' || result.outcome === 'PARTIAL_FAILURE')) {
+      result = {
+        accountVerified: false,
+        outcome: 'FORMAT_ONLY',
+        summary:
+          'Bank account verified, processing time may vary according to receiving country',
+      };
     }
 
     return {
@@ -895,6 +918,7 @@ export class WiseService {
     targetCurrency: string;
     sourceAmount: number;
     targetAccount?: number;
+    requireEnabledBalance?: boolean;
   }) {
     const body: Record<string, unknown> = {
       sourceCurrency: this.sourceCurrency,
@@ -914,6 +938,7 @@ export class WiseService {
       paymentOptions?: Array<{
         payIn?: string;
         disabled?: boolean;
+        disabledReason?: { code?: string; message?: string };
         sourceAmount?: number;
         targetAmount?: number;
         fee?: { total?: number };
@@ -921,10 +946,30 @@ export class WiseService {
     }>('POST', `/v3/profiles/${params.profileId}/quotes`, body);
 
     const options = quote.paymentOptions || [];
-    const balance = options.find((o) => o.payIn === 'BALANCE' && !o.disabled);
-    if (!balance) {
+    const balance = options.find(
+      (o) => String(o.payIn || '').toUpperCase() === 'BALANCE' && !o.disabled,
+    );
+    if (!balance && params.requireEnabledBalance !== false) {
+      const disabled = options.find(
+        (o) => String(o.payIn || '').toUpperCase() === 'BALANCE',
+      );
+      const reason = String(
+        disabled?.disabledReason?.message || disabled?.disabledReason?.code || '',
+      );
+      const lower = reason.toLowerCase();
+      if (
+        lower.includes('balance') ||
+        lower.includes('insufficient') ||
+        lower.includes('fund')
+      ) {
+        throw new BadRequestException(
+          `Admin Wise ${this.sourceCurrency} balance is too low to quote this payout. Add funds in Wise and try again.`,
+        );
+      }
       throw new BadRequestException(
-        'Wise cannot pay this bank account with the current details.',
+        reason
+          ? `Wise cannot pay this bank account: ${reason}`
+          : 'Wise cannot pay this bank account with the current details.',
       );
     }
     return {
@@ -973,6 +1018,39 @@ export class WiseService {
     currency: string,
   ): Promise<{ id: number; confirmations?: WiseConfirmations }> {
     const payload = this.buildRecipientPayload(profileId, bank, user, currency);
+    try {
+      return await this.postRecipientAccount(payload);
+    } catch (err) {
+      const msg = this.errorMessage(err);
+      const type = String(payload.type || '');
+      const details = (payload.details || {}) as Record<string, unknown>;
+      const iban = String(details.iban || details.IBAN || '').replace(/\s/g, '');
+      if (
+        type &&
+        type !== 'iban' &&
+        iban &&
+        /not allowed|another account type/i.test(msg)
+      ) {
+        this.logger.warn(
+          `Wise recipient type "${type}" is not allowed; retrying as iban`,
+        );
+        return this.postRecipientAccount({
+          ...payload,
+          type: 'iban',
+          details: {
+            ...details,
+            legalType: details.legalType || 'PRIVATE',
+            iban,
+          },
+        });
+      }
+      throw err;
+    }
+  }
+
+  private async postRecipientAccount(
+    payload: Record<string, unknown>,
+  ): Promise<{ id: number; confirmations?: WiseConfirmations }> {
     const created = await this.request<{
       id: number;
       confirmations?: WiseConfirmations;

@@ -333,3 +333,17 @@ export function guessWiseRecipientType(input: {
   if (input.accountNumber) return 'swift_code';
   return 'iban';
 }
+
+/** Wise Confirmation of Payee / live existence checks. Other currencies are format + payout-time. */
+export const WISE_LIVE_ACCOUNT_CHECK_CURRENCIES = [
+  'EUR',
+  'INR',
+  'IDR',
+  'CNY',
+  'KRW',
+] as const;
+
+export function wiseSupportsLiveAccountCheck(currency?: string | null): boolean {
+  const code = (currency || '').trim().toUpperCase();
+  return (WISE_LIVE_ACCOUNT_CHECK_CURRENCIES as readonly string[]).includes(code);
+}

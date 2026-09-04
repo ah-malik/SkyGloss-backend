@@ -68,6 +68,49 @@ export class StripeWiseDestination {
   @Prop()
   stripeFinancialAccountId?: string;
 
+  /**
+   * Stripe Europe → Wise default bank (Transferwise Europe).
+   * Kept separate from Global/USA USD receiving details.
+   */
+  @Prop({ default: 'Transferwise Europe (Wise)' })
+  europeAccountName?: string;
+
+  @Prop({ default: 'USD' })
+  europeCurrency?: string;
+
+  @Prop()
+  europeCountry?: string;
+
+  @Prop()
+  europeAccountHolderName?: string;
+
+  @Prop()
+  europeBankName?: string;
+
+  @Prop()
+  europeIban?: string;
+
+  @Prop()
+  europeAccountNumber?: string;
+
+  @Prop()
+  europeRoutingNumber?: string;
+
+  @Prop()
+  europeSwiftBic?: string;
+
+  @Prop({ default: true })
+  europePayoutToDefaultStripeBank?: boolean;
+
+  @Prop()
+  europeStripeExternalAccountId?: string;
+
+  @Prop()
+  europeLastVerifiedAt?: Date;
+
+  @Prop()
+  europeLastVerifyError?: string;
+
   @Prop()
   lastVerifiedAt?: Date;
 

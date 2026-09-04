@@ -29,4 +29,19 @@ describe('UAE / Wise currency helpers', () => {
       'emirates',
     );
   });
+
+  it('uses iban type for PKR IBANs (pakistan local type is not creatable on this Wise profile)', () => {
+    expect(
+      guessWiseRecipientType({
+        currency: 'PKR',
+        iban: 'PK36SCBL0000001123456702',
+      }),
+    ).toBe('iban');
+    expect(
+      pickWiseAccountRequirement(
+        [{ type: 'iban' }, { type: 'pakistan' }, { type: 'swift_code' }],
+        'PKR',
+      )?.type,
+    ).toBe('iban');
+  });
 });

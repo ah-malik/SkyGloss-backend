@@ -38,10 +38,12 @@ import {
   formatMoney,
   isStripeAccountKey,
   isValidCurrency,
+  last4,
   mapStripePayoutStatus,
   maskSecret,
   normalizeCurrency,
   parsePositiveAmount,
+  resolveAutomatedCommissionSourceType,
   shouldApplyWiseReceipt,
   shouldStartWiseReceiptWatch,
   StripeAccountKey,
@@ -183,8 +185,9 @@ export class StripeWisePayoutsService implements OnModuleInit {
         : selectedKey === 'usa'
           ? usaOutbound
           : globalOutbound;
+    const selectedView = this.destinationViewForAccount(destination, selectedKey);
     let destResolution = selected.configured
-      ? this.stripeAccounts.resolveDestination(selected, destination)
+      ? this.stripeAccounts.resolveDestination(selected, selectedView)
       : { ok: false as const, error: selected.error || 'Stripe is not configured.' };
 
     // Persist default-bank mode when Stripe bank list is unavailable so Send works.
@@ -192,6 +195,7 @@ export class StripeWisePayoutsService implements OnModuleInit {
       destResolution.ok &&
       'usedDefault' in destResolution &&
       destResolution.usedDefault &&
+      selectedKey !== 'europe' &&
       !destination.payoutToDefaultStripeBank &&
       (selected.externalAccountsUnavailable ||
         selected.externalAccounts.length === 0) &&
@@ -202,7 +206,7 @@ export class StripeWisePayoutsService implements OnModuleInit {
       await destination.save();
       destResolution = this.stripeAccounts.resolveDestination(
         selected,
-        destination,
+        this.destinationViewForAccount(destination, selectedKey),
       );
     }
 
@@ -269,8 +273,9 @@ export class StripeWisePayoutsService implements OnModuleInit {
       account: typeof global,
       outbound: typeof globalOutbound,
     ) => {
+      const accountDest = this.destinationViewForAccount(destination, account.key);
       const destResolution = account.configured
-        ? this.stripeAccounts.resolveDestination(account, destination)
+        ? this.stripeAccounts.resolveDestination(account, accountDest)
         : {
             ok: false as const,
             error: account.error || 'Stripe is not configured.',
@@ -289,6 +294,14 @@ export class StripeWisePayoutsService implements OnModuleInit {
           : outbound.ok
             ? null
             : destResolution.error,
+        destinationSummary: destResolution.ok
+          ? destResolution.summary || null
+          : outbound.ok
+            ? outbound.summary
+            : null,
+        destinationCurrency: normalizeCurrency(accountDest.currency) || 'USD',
+        destinationName: accountDest.accountName || null,
+        destinationBankName: accountDest.bankName || null,
         wiseOutboundReady: outbound.ok,
         wiseOutboundError: outbound.ok ? null : outbound.error,
         wiseOutboundSummary: outbound.ok ? outbound.summary : null,
@@ -492,6 +505,31 @@ export class StripeWisePayoutsService implements OnModuleInit {
     }
 
     await current.save();
+
+    // Keep Stripe Europe → Transferwise Europe in sync with Wise EUR details.
+    await this.syncEuropeDestinationFromWise(current);
+    const europeOverview = await this.stripeAccounts.inspect('europe');
+    const europeView = this.destinationViewForAccount(current, 'europe');
+    const europeResolution = europeOverview.configured
+      ? this.stripeAccounts.resolveDestination(europeOverview, europeView)
+      : {
+          ok: false as const,
+          error: europeOverview.error || 'Europe Stripe is not configured.',
+        };
+    if (
+      europeResolution.ok &&
+      'destinationId' in europeResolution &&
+      europeResolution.destinationId
+    ) {
+      current.europeStripeExternalAccountId = europeResolution.destinationId;
+      current.europeLastVerifiedAt = new Date();
+      current.europeLastVerifyError = undefined;
+    } else if (!europeResolution.ok) {
+      current.europeLastVerifyError = europeResolution.error;
+    }
+    current.europePayoutToDefaultStripeBank = true;
+    await current.save();
+
     return this.toPublicDestination(current, resolution);
   }
 
@@ -523,9 +561,15 @@ export class StripeWisePayoutsService implements OnModuleInit {
       : 'global';
 
     const destination = await this.ensureDestination();
-    if (normalizeCurrency(destination.currency) !== currency) {
+    const destinationView = this.destinationViewForAccount(
+      destination,
+      stripeAccountKey,
+    );
+    const destinationCurrency =
+      normalizeCurrency(destinationView.currency) || 'USD';
+    if (destinationCurrency !== currency) {
       throw new BadRequestException(
-        `Currency must match the configured Wise receiving account (${destination.currency}).`,
+        `Currency must match the configured Wise receiving account for ${stripeAccountKey} (${destinationCurrency}).`,
       );
     }
 
@@ -597,7 +641,7 @@ export class StripeWisePayoutsService implements OnModuleInit {
 
     const resolution = this.stripeAccounts.resolveDestination(
       overview,
-      destination,
+      destinationView,
     );
     if (!resolution.ok) {
       throw new BadRequestException(resolution.error);
@@ -618,7 +662,7 @@ export class StripeWisePayoutsService implements OnModuleInit {
         status: 'creating',
         wiseStatus: 'not_started',
         estimatedAmount: amount,
-        destinationName: destination.accountName,
+        destinationName: destinationView.accountName,
         destinationSummary: resolution.summary,
         wisePreviousBalance: wiseBefore?.amount ?? undefined,
         snapshot: {
@@ -1083,7 +1127,9 @@ export class StripeWisePayoutsService implements OnModuleInit {
       return this.toAutomatedPayoutResult(existing);
     }
 
-    const preferredSource = this.automatedSourceType();
+    // Europe: payments_balance → Wise only.
+    // Global/USA: financial_account (payments → FA → Wise) unless env forces payments_balance.
+    const preferredSource = this.automatedSourceType(stripeAccountKey);
     const dto: CreateStripeWisePayoutDto = {
       amount,
       currency,
@@ -1092,28 +1138,30 @@ export class StripeWisePayoutsService implements OnModuleInit {
       confirmed: true,
       sourceType: preferredSource,
     };
+    const destination = await this.ensureDestination();
 
-    try {
-      if (preferredSource === 'financial_account') {
-        return (await this.createFinancialAccountPayout({
-          adminId: params.adminId,
-          dto,
-          amount,
-          currency,
-          stripeAccountKey,
-          destination: await this.ensureDestination(),
-          stripeMetadata: params.metadata,
-        })) as AutomatedPayoutResult;
-      }
-      return await this.createPaymentsBalancePayout({
+    if (preferredSource === 'payments_balance') {
+      return this.createPaymentsBalancePayout({
         adminId: params.adminId,
         dto,
         amount,
         currency,
         stripeAccountKey,
-        destination: await this.ensureDestination(),
+        destination,
         stripeMetadata: params.metadata,
       });
+    }
+
+    try {
+      return (await this.createFinancialAccountPayout({
+        adminId: params.adminId,
+        dto,
+        amount,
+        currency,
+        stripeAccountKey,
+        destination,
+        stripeMetadata: params.metadata,
+      })) as AutomatedPayoutResult;
     } catch (err) {
       const message =
         err instanceof BadRequestException
@@ -1121,24 +1169,64 @@ export class StripeWisePayoutsService implements OnModuleInit {
           : err instanceof Error
             ? err.message
             : 'Transfer failed.';
-      if (
-        preferredSource === 'financial_account' &&
-        /insufficient|exceeds.*balance/i.test(message)
-      ) {
-        this.logger.warn(
-          `Automated FA transfer failed for balance; retrying payments balance (${params.idempotencyKey})`,
-        );
-        return this.createPaymentsBalancePayout({
+      const isBalanceIssue = /insufficient|exceeds.*balance/i.test(message);
+      if (!isBalanceIssue) {
+        throw err;
+      }
+
+      // Global/USA: top up FA from payments balance (commission amount only), then FA → Wise.
+      // Do not send payments_balance → Wise directly — remainder must stay in Stripe.
+      this.logger.warn(
+        `Automated FA transfer needs funding from payments balance (${params.idempotencyKey}): ${message}`,
+      );
+      await this.ensureFinancialAccountFundedForAutomation({
+        adminId: params.adminId,
+        amount,
+        currency,
+        stripeAccountKey,
+        idempotencyKey: params.idempotencyKey,
+        destination,
+      });
+
+      try {
+        return (await this.createFinancialAccountPayout({
           adminId: params.adminId,
-          dto: { ...dto, sourceType: 'payments_balance' },
+          dto,
           amount,
           currency,
           stripeAccountKey,
-          destination: await this.ensureDestination(),
+          destination,
           stripeMetadata: params.metadata,
-        });
+        })) as AutomatedPayoutResult;
+      } catch (retryErr) {
+        const retryMessage =
+          retryErr instanceof BadRequestException
+            ? String(retryErr.message)
+            : retryErr instanceof Error
+              ? retryErr.message
+              : 'Transfer failed.';
+        // Keep pending when FA funding is still in transit — cron will retry.
+        // USA only: legacy fallback to payments → Wise if FA path still blocked
+        // and this is not Global (Global must stay on payments → FA → Wise).
+        if (
+          stripeAccountKey === 'usa' &&
+          /insufficient|exceeds.*balance/i.test(retryMessage)
+        ) {
+          this.logger.warn(
+            `USA FA still short after funding attempt; falling back to payments_balance (${params.idempotencyKey})`,
+          );
+          return this.createPaymentsBalancePayout({
+            adminId: params.adminId,
+            dto: { ...dto, sourceType: 'payments_balance' },
+            amount,
+            currency,
+            stripeAccountKey,
+            destination,
+            stripeMetadata: params.metadata,
+          });
+        }
+        throw retryErr;
       }
-      throw err;
     }
   }
 
@@ -1148,12 +1236,96 @@ export class StripeWisePayoutsService implements OnModuleInit {
     await this.refreshPayout(record);
   }
 
-  private automatedSourceType(): 'financial_account' | 'payments_balance' {
-    const raw = this.config.get<string>('AUTO_COMMISSION_SOURCE_TYPE');
-    if (raw && raw.trim().toLowerCase() === 'payments_balance') {
-      return 'payments_balance';
+  private automatedSourceType(
+    stripeAccountKey: StripeAccountKey,
+  ): 'financial_account' | 'payments_balance' {
+    return resolveAutomatedCommissionSourceType(
+      stripeAccountKey,
+      this.config.get<string>('AUTO_COMMISSION_SOURCE_TYPE'),
+    );
+  }
+
+  /**
+   * Moves only the given commission amount from payments balance → FA.
+   * Idempotent per commission payout key. Does not touch order remainder.
+   */
+  private async ensureFinancialAccountFundedForAutomation(params: {
+    adminId: string;
+    amount: number;
+    currency: string;
+    stripeAccountKey: StripeAccountKey;
+    idempotencyKey: string;
+    destination: StripeWiseDestinationDocument;
+  }): Promise<void> {
+    const { adminId, amount, currency, stripeAccountKey, destination } = params;
+    const fundKey = `${params.idempotencyKey}:payments-to-fa`;
+
+    const existingFund = await this.paymentsToFaModel
+      .findOne({ idempotencyKey: fundKey })
+      .exec();
+    if (existingFund) {
+      if (
+        ['creating', 'pending', 'in_transit'].includes(existingFund.status)
+      ) {
+        await this.refreshPaymentsToFa(existingFund);
+      }
+      if (existingFund.status === 'failed') {
+        throw new BadRequestException(
+          existingFund.failureMessage ||
+            'Payments→FA funding for commission transfer failed.',
+        );
+      }
+      // paid / in progress — caller retries FA→Wise; cron retries if still short
+      return;
     }
-    return 'financial_account';
+
+    const faList = await this.moneyManagement.listFinancialAccounts(
+      stripeAccountKey,
+    );
+    if (faList.error && !faList.accounts.length) {
+      throw new BadRequestException(faList.error);
+    }
+    const financialAccountId =
+      destination.stripeFinancialAccountId ||
+      faList.accounts.find((account) => account.status === 'open')?.id;
+    if (!financialAccountId) {
+      throw new BadRequestException(
+        'No Stripe Financial Account found. Create one in Stripe Dashboard first.',
+      );
+    }
+
+    const overview = await this.stripeAccounts.inspect(stripeAccountKey);
+    if (!overview.configured || overview.error) {
+      throw new BadRequestException(
+        overview.error || 'Stripe is not configured.',
+      );
+    }
+    const paymentsAvailable = this.stripeAccounts.availableForCurrency(
+      overview,
+      currency,
+    );
+    try {
+      assertAmountWithinBalance(amount, paymentsAvailable, currency);
+    } catch (err) {
+      throw new BadRequestException(
+        err instanceof Error
+          ? err.message
+          : 'Insufficient Stripe payments balance for commission funding.',
+      );
+    }
+
+    this.logger.log(
+      `Auto funding FA ${financialAccountId} with commission ${amount} ${currency} from payments balance (${fundKey})`,
+    );
+
+    await this.fundFinancialAccount(adminId, {
+      amount,
+      currency,
+      stripeAccountKey,
+      financialAccountId,
+      idempotencyKey: fundKey,
+      confirmed: true,
+    });
   }
 
   private toAutomatedPayoutResult(
@@ -1556,6 +1728,99 @@ export class StripeWisePayoutsService implements OnModuleInit {
     return summary.balance;
   }
 
+  private destinationViewForAccount(
+    dest: StripeWiseDestinationDocument,
+    key: StripeAccountKey,
+  ): StripeWiseDestination {
+    if (key !== 'europe') {
+      return dest;
+    }
+    const base =
+      typeof (dest as any).toObject === 'function'
+        ? (dest as any).toObject()
+        : { ...(dest as any) };
+    return {
+      ...base,
+      accountName:
+        dest.europeAccountName || 'COLUMN NA WISE (Wise US)',
+      currency: normalizeCurrency(dest.europeCurrency) || 'USD',
+      country: dest.europeCountry || dest.country || 'US',
+      accountHolderName:
+        dest.europeAccountHolderName || dest.accountHolderName,
+      bankName: dest.europeBankName || 'Column National Association',
+      iban: dest.europeIban,
+      accountNumber: dest.europeAccountNumber,
+      routingNumber: dest.europeRoutingNumber,
+      sortCode: undefined,
+      swiftBic: dest.europeSwiftBic || dest.swiftBic,
+      stripeAccountKey: 'europe',
+      payoutToDefaultStripeBank:
+        dest.europePayoutToDefaultStripeBank !== false,
+      stripeExternalAccountId: dest.europeStripeExternalAccountId,
+    } as StripeWiseDestination;
+  }
+
+  private async syncEuropeDestinationFromWise(
+    current: StripeWiseDestinationDocument,
+  ): Promise<void> {
+    if (!this.wiseService.isConfigured()) return;
+    if (typeof this.wiseService.getReceivingAccountDetails !== 'function') {
+      current.europeAccountName =
+        current.europeAccountName || 'COLUMN NA WISE (Wise US)';
+      current.europeCurrency = 'USD';
+      current.europeBankName =
+        current.europeBankName || 'Column National Association';
+      current.europeRoutingNumber =
+        current.europeRoutingNumber || '084009519';
+      current.europeSwiftBic = current.europeSwiftBic || 'TRWIUS35XXX';
+      current.europePayoutToDefaultStripeBank = true;
+      return;
+    }
+    // Stripe Europe payout bank is Wise US (COLUMN NA WISE ****7744).
+    const details = await this.wiseService.getReceivingAccountDetails('USD');
+    const accounts = details?.accounts || [];
+    const match =
+      accounts.find((account) => {
+        const accountLast4 =
+          last4(account.accountNumber) || last4(account.iban);
+        return (
+          accountLast4 === '7744' ||
+          String(account.routingNumber || '') === '084009519'
+        );
+      }) || pickWiseReceivingAccount(accounts, 'USD');
+
+    if (!match || !hasReceivingBankDetails(match)) {
+      current.europeAccountName =
+        current.europeAccountName || 'COLUMN NA WISE (Wise US)';
+      current.europeCurrency = 'USD';
+      current.europeBankName =
+        current.europeBankName || 'Column National Association';
+      current.europeRoutingNumber =
+        current.europeRoutingNumber || '084009519';
+      current.europeSwiftBic = current.europeSwiftBic || 'TRWIUS35XXX';
+      current.europePayoutToDefaultStripeBank = true;
+      return;
+    }
+
+    current.europeAccountName = 'COLUMN NA WISE (Wise US)';
+    current.europeCurrency = 'USD';
+    current.europeCountry = match.country || 'US';
+    current.europeAccountHolderName =
+      match.accountHolderName || current.europeAccountHolderName;
+    current.europeBankName =
+      match.bankName || 'Column National Association';
+    current.europeIban = undefined;
+    current.europeAccountNumber =
+      match.accountNumber || current.europeAccountNumber;
+    current.europeRoutingNumber =
+      match.routingNumber || current.europeRoutingNumber || '084009519';
+    current.europeSwiftBic =
+      match.swiftBic || current.europeSwiftBic || 'TRWIUS35XXX';
+    current.europePayoutToDefaultStripeBank = true;
+    current.europeLastVerifiedAt = new Date();
+    current.europeLastVerifyError = undefined;
+  }
+
   private async ensureDestination(): Promise<StripeWiseDestinationDocument> {
     let doc = await this.destinationModel.findOne({ key: DEST_KEY }).exec();
     if (!doc) {
@@ -1565,11 +1830,54 @@ export class StripeWisePayoutsService implements OnModuleInit {
         currency: 'USD',
         stripeAccountKey: 'global',
         payoutToDefaultStripeBank: false,
+        europeAccountName: 'COLUMN NA WISE (Wise US)',
+        europeCurrency: 'USD',
+        europeBankName: 'Column National Association',
+        europeRoutingNumber: '084009519',
+        europeSwiftBic: 'TRWIUS35XXX',
+        europePayoutToDefaultStripeBank: true,
       });
     }
     const currency = normalizeCurrency(doc.currency) || 'USD';
     if (doc.currency !== currency) {
       doc.currency = currency;
+    }
+    let europeDirty = false;
+    if (!doc.europeAccountName) {
+      doc.europeAccountName = 'Transferwise Europe (Wise)';
+      europeDirty = true;
+    }
+    if (!normalizeCurrency(doc.europeCurrency)) {
+      doc.europeCurrency = 'USD';
+      europeDirty = true;
+    }
+    if (doc.europePayoutToDefaultStripeBank !== true) {
+      doc.europePayoutToDefaultStripeBank = true;
+      europeDirty = true;
+    }
+    if (!doc.europeSwiftBic) {
+      doc.europeSwiftBic = 'TRWIUS35XXX';
+      europeDirty = true;
+    }
+    if (!doc.europeBankName) {
+      doc.europeBankName = 'Column National Association';
+      europeDirty = true;
+    }
+    if (!doc.europeRoutingNumber) {
+      doc.europeRoutingNumber = '084009519';
+      europeDirty = true;
+    }
+    if (!doc.europeIban && !doc.europeAccountNumber) {
+      await this.syncEuropeDestinationFromWise(doc);
+      europeDirty = true;
+    } else if (doc.europePayoutToDefaultStripeBank !== true) {
+      doc.europePayoutToDefaultStripeBank = true;
+      europeDirty = true;
+    }
+    if (
+      europeDirty ||
+      (typeof doc.isModified === 'function' ? doc.isModified() : false)
+    ) {
       await doc.save();
     }
     return doc;
@@ -1590,6 +1898,8 @@ export class StripeWisePayoutsService implements OnModuleInit {
     dest: StripeWiseDestinationDocument,
     resolution: { ok: boolean; error?: string; summary?: string },
   ) {
+    const europeLast4 =
+      last4(dest.europeAccountNumber) || last4(dest.europeIban);
     return {
       configured: Boolean(dest.iban || dest.accountNumber || dest.payoutToDefaultStripeBank),
       accountName: dest.accountName,
@@ -1614,6 +1924,21 @@ export class StripeWisePayoutsService implements OnModuleInit {
       stripeDestinationError: resolution.ok ? null : resolution.error || null,
       stripeDestinationSummary: resolution.ok ? resolution.summary || null : null,
       lastVerifiedAt: dest.lastVerifiedAt || null,
+      europe: {
+        accountName: dest.europeAccountName || 'COLUMN NA WISE (Wise US)',
+        currency: normalizeCurrency(dest.europeCurrency) || 'USD',
+        country: dest.europeCountry || null,
+        bankName: dest.europeBankName || 'Column National Association',
+        ibanMasked: maskSecret(dest.europeIban),
+        accountNumberMasked: maskSecret(dest.europeAccountNumber),
+        routingNumberMasked: maskSecret(dest.europeRoutingNumber),
+        swiftBicMasked: maskSecret(dest.europeSwiftBic),
+        last4: europeLast4,
+        payoutToDefaultStripeBank: dest.europePayoutToDefaultStripeBank !== false,
+        matchesWiseUs:
+          europeLast4 === '7744' ||
+          String(dest.europeRoutingNumber || '') === '084009519',
+      },
     };
   }
 

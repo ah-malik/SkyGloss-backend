@@ -60,17 +60,26 @@ A 2-minute sync job also refreshes open payouts if the webhook is not registered
 
 ## Automatic order commission transfers
 
-When a shop order is marked **PAID**, the backend queues a commission transfer equal to the sum of partner commission lines on that order (`order.commissions[].amount`). A cron job then sends that amount from Stripe to the configured Wise receiving account (Financial Account outbound by default, with payments-balance fallback when FA balance is insufficient).
+When a shop order is marked **PAID**, the backend queues a commission transfer equal to the sum of partner commission lines on that order (`order.commissions[].amount`). Only that commission amount is sent — the order remainder stays in Stripe.
+
+### Per-account source path
+
+| Stripe account | Automated path |
+|----------------|----------------|
+| **Global** | Payments balance → Financial Account → Wise |
+| **USA** | Financial Account → Wise (funds FA from payments when FA is short; payments→Wise fallback only if FA still blocked) |
+| **Europe** | Payments balance → Wise (**never** uses Financial Account) |
 
 Admin list: **Stripe → Wise** page (`/stripe-wise` in admin UI), section **Order commission transfers**. API: `GET /order-commission-transfers`.
 
-Duplicate protection: one transfer record per order (`orderId` unique) and stable idempotency key `order-commission:<orderId>`.
+Duplicate protection: one transfer record per order (`orderId` unique) and stable idempotency key `order-commission:<orderId>`. FA funding uses `order-commission:<orderId>:payments-to-fa`.
 
 ```
 # Enable/disable automatic processing (default: enabled)
 AUTO_COMMISSION_STRIPE_TO_WISE=true
 
-# Source for automated transfers: financial_account | payments_balance
+# Source for Global/USA automated transfers: financial_account | payments_balance
+# Europe always uses payments_balance regardless of this setting.
 AUTO_COMMISSION_SOURCE_TYPE=financial_account
 
 # Optional: admin user id used as createdBy on linked stripe_wise_payouts rows
@@ -79,7 +88,7 @@ AUTO_COMMISSION_ADMIN_USER_ID=
 
 If `AUTO_COMMISSION_STRIPE_TO_WISE=false`, pending records are still created but not sent until re-enabled or retried manually from the admin page.
 
-Funds may not be available on Stripe immediately after checkout; transfers stay **Pending** and retry every 2 minutes until balance is sufficient.
+Funds may not be available on Stripe immediately after checkout; transfers stay **Pending** and retry every 2 minutes until balance is sufficient. Global FA funding that is still in transit also keeps the transfer pending until FA → Wise can complete.
 
 ## Wise receiving details
 

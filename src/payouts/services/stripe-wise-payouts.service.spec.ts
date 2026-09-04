@@ -30,6 +30,13 @@ describe('StripeWisePayoutsService', () => {
       routingNumber: '110000000',
       stripeAccountKey: 'global',
       payoutToDefaultStripeBank: true,
+      europeAccountName: 'COLUMN NA WISE (Wise US)',
+      europeCurrency: 'USD',
+      europeBankName: 'Column National Association',
+      europeAccountNumber: '537681803567744',
+      europeRoutingNumber: '084009519',
+      europeSwiftBic: 'TRWIUS35XXX',
+      europePayoutToDefaultStripeBank: true,
       iban: undefined,
     });
 
@@ -126,7 +133,20 @@ describe('StripeWisePayoutsService', () => {
         balances: [{ currency: 'USD', amount: 100, reserved: 0 }],
       }),
       findIncomingCredit: jest.fn().mockResolvedValue({ available: true }),
-      getReceivingAccountDetails: jest.fn(),
+      getReceivingAccountDetails: jest.fn().mockResolvedValue({
+        configured: true,
+        accounts: [
+          {
+            currency: 'USD',
+            accountName: 'COLUMN NA WISE (Wise US)',
+            bankName: 'Column National Association',
+            accountNumber: '537681803567744',
+            routingNumber: '084009519',
+            swiftBic: 'TRWIUS35XXX',
+            issued: true,
+          },
+        ],
+      }),
     };
 
     const paymentsToFaModel = {

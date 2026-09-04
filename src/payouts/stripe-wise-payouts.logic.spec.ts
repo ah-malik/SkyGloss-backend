@@ -14,6 +14,7 @@ import {
   parsePositiveAmount,
   resolveShopOrderStripeAccountKey,
   resolveStripeApiVersion,
+  resolveAutomatedCommissionSourceType,
   shouldApplyWiseReceipt,
   stripeStatusLabel,
   toStripeAmount,
@@ -177,6 +178,35 @@ describe('stripe-wise-payouts.logic', () => {
       expect(resolveShopOrderStripeAccountKey('', 'United States')).toBe('usa');
       expect(resolveShopOrderStripeAccountKey(undefined, 'USA')).toBe('usa');
       expect(resolveShopOrderStripeAccountKey('', 'Germany')).toBe('europe');
+    });
+  });
+
+  describe('resolveAutomatedCommissionSourceType', () => {
+    it('forces Europe commission transfers onto payments_balance', () => {
+      expect(resolveAutomatedCommissionSourceType('europe')).toBe(
+        'payments_balance',
+      );
+      expect(
+        resolveAutomatedCommissionSourceType('europe', 'financial_account'),
+      ).toBe('payments_balance');
+    });
+
+    it('defaults Global/USA to financial_account', () => {
+      expect(resolveAutomatedCommissionSourceType('global')).toBe(
+        'financial_account',
+      );
+      expect(resolveAutomatedCommissionSourceType('usa')).toBe(
+        'financial_account',
+      );
+    });
+
+    it('allows env override to payments_balance for Global/USA only', () => {
+      expect(
+        resolveAutomatedCommissionSourceType('global', 'payments_balance'),
+      ).toBe('payments_balance');
+      expect(
+        resolveAutomatedCommissionSourceType('usa', 'payments_balance'),
+      ).toBe('payments_balance');
     });
   });
 });

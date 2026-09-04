@@ -384,3 +384,26 @@ function looksInternal(message: string): boolean {
 export function isStripeAccountKey(value: unknown): value is StripeAccountKey {
   return value === 'global' || value === 'usa' || value === 'europe';
 }
+
+/**
+ * Automated order-commission Stripe→Wise source:
+ * - Europe: always payments_balance → Wise (no Financial Account)
+ * - Global / USA: financial_account by default (payments → FA → Wise)
+ * Env AUTO_COMMISSION_SOURCE_TYPE can force payments_balance for global/usa,
+ * but never overrides Europe away from payments_balance.
+ */
+export function resolveAutomatedCommissionSourceType(
+  stripeAccountKey: StripeAccountKey,
+  envSource?: string | null,
+): 'financial_account' | 'payments_balance' {
+  if (stripeAccountKey === 'europe') {
+    return 'payments_balance';
+  }
+  const normalized = String(envSource || '')
+    .trim()
+    .toLowerCase();
+  if (normalized === 'payments_balance') {
+    return 'payments_balance';
+  }
+  return 'financial_account';
+}

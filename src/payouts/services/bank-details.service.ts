@@ -15,8 +15,12 @@ import { CreateBankDetailsDto } from '../dto/create-bank-details.dto';
 import { ApprovalAction, AuditService } from './audit.service';
 import { WiseService } from './wise.service';
 import { UsersService } from '../../users/users.service';
-import { sanitizePayoutCurrency } from '../wise-country-iso';
+import { sanitizePayoutCurrency, toIsoCountryCode } from '../wise-country-iso';
 import { ibanValidationError, normalizeIban } from '../iban-validate';
+import {
+  keepOrReplaceBankSecret,
+  mergeExtraBankDetails,
+} from '../bank-secret';
 
 @Injectable()
 export class BankDetailsService {
@@ -145,6 +149,42 @@ export class BankDetailsService {
   }
 
   async upsertPrimary(userId: string, dto: CreateBankDetailsDto) {
+    const existing = await this.bankDetailsModel.findOne({
+      userId: new Types.ObjectId(userId),
+      isDeleted: false,
+    }).sort({ isPrimary: -1, createdAt: -1 });
+
+    const countryChanged =
+      !!existing &&
+      (toIsoCountryCode(dto.country) || dto.country) !==
+        (toIsoCountryCode(existing.country) || existing.country);
+
+    dto.iban = keepOrReplaceBankSecret(dto.iban, countryChanged ? undefined : existing?.iban);
+    dto.accountNumber = keepOrReplaceBankSecret(
+      dto.accountNumber,
+      countryChanged ? undefined : existing?.accountNumber,
+    );
+    dto.routingNumber = keepOrReplaceBankSecret(
+      dto.routingNumber,
+      countryChanged ? undefined : existing?.routingNumber,
+    );
+    dto.sortCode = keepOrReplaceBankSecret(
+      dto.sortCode,
+      countryChanged ? undefined : existing?.sortCode,
+    );
+    dto.swiftBic = keepOrReplaceBankSecret(
+      dto.swiftBic,
+      countryChanged ? undefined : existing?.swiftBic,
+    );
+    dto.extraDetails = mergeExtraBankDetails(
+      dto.extraDetails,
+      existing?.extraDetails,
+      countryChanged,
+    );
+    if (!dto.bankName && existing?.bankName && !countryChanged) {
+      dto.bankName = existing.bankName;
+    }
+
     if (!dto.accountNumber && !dto.iban && !Object.keys(dto.extraDetails || {}).length) {
       throw new BadRequestException('Account number, IBAN, or required bank fields are needed');
     }
@@ -159,10 +199,6 @@ export class BankDetailsService {
     const currency = sanitizePayoutCurrency(dto.currency, dto.country);
     const user = await this.usersService.findOne(userId);
     const hash = this.fingerprint({ ...dto, currency });
-    const existing = await this.bankDetailsModel.findOne({
-      userId: new Types.ObjectId(userId),
-      isDeleted: false,
-    }).sort({ isPrimary: -1, createdAt: -1 });
 
     let recipientId = existing?.wiseRecipientId;
     let recipientStatus = existing?.wiseRecipientStatus || 'creating';
@@ -311,11 +347,18 @@ export class BankDetailsService {
       await bank.save();
       return this.toSafeResponse(bank);
     } catch (err) {
-      bank.verificationStatus = BankVerificationStatus.REJECTED;
-      bank.wiseRecipientStatus = 'failed';
-      await bank.save();
       const raw = err instanceof Error ? err.message : 'Wise recipient failed';
-      throw new BadRequestException(this.wiseService.toUserFacingError(raw));
+      const userFacing = this.wiseService.toUserFacingError(raw);
+      const quoteOrBalanceFailure =
+        /cannot pay this bank account|balance is too low|insufficient/i.test(
+          userFacing,
+        );
+      if (!quoteOrBalanceFailure) {
+        bank.verificationStatus = BankVerificationStatus.REJECTED;
+        bank.wiseRecipientStatus = 'failed';
+        await bank.save();
+      }
+      throw new BadRequestException(userFacing);
     }
   }
 
