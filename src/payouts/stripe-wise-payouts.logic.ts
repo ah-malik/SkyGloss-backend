@@ -25,7 +25,6 @@ const USA_COUNTRY_NAMES = new Set([
 const EUROPE_COUNTRY_NAMES = new Set([
   'austria',
   'belgium',
-  'bulgaria',
   'croatia',
   'cyprus',
   'czech republic',
