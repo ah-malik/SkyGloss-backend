@@ -189,16 +189,68 @@ export class MailService {
     return emails;
   }
 
-  private withAdditionalEmail(
+  private shouldCcParentHub(role?: string): boolean {
+    return (
+      role === UserRole.CERTIFIED_SHOP ||
+      role === UserRole.MASTER_PARTNER ||
+      role === UserRole.REGIONAL_PARTNER
+    );
+  }
+
+  /**
+   * User inbox (+ additionalEmail) and, for Shop/REP/Promoter, parent Hub inbox.
+   * Password reset should pass includeParentHub: false.
+   */
+  private async withNotificationRecipients(
     primary: string | undefined | null,
-    user?: { additionalEmail?: string | null } | null,
-  ): string {
-    return this.resolveUserToAddresses(primary, user).join(', ');
+    user?: any,
+    options?: { includeParentHub?: boolean },
+  ): Promise<string> {
+    let source = user;
+    if (user?._id || user?.id) {
+      try {
+        const fullUser = await this.usersService.findOne(
+          String(user._id || user.id),
+        );
+        if (fullUser) source = fullUser;
+      } catch (error) {
+        this.logger.warn(
+          `Failed to reload user for notification recipients: ${(error as Error)?.message}`,
+        );
+      }
+    }
+
+    const emails = this.resolveUserToAddresses(primary, source);
+    const includeParentHub = options?.includeParentHub !== false;
+
+    if (includeParentHub && source && this.shouldCcParentHub(source.role)) {
+      try {
+        const hub = await this.usersService.resolveParentHubForUser(source);
+        if (hub) {
+          for (const address of this.resolveUserToAddresses(hub.email, hub)) {
+            const key = address.toLowerCase();
+            if (!emails.some((existing) => existing.toLowerCase() === key)) {
+              emails.push(address);
+            }
+          }
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Failed to resolve parent Hub for email CC: ${(error as Error)?.message}`,
+        );
+      }
+    }
+
+    return emails.join(', ');
   }
 
   async sendPasswordResetEmail(to: string, token: string, user?: any) {
     const resetLink = `https://portal.skygloss.com/reset-password?token=${token}`;
-    const recipients = this.withAdditionalEmail(to, user) || to;
+    // Security: reset link stays with the account owner only (no Hub CC).
+    const recipients =
+      (await this.withNotificationRecipients(to, user, {
+        includeParentHub: false,
+      })) || to;
 
     const mailOptions = {
       from: '"SkyGloss Support" <sales@skygloss.com>',
@@ -248,7 +300,12 @@ export class MailService {
   ) {
     const loginLink = this.getPortalLoginLink(userDetails?.role);
     const isActivated = Boolean(invoiceBuffer);
-    const userRecipients = this.resolveUserToAddresses(to, userDetails);
+    const userRecipients = (
+      await this.withNotificationRecipients(to, userDetails)
+    )
+      .split(',')
+      .map((e) => e.trim())
+      .filter(Boolean);
     const recipients = isActivated
       ? Array.from(
           new Set([...userRecipients, 'certified@skygloss.com'].filter(Boolean)),
@@ -621,7 +678,10 @@ export class MailService {
     const loginLink = this.getPortalLoginLink(userDetails?.role);
     const recipients = Array.from(
       new Set([
-        ...this.resolveUserToAddresses(to, userDetails),
+        ...(await this.withNotificationRecipients(to, userDetails))
+          .split(',')
+          .map((e) => e.trim())
+          .filter(Boolean),
         'sales@skygloss.com',
       ].filter(Boolean)),
     );
@@ -795,7 +855,7 @@ export class MailService {
     // 1. Send Congratulations to the User
     const userMailOptions = {
       from: `"SkyGloss Certification" <certified@skygloss.com>`,
-      to: this.withAdditionalEmail(user.email, user),
+      to: await this.withNotificationRecipients(user.email, user),
       subject: `Congratulations! Training Completed`,
       html: `
         <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
@@ -1075,7 +1135,7 @@ export class MailService {
   }
 
   async sendOrderRequestCustomerConfirmation(order: any, user: any) {
-    const to = this.withAdditionalEmail(user.email, user);
+    const to = await this.withNotificationRecipients(user.email, user);
     if (await this.useLatestTemplates()) {
       const footerContact = await this.resolveLatestFooterContact(user);
       const mailOptions = {
@@ -1173,7 +1233,7 @@ export class MailService {
 
   async sendOrderPaidCustomerConfirmation(order: any, user: any) {
     const primary = this.resolveCustomerEmail(order, user);
-    const to = this.withAdditionalEmail(primary, user);
+    const to = await this.withNotificationRecipients(primary, user);
     if (!to) {
       this.logger.warn(
         `Order paid confirmation skipped for ${order?.orderNumber}: no customer email.`,
@@ -1315,7 +1375,7 @@ export class MailService {
     const trackingId = (order.trackingId || '').trim();
     const shippingCompany = (order.shippingCompany || '').trim();
     const trackingUrl = this.buildTrackingUrl(shippingCompany, trackingId);
-    const customerEmail = this.withAdditionalEmail(
+    const customerEmail = await this.withNotificationRecipients(
       user?.email || order.shippingAddress?.email,
       user,
     );
@@ -1589,7 +1649,7 @@ export class MailService {
 
     if (await this.useLatestTemplates()) {
       const footerContact = await this.resolveLatestFooterContact(user);
-      const invoiceTo = this.withAdditionalEmail(to, user);
+      const invoiceTo = await this.withNotificationRecipients(to, user);
       const mailOptions: any = {
         from: `"SkyGloss Portal" <sales@skygloss.com>`,
         to: invoiceTo,
@@ -1613,7 +1673,7 @@ export class MailService {
       return;
     }
 
-    const invoiceTo = this.withAdditionalEmail(to, user);
+    const invoiceTo = await this.withNotificationRecipients(to, user);
     const mailOptions: any = {
       from: `"SkyGloss Portal" <sales@skygloss.com>`,
       to: invoiceTo,
@@ -1703,17 +1763,30 @@ export class MailService {
 
     try {
       await this.salesTransporter.sendMail(mailOptions);
-      this.logger.log(`Order invoice email sent to ${to} for ${order.orderNumber}`);
+      this.logger.log(`Order invoice email sent to ${invoiceTo} for ${order.orderNumber}`);
     } catch (error) {
-      this.logger.error(`Failed to send order invoice email to ${to}`, error.stack);
+      this.logger.error(`Failed to send order invoice email to ${invoiceTo}`, error.stack);
       throw error;
     }
   }
 
   async sendCertificateEmail(toEmail: string, shopName: string, attachmentBuffer: Buffer) {
+    let shopUser: any = null;
+    try {
+      shopUser = await this.usersService.findByEmailForRoles(toEmail, [
+        UserRole.CERTIFIED_SHOP,
+      ]);
+    } catch (error) {
+      this.logger.warn(
+        `Could not load shop for certificate Hub CC: ${(error as Error)?.message}`,
+      );
+    }
+    const recipients =
+      (await this.withNotificationRecipients(toEmail, shopUser)) || toEmail;
+
     const mailOptions = {
       from: `"SkyGloss Certification" <certified@skygloss.com>`,
-      to: toEmail,
+      to: recipients,
       subject: `Congratulations! Your SkyGloss Certificate for ${shopName}`,
       html: `
         <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
@@ -1751,9 +1824,9 @@ export class MailService {
 
     try {
       await this.certifiedTransporter.sendMail(mailOptions);
-      this.logger.log(`Certificate email sent to ${toEmail} for ${shopName}`);
+      this.logger.log(`Certificate email sent to ${recipients} for ${shopName}`);
     } catch (error) {
-      this.logger.error(`Failed to send certificate email to ${toEmail}`, error.stack);
+      this.logger.error(`Failed to send certificate email to ${recipients}`, error.stack);
     }
   }
 
@@ -1823,7 +1896,7 @@ export class MailService {
     const subject = isFollowUp
       ? `Reminder: Complete payment for order ${order.orderNumber}`
       : `Complete your payment for order ${order.orderNumber}`;
-    const to = this.withAdditionalEmail(user.email, user);
+    const to = await this.withNotificationRecipients(user.email, user);
 
     if (await this.useLatestTemplates()) {
       const footerContact = await this.resolveLatestFooterContact(user);
@@ -1916,7 +1989,7 @@ export class MailService {
       options?.cancellationReason ||
       order.cancellationReason ||
       'Your order was cancelled.';
-    const to = this.withAdditionalEmail(user.email, user);
+    const to = await this.withNotificationRecipients(user.email, user);
 
     if (await this.useLatestTemplates()) {
       const footerContact = await this.resolveLatestFooterContact(user);

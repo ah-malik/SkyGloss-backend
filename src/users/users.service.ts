@@ -3978,6 +3978,60 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
+   * Parent Hub for email CC (Shop / Representative / Promoter).
+   * Skips GLOBALHUB fallback. Walks network parents until a Hub is found.
+   */
+  async resolveParentHubForUser(
+    user?: {
+      role?: string;
+      country?: string | null;
+      hubPartnerCode?: string | null;
+      referredByPartnerCode?: string | null;
+    } | null,
+  ): Promise<UserDocument | null> {
+    if (!user?.role) return null;
+    if (user.role === UserRole.PARTNER) return null;
+
+    if (user.role === UserRole.CERTIFIED_SHOP) {
+      const code = await this.resolveTerritoryHubPartnerCodeForShop(user);
+      if (!code || isGlobalHubPartnerCode(code)) return null;
+      const hub = await this.findByPartnerCode(code);
+      return hub?.role === UserRole.PARTNER ? hub : null;
+    }
+
+    if (
+      user.role !== UserRole.MASTER_PARTNER &&
+      user.role !== UserRole.REGIONAL_PARTNER &&
+      user.role !== UserRole.DISTRIBUTOR
+    ) {
+      return null;
+    }
+
+    let code = normalizePartnerCode(user.referredByPartnerCode || undefined);
+    const seen = new Set<string>();
+    for (let depth = 0; depth < 8 && code; depth += 1) {
+      if (seen.has(code) || isGlobalHubPartnerCode(code)) break;
+      seen.add(code);
+      const parent = await this.findByPartnerCode(code);
+      if (!parent) break;
+      if (parent.role === UserRole.PARTNER) return parent;
+      code = normalizePartnerCode(parent.referredByPartnerCode || undefined);
+    }
+
+    if (user.country) {
+      const byCountry = await this.findHubByCountry(user.country);
+      if (
+        byCountry?.role === UserRole.PARTNER &&
+        !isGlobalHubPartnerCode(byCountry.partnerCode)
+      ) {
+        return byCountry;
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Validates representative network linking:
    * - no self-assignment
    * - no circular parent/child relationships

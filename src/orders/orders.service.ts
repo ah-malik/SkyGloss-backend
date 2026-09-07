@@ -1139,7 +1139,10 @@ export class OrdersService implements OnModuleInit {
         status: OrderStatus.PENDING_PAYMENT,
         createdAt: { $lte: cutoff },
       })
-      .populate('user', 'firstName lastName email country role');
+      .populate(
+        'user',
+        'firstName lastName email country role hubPartnerCode referredByPartnerCode additionalEmail',
+      );
 
     let cancelled = 0;
     for (const order of expiredOrders) {
@@ -1173,7 +1176,10 @@ export class OrdersService implements OnModuleInit {
         status: OrderStatus.PENDING_PAYMENT,
         createdAt: { $gt: cutoff },
       })
-      .populate('user', 'firstName lastName email role country');
+      .populate(
+        'user',
+        'firstName lastName email role country hubPartnerCode referredByPartnerCode additionalEmail',
+      );
 
     let sent = 0;
     const now = Date.now();
@@ -3099,7 +3105,10 @@ export class OrdersService implements OnModuleInit {
   ): Promise<boolean> {
     const order = await this.orderModel
       .findById(orderId)
-      .populate('user', 'firstName lastName email role partnerCode')
+      .populate(
+        'user',
+        'firstName lastName email role partnerCode country hubPartnerCode referredByPartnerCode additionalEmail',
+      )
       .exec();
     if (!order || order.status !== OrderStatus.PAID) return false;
     if (order.paidConfirmationEmailSentAt && !options?.force) return false;
