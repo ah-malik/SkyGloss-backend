@@ -11,6 +11,7 @@ import {
   IsArray,
   Min,
   Max,
+  ValidateIf,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { UserRole, UserStatus } from '../entities/user.entity';
@@ -22,6 +23,15 @@ export class CreateUserDto {
   @IsEmail()
   @IsOptional()
   email?: string;
+
+  /** Hub receive-only CC inbox. Empty string clears. Not used for login. */
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim().toLowerCase() : value,
+  )
+  @IsOptional()
+  @ValidateIf((_, value) => value !== '' && value != null)
+  @IsEmail()
+  additionalEmail?: string;
 
   @IsString()
   @IsOptional()

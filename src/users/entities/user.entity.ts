@@ -30,6 +30,13 @@ export class User {
   @Prop()
   email?: string;
 
+  /**
+   * Optional second inbox (Hub / partner only). Receive-only copy of emails
+   * sent to `email`. Never used for login or treated as a separate account.
+   */
+  @Prop()
+  additionalEmail?: string;
+
   @Prop({ unique: true, sparse: true })
   username?: string;
 

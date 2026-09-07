@@ -265,6 +265,14 @@ export class UsersController {
       }
     }
 
+    // Hub-only: optional receive-only additional email (not for login).
+    if (
+      user.role === UserRole.PARTNER &&
+      profileData.additionalEmail !== undefined
+    ) {
+      updatePayload.additionalEmail = profileData.additionalEmail;
+    }
+
     return this.usersService.update(user._id.toString(), updatePayload, user);
   }
 

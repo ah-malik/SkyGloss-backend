@@ -864,7 +864,7 @@ export class AuthService {
     // Send actual email
     if (user.email) {
       try {
-        await this.mailService.sendPasswordResetEmail(user.email, token);
+        await this.mailService.sendPasswordResetEmail(user.email, token, user);
       } catch (error) {
         throw new BadRequestException(
           'Failed to send reset email. The mail server might be down or credentials incorrect.',

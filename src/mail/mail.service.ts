@@ -167,12 +167,42 @@ export class MailService {
     }
   }
 
-  async sendPasswordResetEmail(to: string, token: string) {
+  /**
+   * Primary recipient(s) plus optional receive-only additionalEmail.
+   * Does not affect login — only expands outbound "to".
+   */
+  private resolveUserToAddresses(
+    primary: string | undefined | null,
+    user?: { additionalEmail?: string | null } | null,
+  ): string[] {
+    const emails: string[] = [];
+    const push = (raw?: string | null) => {
+      const email = String(raw || '').trim();
+      if (!email || !email.includes('@')) return;
+      const key = email.toLowerCase();
+      if (!emails.some((existing) => existing.toLowerCase() === key)) {
+        emails.push(email);
+      }
+    };
+    push(primary);
+    push(user?.additionalEmail);
+    return emails;
+  }
+
+  private withAdditionalEmail(
+    primary: string | undefined | null,
+    user?: { additionalEmail?: string | null } | null,
+  ): string {
+    return this.resolveUserToAddresses(primary, user).join(', ');
+  }
+
+  async sendPasswordResetEmail(to: string, token: string, user?: any) {
     const resetLink = `https://portal.skygloss.com/reset-password?token=${token}`;
+    const recipients = this.withAdditionalEmail(to, user) || to;
 
     const mailOptions = {
       from: '"SkyGloss Support" <sales@skygloss.com>',
-      to,
+      to: recipients,
       subject: 'Password Reset Request',
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
@@ -194,10 +224,10 @@ export class MailService {
 
     try {
       await this.salesTransporter.sendMail(mailOptions);
-      this.logger.log(`Password reset email sent to ${to}`);
+      this.logger.log(`Password reset email sent to ${recipients}`);
     } catch (error) {
       this.logger.error(
-        `Failed to send password reset email to ${to}`,
+        `Failed to send password reset email to ${recipients}`,
         error.stack,
       );
       throw error;
@@ -218,9 +248,12 @@ export class MailService {
   ) {
     const loginLink = this.getPortalLoginLink(userDetails?.role);
     const isActivated = Boolean(invoiceBuffer);
+    const userRecipients = this.resolveUserToAddresses(to, userDetails);
     const recipients = isActivated
-      ? Array.from(new Set([to, 'certified@skygloss.com'].filter(Boolean)))
-      : [to, 'certified@skygloss.com'];
+      ? Array.from(
+          new Set([...userRecipients, 'certified@skygloss.com'].filter(Boolean)),
+        )
+      : [...userRecipients, 'certified@skygloss.com'];
     const bcc = isActivated ? 'it@skygloss.com' : undefined;
 
     if (await this.useLatestTemplates()) {
@@ -586,7 +619,12 @@ export class MailService {
     } | null,
   ) {
     const loginLink = this.getPortalLoginLink(userDetails?.role);
-    const recipients = Array.from(new Set([to, 'sales@skygloss.com'].filter(Boolean)));
+    const recipients = Array.from(
+      new Set([
+        ...this.resolveUserToAddresses(to, userDetails),
+        'sales@skygloss.com',
+      ].filter(Boolean)),
+    );
 
     if (await this.useLatestTemplates()) {
       const footerContact = await this.resolveLatestFooterContact(userDetails);
@@ -757,7 +795,7 @@ export class MailService {
     // 1. Send Congratulations to the User
     const userMailOptions = {
       from: `"SkyGloss Certification" <certified@skygloss.com>`,
-      to: user.email,
+      to: this.withAdditionalEmail(user.email, user),
       subject: `Congratulations! Training Completed`,
       html: `
         <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
@@ -1037,18 +1075,19 @@ export class MailService {
   }
 
   async sendOrderRequestCustomerConfirmation(order: any, user: any) {
+    const to = this.withAdditionalEmail(user.email, user);
     if (await this.useLatestTemplates()) {
       const footerContact = await this.resolveLatestFooterContact(user);
       const mailOptions = {
         from: `"SkyGloss Portal" <sales@skygloss.com>`,
-        to: user.email,
+        to,
         subject: `Order Request Received: ${order.orderNumber}`,
         html: buildLatestOrderRequestCustomerHtml(order, user, footerContact),
       };
       try {
         await this.salesTransporter.sendMail(mailOptions);
         this.logger.log(
-          `Order request confirmation (latest) sent to customer ${user.email} for ${order.orderNumber}`,
+          `Order request confirmation (latest) sent to customer ${to} for ${order.orderNumber}`,
         );
       } catch (error) {
         this.logger.error(
@@ -1076,7 +1115,7 @@ export class MailService {
 
     const mailOptions = {
       from: `"SkyGloss Portal" <sales@skygloss.com>`,
-      to: user.email,
+      to,
       subject: `Order Request Received: ${order.orderNumber}`,
       html: `
         <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
@@ -1126,14 +1165,15 @@ export class MailService {
 
     try {
       await this.salesTransporter.sendMail(mailOptions);
-      this.logger.log(`Order request confirmation sent to customer ${user.email} for ${order.orderNumber}`);
+      this.logger.log(`Order request confirmation sent to customer ${to} for ${order.orderNumber}`);
     } catch (error) {
       this.logger.error(`Failed to send order request confirmation to customer`, error.stack);
     }
   }
 
   async sendOrderPaidCustomerConfirmation(order: any, user: any) {
-    const to = this.resolveCustomerEmail(order, user);
+    const primary = this.resolveCustomerEmail(order, user);
+    const to = this.withAdditionalEmail(primary, user);
     if (!to) {
       this.logger.warn(
         `Order paid confirmation skipped for ${order?.orderNumber}: no customer email.`,
@@ -1142,7 +1182,7 @@ export class MailService {
     }
     const recipient = {
       ...(user || {}),
-      email: to,
+      email: primary,
       firstName: user?.firstName || order?.shippingAddress?.firstName || 'Customer',
       lastName: user?.lastName || order?.shippingAddress?.lastName || '',
     };
@@ -1275,7 +1315,10 @@ export class MailService {
     const trackingId = (order.trackingId || '').trim();
     const shippingCompany = (order.shippingCompany || '').trim();
     const trackingUrl = this.buildTrackingUrl(shippingCompany, trackingId);
-    const customerEmail = user?.email || order.shippingAddress?.email;
+    const customerEmail = this.withAdditionalEmail(
+      user?.email || order.shippingAddress?.email,
+      user,
+    );
 
     if (!customerEmail) {
       this.logger.warn(`No customer email for shipped order ${order.orderNumber}`);
@@ -1546,9 +1589,10 @@ export class MailService {
 
     if (await this.useLatestTemplates()) {
       const footerContact = await this.resolveLatestFooterContact(user);
+      const invoiceTo = this.withAdditionalEmail(to, user);
       const mailOptions: any = {
         from: `"SkyGloss Portal" <sales@skygloss.com>`,
-        to,
+        to: invoiceTo,
         subject,
         html: buildLatestOrderRequestInvoiceHtml(order, user, {
           viewUrl: payUrl,
@@ -1561,17 +1605,18 @@ export class MailService {
       };
       try {
         await this.salesTransporter.sendMail(mailOptions);
-        this.logger.log(`Order invoice email sent to ${to} for ${order.orderNumber}`);
+        this.logger.log(`Order invoice email sent to ${invoiceTo} for ${order.orderNumber}`);
       } catch (error) {
-        this.logger.error(`Failed to send order invoice email to ${to}`, error.stack);
+        this.logger.error(`Failed to send order invoice email to ${invoiceTo}`, error.stack);
         throw error;
       }
       return;
     }
 
+    const invoiceTo = this.withAdditionalEmail(to, user);
     const mailOptions: any = {
       from: `"SkyGloss Portal" <sales@skygloss.com>`,
-      to,
+      to: invoiceTo,
       subject,
       html: `
         <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
@@ -1778,12 +1823,13 @@ export class MailService {
     const subject = isFollowUp
       ? `Reminder: Complete payment for order ${order.orderNumber}`
       : `Complete your payment for order ${order.orderNumber}`;
+    const to = this.withAdditionalEmail(user.email, user);
 
     if (await this.useLatestTemplates()) {
       const footerContact = await this.resolveLatestFooterContact(user);
       const mailOptions = {
         from: `"SkyGloss Portal" <sales@skygloss.com>`,
-        to: user.email,
+        to,
         subject,
         html: buildLatestPendingPaymentHtml(order, user, {
           payUrl,
@@ -1794,7 +1840,7 @@ export class MailService {
       try {
         await this.salesTransporter.sendMail(mailOptions);
         this.logger.log(
-          `Pending payment ${isFollowUp ? 'reminder' : 'notice'} (latest) sent to ${user.email} for ${order.orderNumber}`,
+          `Pending payment ${isFollowUp ? 'reminder' : 'notice'} (latest) sent to ${to} for ${order.orderNumber}`,
         );
       } catch (error) {
         this.logger.error(`Failed to send pending payment reminder`, error.stack);
@@ -1808,7 +1854,7 @@ export class MailService {
 
     const mailOptions = {
       from: `"SkyGloss Portal" <sales@skygloss.com>`,
-      to: user.email,
+      to,
       subject,
       html: `
         <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
@@ -1853,7 +1899,7 @@ export class MailService {
     try {
       await this.salesTransporter.sendMail(mailOptions);
       this.logger.log(
-        `Pending payment ${isFollowUp ? 'reminder' : 'notice'} sent to ${user.email} for ${order.orderNumber}`,
+        `Pending payment ${isFollowUp ? 'reminder' : 'notice'} sent to ${to} for ${order.orderNumber}`,
       );
     } catch (error) {
       this.logger.error(`Failed to send pending payment reminder`, error.stack);
@@ -1870,12 +1916,13 @@ export class MailService {
       options?.cancellationReason ||
       order.cancellationReason ||
       'Your order was cancelled.';
+    const to = this.withAdditionalEmail(user.email, user);
 
     if (await this.useLatestTemplates()) {
       const footerContact = await this.resolveLatestFooterContact(user);
       const mailOptions = {
         from: `"SkyGloss Portal" <sales@skygloss.com>`,
-        to: user.email,
+        to,
         subject: wasPaid
           ? `Order Cancelled & Refunded: ${order.orderNumber}`
           : `Order Cancelled: ${order.orderNumber}`,
@@ -1888,7 +1935,7 @@ export class MailService {
       try {
         await this.salesTransporter.sendMail(mailOptions);
         this.logger.log(
-          `Order cancellation notification (latest) sent to ${user.email} for ${order.orderNumber}`,
+          `Order cancellation notification (latest) sent to ${to} for ${order.orderNumber}`,
         );
       } catch (error) {
         this.logger.error(
@@ -1901,7 +1948,7 @@ export class MailService {
 
     const mailOptions = {
       from: `"SkyGloss Portal" <sales@skygloss.com>`,
-      to: user.email,
+      to,
       subject: wasPaid
         ? `Order Cancelled & Refunded: ${order.orderNumber}`
         : `Order Cancelled: ${order.orderNumber}`,
@@ -1940,7 +1987,7 @@ export class MailService {
 
     try {
       await this.salesTransporter.sendMail(mailOptions);
-      this.logger.log(`Order cancellation notification sent to ${user.email} for ${order.orderNumber}`);
+      this.logger.log(`Order cancellation notification sent to ${to} for ${order.orderNumber}`);
     } catch (error) {
       this.logger.error(`Failed to send order cancellation notification to customer`, error.stack);
     }

@@ -735,6 +735,27 @@ export class UsersService implements OnModuleInit {
       );
     }
 
+    if (createUserDto.additionalEmail !== undefined) {
+      if (
+        createUserDto.role !== UserRole.PARTNER ||
+        !String(createUserDto.additionalEmail || '').trim()
+      ) {
+        delete createUserDto.additionalEmail;
+      } else {
+        createUserDto.additionalEmail = normalizeEmail(
+          createUserDto.additionalEmail,
+        );
+        if (
+          createUserDto.email &&
+          createUserDto.additionalEmail === createUserDto.email
+        ) {
+          throw new BadRequestException(
+            'Additional email must be different from the primary email',
+          );
+        }
+      }
+    }
+
     if (createUserDto.username) {
       const existingUser = await this.userModel.findOne({
         username: createUserDto.username,
@@ -2848,6 +2869,37 @@ export class UsersService implements OnModuleInit {
 
     if (updatePayload.email) {
       updatePayload.email = normalizeEmail(updatePayload.email);
+    }
+
+    if (updatePayload.additionalEmail !== undefined) {
+      if (roleAfterUpdate !== UserRole.PARTNER) {
+        delete updatePayload.additionalEmail;
+      } else if (
+        updatePayload.additionalEmail === '' ||
+        updatePayload.additionalEmail == null
+      ) {
+        updatePayload.additionalEmail = null;
+      } else {
+        updatePayload.additionalEmail = normalizeEmail(
+          String(updatePayload.additionalEmail),
+        );
+        if (!updatePayload.additionalEmail.includes('@')) {
+          throw new BadRequestException('Enter a valid additional email');
+        }
+        const primaryEmail = normalizeEmail(
+          String(
+            updatePayload.email || targetUserForHierarchy.email || '',
+          ),
+        );
+        if (
+          primaryEmail &&
+          updatePayload.additionalEmail === primaryEmail
+        ) {
+          throw new BadRequestException(
+            'Additional email must be different from the primary email',
+          );
+        }
+      }
     }
 
     if (
