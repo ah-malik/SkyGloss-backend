@@ -31,6 +31,7 @@ const EUROPE_COUNTRY_TO_VIES_CODE: Record<string, string | null> = {
   malta: 'MT',
   netherlands: 'NL',
   holland: 'NL',
+  'the netherlands': 'NL',
   poland: 'PL',
   portugal: 'PT',
   romania: 'RO',
@@ -40,6 +41,39 @@ const EUROPE_COUNTRY_TO_VIES_CODE: Record<string, string | null> = {
   sweden: 'SE',
   norway: null,
   switzerland: null,
+};
+
+/** Accept ISO-2 codes when country fields store DE/FR instead of full names. */
+const EUROPE_ISO_TO_VIES_CODE: Record<string, string | null> = {
+  AT: 'AT',
+  BE: 'BE',
+  HR: 'HR',
+  CY: 'CY',
+  CZ: 'CZ',
+  DK: 'DK',
+  EE: 'EE',
+  FI: 'FI',
+  FR: 'FR',
+  DE: 'DE',
+  GR: 'EL',
+  EL: 'EL',
+  HU: 'HU',
+  IE: 'IE',
+  IT: 'IT',
+  LV: 'LV',
+  LT: 'LT',
+  LU: 'LU',
+  MT: 'MT',
+  NL: 'NL',
+  PL: 'PL',
+  PT: 'PT',
+  RO: 'RO',
+  SK: 'SK',
+  SI: 'SI',
+  ES: 'ES',
+  SE: 'SE',
+  NO: null,
+  CH: null,
 };
 
 export type ViesVatValidationResult =
@@ -66,12 +100,20 @@ export function requiresEuropeanVat(
 }
 
 export function getViesCountryCode(country?: string | null): string | null | undefined {
-  const key = String(country || '')
-    .toLowerCase()
-    .trim();
-  if (!key) return undefined;
-  if (!(key in EUROPE_COUNTRY_TO_VIES_CODE)) return undefined;
-  return EUROPE_COUNTRY_TO_VIES_CODE[key];
+  const raw = String(country || '').trim();
+  if (!raw) return undefined;
+
+  const key = raw.toLowerCase();
+  if (key in EUROPE_COUNTRY_TO_VIES_CODE) {
+    return EUROPE_COUNTRY_TO_VIES_CODE[key];
+  }
+
+  const iso = raw.toUpperCase();
+  if (iso in EUROPE_ISO_TO_VIES_CODE) {
+    return EUROPE_ISO_TO_VIES_CODE[iso];
+  }
+
+  return undefined;
 }
 
 /**
@@ -104,6 +146,46 @@ export function formatVatForStorage(
   if (!normalized) return '';
   if (viesCountryCode) return `${viesCountryCode}${normalized}`;
   return normalized;
+}
+
+/** VIES sometimes returns error as string, actionError, errorWrappers, or error[]. */
+function extractViesErrorCode(data: any): string {
+  const candidates: unknown[] = [
+    data?.actionError,
+    data?.errorWrappers?.[0]?.error,
+    data?.errorWrappers?.[0]?.message,
+  ];
+
+  if (Array.isArray(data?.error)) {
+    candidates.push(data.error[0]?.error, data.error[0]?.message, data.error[0]);
+  } else {
+    candidates.push(data?.error);
+  }
+
+  for (const candidate of candidates) {
+    if (candidate == null || candidate === '') continue;
+    if (typeof candidate === 'object') {
+      const nested =
+        (candidate as any).error ||
+        (candidate as any).message ||
+        (candidate as any).code;
+      if (nested) return String(nested);
+      continue;
+    }
+    return String(candidate);
+  }
+  return '';
+}
+
+function isViesUnavailableError(errorCode: string): boolean {
+  const errorUpper = String(errorCode || '').toUpperCase();
+  return (
+    errorUpper.includes('UNAVAILABLE') ||
+    errorUpper.includes('TIMEOUT') ||
+    errorUpper.includes('MS_MAX') ||
+    errorUpper.includes('GLOBAL_MAX') ||
+    errorUpper.includes('BUSY')
+  );
 }
 
 /**
@@ -178,21 +260,8 @@ export async function validateEuropeanVatNumber(params: {
       };
     }
 
-    // VIES returns actionError / errorWrappers when the MS service is down
-    const errorCode =
-      data?.actionError?.toString?.() ||
-      data?.errorWrappers?.[0]?.error ||
-      data?.error ||
-      '';
-    const errorUpper = String(errorCode).toUpperCase();
-
-    if (
-      errorUpper.includes('UNAVAILABLE') ||
-      errorUpper.includes('TIMEOUT') ||
-      errorUpper.includes('MS_MAX') ||
-      errorUpper.includes('GLOBAL_MAX') ||
-      errorUpper.includes('BUSY')
-    ) {
+    const errorCode = extractViesErrorCode(data);
+    if (isViesUnavailableError(errorCode)) {
       return {
         ok: false,
         reason: 'unavailable',
@@ -219,6 +288,15 @@ export async function validateEuropeanVatNumber(params: {
     };
   } catch (err: any) {
     const status = err?.response?.status;
+    const responseError = extractViesErrorCode(err?.response?.data);
+    if (isViesUnavailableError(responseError)) {
+      return {
+        ok: false,
+        reason: 'unavailable',
+        message:
+          'VAT verification service is temporarily unavailable. Please try again shortly.',
+      };
+    }
     // 4xx from VIES for bad country/input → treat as invalid VAT
     if (status && status >= 400 && status < 500) {
       return {

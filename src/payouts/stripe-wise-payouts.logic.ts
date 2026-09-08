@@ -44,6 +44,7 @@ const EUROPE_COUNTRY_NAMES = new Set([
   'malta',
   'netherlands',
   'holland',
+  'the netherlands',
   'norway',
   'poland',
   'portugal',
@@ -55,6 +56,38 @@ const EUROPE_COUNTRY_NAMES = new Set([
   'switzerland',
 ]);
 
+const EUROPE_ISO_CODES = new Set([
+  'AT',
+  'BE',
+  'HR',
+  'CY',
+  'CZ',
+  'DK',
+  'EE',
+  'FI',
+  'FR',
+  'DE',
+  'GR',
+  'EL',
+  'HU',
+  'IE',
+  'IT',
+  'LV',
+  'LT',
+  'LU',
+  'MT',
+  'NL',
+  'NO',
+  'PL',
+  'PT',
+  'RO',
+  'SK',
+  'SI',
+  'ES',
+  'SE',
+  'CH',
+]);
+
 /** True when a country label refers to the United States. */
 export function isUsaCountryName(country?: string | null): boolean {
   return USA_COUNTRY_NAMES.has(String(country || '').toLowerCase().trim());
@@ -62,7 +95,10 @@ export function isUsaCountryName(country?: string | null): boolean {
 
 /** True when a country label refers to a supported European Stripe region. */
 export function isEuropeCountryName(country?: string | null): boolean {
-  return EUROPE_COUNTRY_NAMES.has(String(country || '').toLowerCase().trim());
+  const raw = String(country || '').trim();
+  if (!raw) return false;
+  if (EUROPE_COUNTRY_NAMES.has(raw.toLowerCase())) return true;
+  return EUROPE_ISO_CODES.has(raw.toUpperCase());
 }
 
 function resolveStripeAccountKeyFromCountry(

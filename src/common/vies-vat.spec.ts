@@ -55,6 +55,28 @@ describe('vies-vat', () => {
     expect(mockedAxios.post).not.toHaveBeenCalled();
   });
 
+  it('maps ISO country codes and The Netherlands alias', () => {
+    expect(getViesCountryCode('DE')).toBe('DE');
+    expect(getViesCountryCode('GR')).toBe('EL');
+    expect(getViesCountryCode('The Netherlands')).toBe('NL');
+    expect(requiresEuropeanVat('DE', '')).toBe(true);
+  });
+
+  it('treats VIES error[] MS_UNAVAILABLE as unavailable', async () => {
+    mockedAxios.post.mockResolvedValueOnce({
+      data: {
+        actionSucceed: false,
+        error: [{ error: 'MS_UNAVAILABLE' }],
+      },
+    });
+    const result = await validateEuropeanVatNumber({
+      country: 'Germany',
+      taxId: 'DE136695976',
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe('unavailable');
+  });
+
   it('returns invalid when VIES says valid=false', async () => {
     mockedAxios.post.mockResolvedValueOnce({ data: { valid: false } });
     const result = await validateEuropeanVatNumber({

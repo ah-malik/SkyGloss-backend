@@ -121,6 +121,7 @@ export const FRONTEND_APIS: ApiEndpointDef[] = [
 
   // Orders
   def('frontend', 'Orders', 'POST', '/orders/checkout-session', 'Create checkout session'),
+  def('frontend', 'Orders', 'POST', '/orders/validate-vat', 'Validate European VAT via VIES'),
   def('frontend', 'Orders', 'POST', '/orders/activation-fee', 'Create activation fee session'),
   def('frontend', 'Orders', 'GET', '/orders/my-orders', 'My orders'),
   def('frontend', 'Orders', 'GET', '/orders/network-orders', 'Network orders'),
