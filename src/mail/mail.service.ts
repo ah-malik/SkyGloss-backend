@@ -27,6 +27,7 @@ import {
   FooterContact,
   resolveShopFooterContact,
 } from './templates/latest-shared';
+import { isEuropeCountryName } from '../payouts/stripe-wise-payouts.logic';
 
 @Injectable()
 export class MailService {
@@ -936,14 +937,42 @@ export class MailService {
     }
   }
 
-  async sendNewOrderNotification(order: any, user: any) {
+  private buildInvoiceAttachments(
+    order: any,
+    invoiceBuffer?: Buffer,
+  ): { filename: string; content: Buffer }[] | undefined {
+    if (
+      !invoiceBuffer ||
+      !Buffer.isBuffer(invoiceBuffer) ||
+      invoiceBuffer.length === 0
+    ) {
+      return undefined;
+    }
+    const orderNumber =
+      String(order?.orderNumber || 'Order').trim() || 'Order';
+    return [
+      {
+        filename: `Invoice_${orderNumber}.pdf`,
+        content: invoiceBuffer,
+      },
+    ];
+  }
+
+  async sendNewOrderNotification(
+    order: any,
+    user: any,
+    invoiceBuffer?: Buffer,
+  ) {
+    const attachments = this.buildInvoiceAttachments(order, invoiceBuffer);
+
     if (await this.useLatestTemplates()) {
       const footerContact = await this.resolveLatestFooterContact(user);
-      const mailOptions = {
+      const mailOptions: any = {
         from: `"SkyGloss Portal" <sales@skygloss.com>`,
         to: 'sales@skygloss.com',
         subject: `NEW ORDER PAID: ${order.orderNumber} - ${user.firstName} ${user.lastName}`,
         html: buildLatestNewOrderPaidSalesHtml(order, user, footerContact),
+        ...(attachments ? { attachments } : {}),
       };
       try {
         await this.salesTransporter.sendMail(mailOptions);
@@ -971,10 +1000,11 @@ export class MailService {
     const currency = (order.currency || 'USD').toUpperCase();
     const symbol = currencySymbols[currency] || (currency + ' ');
 
-    const mailOptions = {
+    const mailOptions: any = {
       from: `"SkyGloss Portal" <portal@skygloss.com>`,
       to: 'sales@skygloss.com',
       subject: `NEW ORDER PAID: ${order.orderNumber} - ${user.firstName} ${user.lastName}`,
+      ...(attachments ? { attachments } : {}),
       html: `
         <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
@@ -1035,14 +1065,21 @@ export class MailService {
     }
   }
 
-  async sendNewOrderRequestNotification(order: any, user: any) {
+  async sendNewOrderRequestNotification(
+    order: any,
+    user: any,
+    invoiceBuffer?: Buffer,
+  ) {
+    const attachments = this.buildInvoiceAttachments(order, invoiceBuffer);
+
     if (await this.useLatestTemplates()) {
       const footerContact = await this.resolveLatestFooterContact(user);
-      const mailOptions = {
+      const mailOptions: any = {
         from: `"SkyGloss Portal" <sales@skygloss.com>`,
         to: 'sales@skygloss.com, it@skygloss.com',
         subject: `NEW ORDER REQUEST: ${order.orderNumber} - ${user.firstName} ${user.lastName}`,
         html: buildLatestNewOrderRequestSalesHtml(order, user, footerContact),
+        ...(attachments ? { attachments } : {}),
       };
       try {
         await this.salesTransporter.sendMail(mailOptions);
@@ -1070,10 +1107,11 @@ export class MailService {
     const currency = (order.currency || 'USD').toUpperCase();
     const symbol = currencySymbols[currency] || (currency + ' ');
 
-    const mailOptions = {
+    const mailOptions: any = {
       from: `"SkyGloss Portal" <portal@skygloss.com>`,
       to: 'sales@skygloss.com, it@skygloss.com',
       subject: `NEW ORDER REQUEST: ${order.orderNumber} - ${user.firstName} ${user.lastName}`,
+      ...(attachments ? { attachments } : {}),
       html: `
         <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
@@ -1134,15 +1172,22 @@ export class MailService {
     }
   }
 
-  async sendOrderRequestCustomerConfirmation(order: any, user: any) {
+  async sendOrderRequestCustomerConfirmation(
+    order: any,
+    user: any,
+    invoiceBuffer?: Buffer,
+  ) {
     const to = await this.withNotificationRecipients(user.email, user);
+    const attachments = this.buildInvoiceAttachments(order, invoiceBuffer);
+
     if (await this.useLatestTemplates()) {
       const footerContact = await this.resolveLatestFooterContact(user);
-      const mailOptions = {
+      const mailOptions: any = {
         from: `"SkyGloss Portal" <sales@skygloss.com>`,
         to,
         subject: `Order Request Received: ${order.orderNumber}`,
         html: buildLatestOrderRequestCustomerHtml(order, user, footerContact),
+        ...(attachments ? { attachments } : {}),
       };
       try {
         await this.salesTransporter.sendMail(mailOptions);
@@ -1173,10 +1218,11 @@ export class MailService {
     const currency = (order.currency || 'USD').toUpperCase();
     const symbol = currencySymbols[currency] || (currency + ' ');
 
-    const mailOptions = {
+    const mailOptions: any = {
       from: `"SkyGloss Portal" <sales@skygloss.com>`,
       to,
       subject: `Order Request Received: ${order.orderNumber}`,
+      ...(attachments ? { attachments } : {}),
       html: `
         <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
@@ -1231,7 +1277,11 @@ export class MailService {
     }
   }
 
-  async sendOrderPaidCustomerConfirmation(order: any, user: any) {
+  async sendOrderPaidCustomerConfirmation(
+    order: any,
+    user: any,
+    invoiceBuffer?: Buffer,
+  ) {
     const primary = this.resolveCustomerEmail(order, user);
     const to = await this.withNotificationRecipients(primary, user);
     if (!to) {
@@ -1246,14 +1296,16 @@ export class MailService {
       firstName: user?.firstName || order?.shippingAddress?.firstName || 'Customer',
       lastName: user?.lastName || order?.shippingAddress?.lastName || '',
     };
+    const attachments = this.buildInvoiceAttachments(order, invoiceBuffer);
 
     if (await this.useLatestTemplates()) {
       const footerContact = await this.resolveLatestFooterContact(recipient);
-      const mailOptions = {
+      const mailOptions: any = {
         from: `"SkyGloss Portal" <sales@skygloss.com>`,
         to,
         subject: `Order Confirmation: ${order.orderNumber}`,
         html: buildLatestOrderPaidHtml(order, recipient, footerContact),
+        ...(attachments ? { attachments } : {}),
       };
       try {
         await this.salesTransporter.sendMail(mailOptions);
@@ -1285,10 +1337,11 @@ export class MailService {
     const currency = (order.currency || 'USD').toUpperCase();
     const symbol = currencySymbols[currency] || (currency + ' ');
 
-    const mailOptions = {
+    const mailOptions: any = {
       from: `"SkyGloss Portal" <sales@skygloss.com>`,
       to,
       subject: `Order Confirmation: ${order.orderNumber}`,
+      ...(attachments ? { attachments } : {}),
       html: `
         <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
@@ -1531,7 +1584,11 @@ export class MailService {
     const shippingEmail = order.shippingAddress?.email || 'N/A';
     const country = order.shippingAddress?.country || user?.country || 'N/A';
     const taxIdLine = order.shippingAddress?.taxId
-      ? `Tax ID: ${order.shippingAddress.taxId}<br>`
+      ? `${
+          isEuropeCountryName(order.shippingAddress?.country || user?.country)
+            ? 'VAT Number'
+            : 'Tax ID'
+        }: ${order.shippingAddress.taxId}<br>`
       : '';
 
     return `

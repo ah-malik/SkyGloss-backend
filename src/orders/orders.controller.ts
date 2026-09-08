@@ -18,6 +18,7 @@ import { AddOrderItemsDto } from './dto/add-order-items.dto';
 import { CreateAdminTestOrderDto } from './dto/create-admin-test-order.dto';
 import { SetOrderRequestShippingDto } from './dto/set-order-request-shipping.dto';
 import { CreateDuplicateInvoiceDto } from './dto/create-duplicate-invoice.dto';
+import { ValidateVatDto } from './dto/validate-vat.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -29,6 +30,26 @@ import type { RawBodyRequest } from '@nestjs/common';
 @Controller('orders')
 export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
+
+  @Post('validate-vat')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    UserRole.CERTIFIED_SHOP,
+    UserRole.PARTNER,
+    UserRole.REGIONAL_PARTNER,
+    UserRole.MASTER_PARTNER,
+    UserRole.DISTRIBUTOR,
+  )
+  validateVat(
+    @GetUser('country') userCountry: string,
+    @Body() dto: ValidateVatDto,
+  ) {
+    return this.ordersService.validateOrderVatNumber({
+      country: dto.country,
+      taxId: dto.taxId,
+      userCountry,
+    });
+  }
 
   @Post('checkout-session')
   @UseGuards(JwtAuthGuard, RolesGuard)

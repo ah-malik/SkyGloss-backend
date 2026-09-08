@@ -101,12 +101,18 @@ import { CommissionsService } from '../payouts/services/commissions.service';
 import { registerShopCommissionRecalculationHandler } from '../common/shop-commission-recalculation';
 import { OrderCommissionTransferService } from '../payouts/services/order-commission-transfer.service';
 import {
+  isEuropeCountryName,
   isUsaShopOrder,
   requiresOnlinePaymentShopOrder,
   resolveShopOrderStripeAccountKey,
   resolveStripeApiVersion,
   StripeAccountKey,
 } from '../payouts/stripe-wise-payouts.logic';
+import {
+  requiresEuropeanVat,
+  resolveOrderDestinationCountry,
+  validateEuropeanVatNumber,
+} from '../common/vies-vat';
 import { RedisCacheService } from '../redis/redis-cache.service';
 import { CacheKeys, CacheTtl } from '../redis/redis.constants';
 
@@ -703,6 +709,10 @@ export class OrdersService implements OnModuleInit {
     const userCountry = (currentUser?.country || '').toLowerCase().trim();
 
     const { items: rawItems, shippingAddress, couponCode } = createOrderDto;
+    await this.assertAndNormalizeEuropeanVat(
+      shippingAddress,
+      currentUser?.country,
+    );
     const shippingCountry =
       shippingAddress?.country || currentUser?.country || '';
     const requiresOnlinePayment = this.requiresOnlinePaymentDestinationOrder(
@@ -3147,8 +3157,18 @@ export class OrdersService implements OnModuleInit {
       );
     }
 
+    let invoiceBuffer: Buffer | undefined;
+    try {
+      invoiceBuffer = await this.generateInvoicePdf(order);
+    } catch (pdfErr) {
+      this.logger.error(
+        `Failed to generate invoice PDF for paid order ${order.orderNumber}`,
+        pdfErr,
+      );
+    }
+
     await this.mailService
-      .sendNewOrderNotification(order, userDoc)
+      .sendNewOrderNotification(order, userDoc, invoiceBuffer)
       .catch((err) =>
         this.logger.error(
           `Failed to send sales notification for order ${order.orderNumber}`,
@@ -3159,6 +3179,7 @@ export class OrdersService implements OnModuleInit {
     const customerSent = await this.mailService.sendOrderPaidCustomerConfirmation(
       order,
       userDoc,
+      invoiceBuffer,
     );
 
     if (customerSent) {
@@ -4303,6 +4324,10 @@ export class OrdersService implements OnModuleInit {
       const orderCurrency = await this.getCurrencyForUser(currentUser);
 
       const { items: rawItems, shippingAddress, couponCode } = createOrderDto;
+      await this.assertAndNormalizeEuropeanVat(
+        shippingAddress,
+        currentUser?.country,
+      );
       const items = rawItems.map((item) => ({
         ...item,
         orderType: normalizeOrderItemType(item.orderType),
@@ -4414,14 +4439,35 @@ export class OrdersService implements OnModuleInit {
 
       // Send Email to sales@skygloss.com
       if (currentUser) {
-        await this.mailService.sendNewOrderRequestNotification(savedOrder, currentUser).catch(err => {
-          console.error('Failed to send order request email to sales', err);
-        });
-        
+        let invoiceBuffer: Buffer | undefined;
+        try {
+          invoiceBuffer = await this.generateInvoicePdf(savedOrder);
+        } catch (pdfErr) {
+          console.error(
+            `Failed to generate invoice PDF for order request ${savedOrder.orderNumber}:`,
+            pdfErr,
+          );
+        }
+
+        await this.mailService
+          .sendNewOrderRequestNotification(savedOrder, currentUser, invoiceBuffer)
+          .catch((err) => {
+            console.error('Failed to send order request email to sales', err);
+          });
+
         // Send Confirmation Email to the Customer
-        await this.mailService.sendOrderRequestCustomerConfirmation(savedOrder, currentUser).catch(err => {
-          console.error('Failed to send order request confirmation email to customer', err);
-        });
+        await this.mailService
+          .sendOrderRequestCustomerConfirmation(
+            savedOrder,
+            currentUser,
+            invoiceBuffer,
+          )
+          .catch((err) => {
+            console.error(
+              'Failed to send order request confirmation email to customer',
+              err,
+            );
+          });
       }
 
       return savedOrder;
@@ -4673,6 +4719,77 @@ export class OrdersService implements OnModuleInit {
 
   private isUsaCountry(country: string): boolean {
     return USA_COUNTRIES.includes((country || '').toLowerCase().trim());
+  }
+
+  /**
+   * European destinations (existing Europe country list) require a VAT number
+   * verified via VIES before the order can be created. Mutates shippingAddress.taxId
+   * to a normalized value when validation succeeds. Non-European orders are untouched.
+   */
+  private async assertAndNormalizeEuropeanVat(
+    shippingAddress?: CreateOrderDto['shippingAddress'] | null,
+    userCountry?: string | null,
+  ): Promise<void> {
+    if (
+      !requiresEuropeanVat(shippingAddress?.country, userCountry) ||
+      !shippingAddress
+    ) {
+      return;
+    }
+
+    const destinationCountry = resolveOrderDestinationCountry(
+      shippingAddress.country,
+      userCountry,
+    );
+    const result = await validateEuropeanVatNumber({
+      country: destinationCountry,
+      taxId: shippingAddress.taxId,
+    });
+
+    if (!result.ok) {
+      throw new BadRequestException(result.message);
+    }
+
+    shippingAddress.taxId = result.normalizedVat;
+  }
+
+  async validateOrderVatNumber(params: {
+    country?: string;
+    taxId?: string;
+    userCountry?: string;
+  }) {
+    const destinationCountry = resolveOrderDestinationCountry(
+      params.country,
+      params.userCountry,
+    );
+    if (!isEuropeCountryName(destinationCountry)) {
+      return {
+        required: false,
+        valid: true,
+        message: 'VAT Number is not required for this country.',
+      };
+    }
+
+    const result = await validateEuropeanVatNumber({
+      country: destinationCountry,
+      taxId: params.taxId,
+    });
+
+    if (!result.ok) {
+      return {
+        required: true,
+        valid: false,
+        reason: result.reason,
+        message: result.message,
+      };
+    }
+
+    return {
+      required: true,
+      valid: true,
+      normalizedVat: result.normalizedVat,
+      message: 'VAT Number verified successfully.',
+    };
   }
 
   private isUsaDestinationOrder(

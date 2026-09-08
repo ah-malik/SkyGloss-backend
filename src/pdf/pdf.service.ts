@@ -10,6 +10,7 @@ import {
   isRegistrationOrder,
 } from '../common/order-totals';
 import { formatOrderItemDisplayName, formatOrderItemTypeLabel } from '../common/order-type';
+import { isEuropeCountryName } from '../payouts/stripe-wise-payouts.logic';
 import axios from 'axios';
 
 export interface OrderPdfOptions {
@@ -404,7 +405,10 @@ export class PdfService {
       doc.text(`Country: ${shipping.country || 'N/A'}`);
       doc.text(`Phone: ${shipping.phoneNumber || 'N/A'}`);
       if (shipping.taxId) {
-        doc.text(`Tax ID: ${shipping.taxId}`);
+        const taxLabel = isEuropeCountryName(shipping.country)
+          ? 'VAT Number'
+          : 'Tax ID';
+        doc.text(`${taxLabel}: ${shipping.taxId}`);
       }
       doc.moveDown();
 
