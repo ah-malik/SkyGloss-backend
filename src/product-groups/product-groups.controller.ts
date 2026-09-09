@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { ProductGroupsService } from './product-groups.service';
 import {
+  AssignCountryDto,
   CreateProductGroupDto,
   UpdateProductGroupDto,
 } from './dto/product-group.dto';
@@ -32,6 +33,15 @@ export class ProductGroupsController {
   @Get()
   findAll() {
     return this.productGroupsService.findAll();
+  }
+
+  @Patch('assign-country')
+  @Roles(UserRole.ADMIN)
+  assignCountry(@Body() dto: AssignCountryDto) {
+    return this.productGroupsService.assignCountry(
+      dto.country,
+      dto.productGroupId ?? null,
+    );
   }
 
   @Get(':id')

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import {
@@ -170,6 +170,51 @@ export class ProductGroupsService {
       throw new NotFoundException(`Product Group with ID ${id} not found`);
     }
     return existingGroup;
+  }
+
+  /**
+   * Atomically move a country into one pricing group (or clear assignment).
+   * Uses the same ProductGroup.countries[] source of truth as Pricing Groups UI.
+   */
+  async assignCountry(
+    country: string,
+    productGroupId?: string | null,
+  ): Promise<{
+    country: string;
+    pricingGroup: ProductGroup | null;
+  }> {
+    const trimmed = String(country || '').trim();
+    if (!trimmed) {
+      throw new BadRequestException('Country is required');
+    }
+
+    await this.productGroupModel.updateMany(
+      { countries: trimmed },
+      { $pull: { countries: trimmed } },
+    ).exec();
+
+    await this.productGroupModel.updateMany(
+      { country: trimmed },
+      { $unset: { country: '' } },
+    ).exec();
+
+    if (!productGroupId) {
+      return { country: trimmed, pricingGroup: null };
+    }
+
+    const group = await this.productGroupModel
+      .findByIdAndUpdate(
+        productGroupId,
+        { $addToSet: { countries: trimmed } },
+        { new: true },
+      )
+      .exec();
+
+    if (!group) {
+      throw new NotFoundException(`Product Group with ID ${productGroupId} not found`);
+    }
+
+    return { country: trimmed, pricingGroup: group };
   }
 
   async remove(id: string): Promise<any> {

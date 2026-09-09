@@ -272,6 +272,7 @@ export const ADMIN_APIS: ApiEndpointDef[] = [
   // Users
   def('admin', 'Users', 'GET', '/users', 'List users'),
   def('admin', 'Users', 'GET', '/users/stats', 'User stats'),
+  def('admin', 'Users', 'GET', '/users/countries-summary', 'Country payment & pricing summary'),
   def('admin', 'Users', 'POST', '/users', 'Create user'),
   def('admin', 'Users', 'GET', '/users/:id', 'Get user'),
   def('admin', 'Users', 'PATCH', '/users/:id', 'Update user'),
@@ -340,6 +341,7 @@ export const ADMIN_APIS: ApiEndpointDef[] = [
   def('admin', 'Product Groups', 'POST', '/product-groups', 'Create product group'),
   def('admin', 'Product Groups', 'GET', '/product-groups', 'List product groups'),
   def('admin', 'Product Groups', 'GET', '/product-groups/:id', 'Get product group'),
+  def('admin', 'Product Groups', 'PATCH', '/product-groups/assign-country', 'Assign country to pricing group'),
   def('admin', 'Product Groups', 'PATCH', '/product-groups/:id', 'Update product group'),
   def('admin', 'Product Groups', 'DELETE', '/product-groups/:id', 'Delete product group'),
 

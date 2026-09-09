@@ -90,6 +90,12 @@ export class UsersController {
     return this.usersService.getStats();
   }
 
+  @Get('countries-summary')
+  @Roles(UserRole.ADMIN)
+  getCountriesSummary() {
+    return this.usersService.getCountriesSummary();
+  }
+
   @Get()
   @Roles(
     UserRole.ADMIN,

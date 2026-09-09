@@ -58,6 +58,10 @@ import { CacheKeys, CacheTtl } from '../redis/redis.constants';
 import { UserActivityService } from '../user-activity/user-activity.service';
 import { UserActivityAction } from '../user-activity/entities/user-activity-log.entity';
 import { queueShopCommissionRecalculation } from '../common/shop-commission-recalculation';
+import {
+  requiresOnlinePaymentShopOrder,
+  resolveShopOrderStripeAccountKey,
+} from '../payouts/stripe-wise-payouts.logic';
 
 export interface NetworkUsersResult {
   shops: UserDocument[];
@@ -3350,6 +3354,108 @@ export class UsersService implements OnModuleInit {
         recentUsers,
       };
     });
+  }
+
+  /**
+   * Admin country overview: user counts + pricing group assignment +
+   * Stripe region / order type derived from existing payment rules.
+   * Does not alter runtime payment or pricing behavior.
+   */
+  async getCountriesSummary() {
+    const [groups, userCounts] = await Promise.all([
+      this.productGroupModel
+        .find()
+        .select('name currency countries country isDefault isActive')
+        .lean()
+        .exec(),
+      this.userModel
+        .aggregate<{ _id: string; userCount: number }>([
+          {
+            $match: {
+              country: { $exists: true, $nin: [null, ''] },
+              role: { $ne: UserRole.ADMIN },
+            },
+          },
+          { $group: { _id: '$country', userCount: { $sum: 1 } } },
+          { $sort: { _id: 1 } },
+        ])
+        .exec(),
+    ]);
+
+    const countryToGroup = new Map<string, (typeof groups)[number]>();
+    let defaultGroup: (typeof groups)[number] | null = null;
+
+    for (const group of groups) {
+      if (group.isDefault) defaultGroup = group;
+      const list = [...(group.countries || [])];
+      if (group.country && !list.includes(group.country)) {
+        list.push(group.country);
+      }
+      for (const country of list) {
+        if (country) countryToGroup.set(country, group);
+      }
+    }
+
+    const countMap = new Map(
+      userCounts.map((row) => [row._id, row.userCount]),
+    );
+
+    const allCountries = new Set<string>([
+      ...countMap.keys(),
+      ...countryToGroup.keys(),
+    ]);
+
+    const rows = [...allCountries]
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b))
+      .map((country) => {
+        const assigned = countryToGroup.get(country) || null;
+        const effective = assigned || defaultGroup;
+        const stripeRegion = resolveShopOrderStripeAccountKey(country, country);
+        const orderType = requiresOnlinePaymentShopOrder(country, country)
+          ? 'payment'
+          : 'order_request';
+
+        return {
+          country,
+          userCount: countMap.get(country) || 0,
+          pricingGroup: effective
+            ? {
+                _id: String(effective._id),
+                name: effective.name,
+                currency: effective.currency,
+                isDefault: !!effective.isDefault,
+                isFallback: !assigned,
+              }
+            : null,
+          stripeRegion,
+          orderType,
+        };
+      });
+
+    return {
+      rows,
+      pricingGroups: groups.map((group) => ({
+        _id: String(group._id),
+        name: group.name,
+        currency: group.currency,
+        isDefault: !!group.isDefault,
+        isActive: group.isActive !== false,
+        countries: [
+          ...(group.countries || []),
+          ...(group.country && !(group.countries || []).includes(group.country)
+            ? [group.country]
+            : []),
+        ],
+      })),
+      defaultPricingGroup: defaultGroup
+        ? {
+            _id: String(defaultGroup._id),
+            name: defaultGroup.name,
+            currency: defaultGroup.currency,
+          }
+        : null,
+    };
   }
 
   async completeCourse(

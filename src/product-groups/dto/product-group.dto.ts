@@ -88,3 +88,14 @@ export class UpdateProductGroupDto {
   @IsBoolean()
   isDefault?: boolean;
 }
+
+/** Move a country into a pricing group (or clear explicit assignment). */
+export class AssignCountryDto {
+  @IsString()
+  country: string;
+
+  /** Target product group id. Omit / null to remove explicit country assignment. */
+  @IsOptional()
+  @IsString()
+  productGroupId?: string | null;
+}
