@@ -1,10 +1,14 @@
 // Shipping configuration for North America & Europe regions
-// Excluded countries: Russia, Ukraine, Turkey, North Macedonia, Bulgaria, Belarus
+// Excluded countries: Russia, Ukraine, Turkey, North Macedonia, Belarus
+// Bulgaria: always charged fixed €25 (no free-shipping threshold)
 
 export const EXCLUDED_COUNTRIES = [
-  'russia', 'ukraine', 'turkey', 'north macedonia', 'bulgaria', 'belarus',
+  'russia', 'ukraine', 'turkey', 'north macedonia', 'belarus',
   'türkiye',
 ];
+
+/** Countries that always pay the flat shipping fee (never free over threshold). */
+export const FIXED_SHIPPING_COUNTRIES = ['bulgaria'];
 
 export const NORTH_AMERICA_COUNTRIES = [
   'united states', 'usa', 'us', 'united states of america',
@@ -20,6 +24,7 @@ export const NORTH_AMERICA_COUNTRIES = [
 export const EUROPE_COUNTRIES = [
   'albania', 'andorra', 'armenia', 'austria', 'azerbaijan',
   'belgium', 'bosnia and herzegovina',
+  'bulgaria',
   'croatia', 'cyprus', 'czech republic', 'czechia',
   'denmark',
   'estonia',
@@ -41,6 +46,11 @@ export const EUROPE_COUNTRIES = [
 export const SHIPPING_FEE_THRESHOLD = 500; // $500 or €500
 export const SHIPPING_FEE_AMOUNT = 25;     // $25 or €25
 
+export function hasFixedShippingFee(country: string): boolean {
+  if (!country) return false;
+  return FIXED_SHIPPING_COUNTRIES.includes(country.toLowerCase().trim());
+}
+
 export function getShippingRegion(country: string): 'NA' | 'EU' | null {
   if (!country) return null;
   const c = country.toLowerCase().trim();
@@ -53,6 +63,8 @@ export function getShippingRegion(country: string): 'NA' | 'EU' | null {
 export function calculateShippingFee(country: string, subtotal: number): number {
   const region = getShippingRegion(country);
   if (!region) return 0;
+  // Bulgaria (and any fixed list): always €25 / $25 — no free shipping over threshold
+  if (hasFixedShippingFee(country)) return SHIPPING_FEE_AMOUNT;
   if (subtotal >= SHIPPING_FEE_THRESHOLD) return 0;
   return SHIPPING_FEE_AMOUNT;
 }
