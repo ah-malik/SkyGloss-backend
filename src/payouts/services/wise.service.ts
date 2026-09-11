@@ -612,6 +612,107 @@ export class WiseService {
     }
   }
 
+  /**
+   * Convert funds between Wise balances (e.g. EUR → USD after Europe commission receipt).
+   * Best-effort helper — callers should not fail Stripe→Wise success if this fails.
+   */
+  async convertBalanceCurrency(params: {
+    sourceCurrency: string;
+    targetCurrency: string;
+    sourceAmount: number;
+  }): Promise<{ ok: boolean; targetAmount?: number; error?: string }> {
+    if (!this.isConfigured()) {
+      return { ok: false, error: 'Wise is not configured.' };
+    }
+    const sourceCurrency = String(params.sourceCurrency || '')
+      .trim()
+      .toUpperCase();
+    const targetCurrency = String(params.targetCurrency || '')
+      .trim()
+      .toUpperCase();
+    const sourceAmount = Math.round(Number(params.sourceAmount) * 100) / 100;
+    if (!sourceCurrency || !targetCurrency) {
+      return { ok: false, error: 'Source and target currencies are required.' };
+    }
+    if (sourceCurrency === targetCurrency) {
+      return { ok: true, targetAmount: sourceAmount };
+    }
+    if (!Number.isFinite(sourceAmount) || sourceAmount <= 0) {
+      return { ok: false, error: 'Conversion amount must be greater than zero.' };
+    }
+
+    try {
+      const profileId = await this.getProfileId();
+      const balances = await this.request<
+        Array<{
+          id: number;
+          currency?: string;
+          amount?: { value?: number; currency?: string };
+        }>
+      >('GET', `/v4/profiles/${profileId}/balances?types=STANDARD`);
+
+      const sourceBalance = (balances || []).find(
+        (row) =>
+          (row.amount?.currency || row.currency || '').toUpperCase() ===
+          sourceCurrency,
+      );
+      const targetBalance = (balances || []).find(
+        (row) =>
+          (row.amount?.currency || row.currency || '').toUpperCase() ===
+          targetCurrency,
+      );
+      if (!sourceBalance?.id || !targetBalance?.id) {
+        return {
+          ok: false,
+          error: `Wise ${sourceCurrency}/${targetCurrency} balances not found for conversion.`,
+        };
+      }
+
+      const available = Number(sourceBalance.amount?.value ?? 0);
+      if (available + 0.0001 < sourceAmount) {
+        return {
+          ok: false,
+          error: `Wise ${sourceCurrency} balance (${available}) is less than ${sourceAmount}.`,
+        };
+      }
+
+      const quote = await this.request<{
+        id: string;
+        targetAmount?: number;
+        rate?: number;
+      }>('POST', `/v3/profiles/${profileId}/quotes`, {
+        sourceCurrency,
+        targetCurrency,
+        sourceAmount,
+        payOut: 'BALANCE',
+        preferredPayIn: 'BALANCE',
+      });
+
+      const movement = await this.request<{
+        id?: number | string;
+        status?: string;
+        targetAmount?: number;
+      }>('POST', `/v2/profiles/${profileId}/balance-movements`, {
+        quoteId: quote.id,
+        sourceBalanceId: sourceBalance.id,
+        targetBalanceId: targetBalance.id,
+      });
+
+      const targetAmount = Number(
+        movement.targetAmount ?? quote.targetAmount ?? 0,
+      );
+      return {
+        ok: true,
+        targetAmount: Number.isFinite(targetAmount) ? targetAmount : undefined,
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        error: this.errorMessage(err),
+      };
+    }
+  }
+
   async findIncomingCredit(params: {
     currency: string;
     amount: number;

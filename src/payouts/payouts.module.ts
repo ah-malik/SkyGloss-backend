@@ -75,6 +75,7 @@ import { OrderCommissionTransferService } from './services/order-commission-tran
 import { UsersModule } from '../users/users.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { MailModule } from '../mail/mail.module';
+import { ExchangeRatesModule } from '../exchange-rates/exchange-rates.module';
 
 @Module({
   imports: [
@@ -97,6 +98,7 @@ import { MailModule } from '../mail/mail.module';
     UsersModule,
     NotificationsModule,
     MailModule,
+    ExchangeRatesModule,
   ],
   controllers: [
     CommissionsController,

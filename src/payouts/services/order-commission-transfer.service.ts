@@ -21,9 +21,11 @@ import {
 } from '../entities/stripe-wise-payout.entity';
 import {
   buildOrderCommissionIdempotencyKey,
+  convertUsdCommissionToEur,
   extractCommissionLines,
   isRetryableTransferStatus,
   mapStripePayoutToTransferStatus,
+  resolveCommissionPayoutCurrency,
   sumCommissionLines,
   summarizeCommissionTypes,
   transferStatusLabel,
@@ -38,6 +40,7 @@ import {
   StripeAccountKey,
 } from '../stripe-wise-payouts.logic';
 import { StripeWisePayoutsService } from './stripe-wise-payouts.service';
+import { ExchangeRatesService } from '../../exchange-rates/exchange-rates.service';
 
 const USA_COUNTRIES = new Set([
   'united states',
@@ -67,6 +70,7 @@ export class OrderCommissionTransferService implements OnModuleInit {
     private readonly payoutModel: Model<StripeWisePayoutDocument>,
     private readonly config: ConfigService,
     private readonly stripeWisePayouts: StripeWisePayoutsService,
+    private readonly exchangeRates: ExchangeRatesService,
   ) {
     const stripeSecretKey = this.config.get<string>('STRIPE_SECRET_KEY');
     const usaStripeSecretKey = this.config.get<string>('USA_STRIPE_SECRET_KEY');
@@ -369,11 +373,43 @@ export class OrderCommissionTransferService implements OnModuleInit {
       return;
     }
 
+    // Ledger commission stays USD. Europe Stripe payouts must be EUR (avoid $250 USD min).
+    const payoutCurrency = resolveCommissionPayoutCurrency(
+      transfer.stripeAccountKey,
+    );
+    let payoutAmount = transfer.commissionAmount;
+    let eurRateToUsd: number | undefined;
+    if (payoutCurrency === 'EUR') {
+      eurRateToUsd = await this.exchangeRates.getRateToBase('EUR');
+      payoutAmount = convertUsdCommissionToEur(
+        transfer.commissionAmount,
+        eurRateToUsd,
+      );
+      if (payoutAmount <= 0) {
+        transfer.errorReason = 'Converted EUR commission amount is zero.';
+        await transfer.save();
+        return;
+      }
+      transfer.snapshot = {
+        ...(transfer.snapshot || {}),
+        commissionCurrency: SYSTEM_BASE_CURRENCY,
+        commissionAmountUsd: transfer.commissionAmount,
+        payoutCurrency: 'EUR',
+        payoutAmountEur: payoutAmount,
+        eurRateToUsd,
+      };
+      transfer.markModified('snapshot');
+      await transfer.save();
+      this.logger.log(
+        `Europe commission ${transfer.orderNumber}: $${transfer.commissionAmount} USD → €${payoutAmount} EUR (rate ${eurRateToUsd})`,
+      );
+    }
+
     try {
       const payout = await this.stripeWisePayouts.createAutomatedPayout({
         adminId: String(this.systemAdminId),
-        amount: transfer.commissionAmount,
-        currency: transfer.currency,
+        amount: payoutAmount,
+        currency: payoutCurrency,
         stripeAccountKey: transfer.stripeAccountKey,
         idempotencyKey: payoutIdempotencyKey,
         metadata: {
@@ -381,6 +417,8 @@ export class OrderCommissionTransferService implements OnModuleInit {
           skygloss_order_id: String(transfer.orderId),
           skygloss_order_number: transfer.orderNumber,
           skygloss_transfer_id: String(transfer._id),
+          skygloss_commission_usd: String(transfer.commissionAmount),
+          skygloss_payout_currency: payoutCurrency,
         },
       });
 
@@ -498,6 +536,14 @@ export class OrderCommissionTransferService implements OnModuleInit {
   }
 
   private toPublicTransfer(item: OrderCommissionTransferDocument) {
+    const snapshot = (item.snapshot || {}) as Record<string, unknown>;
+    const payoutCurrency =
+      normalizeCurrency(snapshot.payoutCurrency as string) ||
+      resolveCommissionPayoutCurrency(item.stripeAccountKey);
+    const payoutAmount =
+      payoutCurrency === 'EUR' && Number(snapshot.payoutAmountEur) > 0
+        ? Number(snapshot.payoutAmountEur)
+        : item.commissionAmount;
     return {
       id: String(item._id),
       orderId: String(item.orderId),
@@ -506,6 +552,12 @@ export class OrderCommissionTransferService implements OnModuleInit {
       orderCurrency: item.orderCurrency || item.currency,
       commissionAmount: item.commissionAmount,
       wiseAmount: item.commissionAmount,
+      payoutCurrency,
+      payoutAmount,
+      eurRateToUsd:
+        Number(snapshot.eurRateToUsd) > 0
+          ? Number(snapshot.eurRateToUsd)
+          : undefined,
       commissionLines: item.commissionLines || [],
       commissionTypesSummary: item.commissionTypesSummary || '—',
       currency: item.currency,

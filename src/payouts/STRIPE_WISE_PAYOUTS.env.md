@@ -66,9 +66,9 @@ When a shop order is marked **PAID**, the backend queues a commission transfer e
 
 | Stripe account | Automated path |
 |----------------|----------------|
-| **Global** | Payments balance → Financial Account → Wise |
-| **USA** | Financial Account → Wise (funds FA from payments when FA is short; payments→Wise fallback only if FA still blocked) |
-| **Europe** | Payments balance → Wise (**never** uses Financial Account) |
+| **Global** | Payments balance → Financial Account → Wise (USD) |
+| **USA** | Financial Account → Wise USD (funds FA from payments when FA is short; payments→Wise fallback only if FA still blocked) |
+| **Europe** | Commission stays USD on ledger. Stripe payout is **EUR equivalent** to Wise EUR (`payments_balance` only). After Wise receipt, best-effort **EUR → USD** conversion on Wise balances. |
 
 Admin list: **Stripe → Wise** page (`/stripe-wise` in admin UI), section **Order commission transfers**. API: `GET /order-commission-transfers`.
 

@@ -82,6 +82,32 @@ export function buildOrderCommissionIdempotencyKey(
   return retryCount > 0 ? `${base}:retry:${retryCount}` : base;
 }
 
+/**
+ * Convert USD commission ledger amount to EUR for Europe Stripe → Wise payout.
+ * `eurRateToUsd` is rateToBase: 1 EUR = X USD.
+ */
+export function convertUsdCommissionToEur(
+  usdAmount: number,
+  eurRateToUsd: number,
+): number {
+  const usd = Number(usdAmount);
+  const rate = Number(eurRateToUsd);
+  if (!Number.isFinite(usd) || usd <= 0) return 0;
+  if (!Number.isFinite(rate) || rate <= 0) {
+    throw new Error('Invalid EUR exchange rate for commission payout.');
+  }
+  return Math.round((usd / rate) * 100) / 100;
+}
+
+/** Europe commission Stripe payouts use EUR; USA/Global stay on USD. */
+export function resolveCommissionPayoutCurrency(
+  stripeAccountKey?: string | null,
+): 'EUR' | 'USD' {
+  return String(stripeAccountKey || '').toLowerCase() === 'europe'
+    ? 'EUR'
+    : 'USD';
+}
+
 export function mapStripePayoutToTransferStatus(
   stripeStatus?: StripeWisePayoutStatus | string | null,
   wiseStatus?: WiseReceiptStatus | string | null,

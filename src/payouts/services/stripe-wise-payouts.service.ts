@@ -301,7 +301,12 @@ export class StripeWisePayoutsService implements OnModuleInit {
           : outbound.ok
             ? outbound.summary
             : null,
-        destinationCurrency: normalizeCurrency(accountDest.currency) || 'USD',
+        destinationCurrency:
+          account.key === 'europe'
+            ? normalizeCurrency(accountDest.currency) === 'USD'
+              ? 'EUR'
+              : normalizeCurrency(accountDest.currency) || 'EUR'
+            : normalizeCurrency(accountDest.currency) || 'USD',
         destinationName: accountDest.accountName || null,
         destinationBankName: accountDest.bankName || null,
         wiseOutboundReady: outbound.ok,
@@ -1387,9 +1392,22 @@ export class StripeWisePayoutsService implements OnModuleInit {
     );
     assertAmountWithinBalance(amount, available, currency);
 
+    const destinationView = this.destinationViewForAccount(
+      destination,
+      stripeAccountKey,
+    );
+    const destinationCurrency =
+      normalizeCurrency(destinationView.currency) ||
+      (stripeAccountKey === 'europe' ? 'EUR' : 'USD');
+    if (destinationCurrency !== normalizeCurrency(currency)) {
+      throw new BadRequestException(
+        `Currency must match the configured Wise receiving account for ${stripeAccountKey} (${destinationCurrency}).`,
+      );
+    }
+
     const resolution = this.stripeAccounts.resolveDestination(
       overview,
-      destination,
+      destinationView,
     );
     if (!resolution.ok) {
       throw new BadRequestException(resolution.error);
@@ -1409,7 +1427,7 @@ export class StripeWisePayoutsService implements OnModuleInit {
         status: 'creating',
         wiseStatus: 'not_started',
         estimatedAmount: amount,
-        destinationName: destination.accountName,
+        destinationName: destinationView.accountName,
         destinationSummary: resolution.summary,
         wisePreviousBalance: wiseBefore?.amount ?? undefined,
         snapshot: {
@@ -1418,6 +1436,7 @@ export class StripeWisePayoutsService implements OnModuleInit {
           wiseBalanceBefore: wiseBefore,
           destinationReady: true,
           sourceType: 'payments_balance',
+          destinationCurrency,
         },
       });
     } catch (err) {
@@ -1683,6 +1702,39 @@ export class StripeWisePayoutsService implements OnModuleInit {
     this.logger.log(
       `Stripe→Wise payout ${record.stripePayoutId} matched Wise credit ${match.credit.id} actual=${received}`,
     );
+
+    // Europe commission: EUR received on Wise → convert to USD balance (best-effort).
+    if (
+      record.stripeAccountKey === 'europe' &&
+      normalizeCurrency(record.currency) === 'EUR' &&
+      record.sourceType === 'payments_balance' &&
+      typeof this.wiseService.convertBalanceCurrency === 'function'
+    ) {
+      void this.wiseService
+        .convertBalanceCurrency({
+          sourceCurrency: 'EUR',
+          targetCurrency: 'USD',
+          sourceAmount: received,
+        })
+        .then((result) => {
+          if (!result.ok) {
+            this.logger.warn(
+              `Wise EUR→USD convert skipped/failed for payout ${record._id}: ${result.error}`,
+            );
+            return;
+          }
+          this.logger.log(
+            `Wise EUR→USD converted for payout ${record._id}: €${received} → $${result.targetAmount}`,
+          );
+        })
+        .catch((err) =>
+          this.logger.warn(
+            `Wise EUR→USD convert error for payout ${record._id}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          ),
+        );
+    }
   }
 
   private async safeWiseSummary(currency: string) {
@@ -1750,7 +1802,11 @@ export class StripeWisePayoutsService implements OnModuleInit {
       ...base,
       accountName:
         dest.europeAccountName || 'Transferwise Europe (Wise)',
-      currency: normalizeCurrency(dest.europeCurrency) || 'EUR',
+      // Europe payouts always target EUR Wise — ignore leftover USD destination rows.
+      currency:
+        normalizeCurrency(dest.europeCurrency) === 'USD'
+          ? 'EUR'
+          : normalizeCurrency(dest.europeCurrency) || 'EUR',
       country: dest.europeCountry || dest.country || 'BE',
       accountHolderName:
         dest.europeAccountHolderName || dest.accountHolderName,
@@ -1936,7 +1992,10 @@ export class StripeWisePayoutsService implements OnModuleInit {
       lastVerifiedAt: dest.lastVerifiedAt || null,
       europe: {
         accountName: dest.europeAccountName || 'Transferwise Europe (Wise)',
-        currency: normalizeCurrency(dest.europeCurrency) || 'EUR',
+        currency:
+          normalizeCurrency(dest.europeCurrency) === 'USD'
+            ? 'EUR'
+            : normalizeCurrency(dest.europeCurrency) || 'EUR',
         country: dest.europeCountry || null,
         bankName: dest.europeBankName || 'TransferWise',
         ibanMasked: maskSecret(dest.europeIban),
