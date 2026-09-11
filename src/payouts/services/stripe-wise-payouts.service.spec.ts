@@ -30,12 +30,12 @@ describe('StripeWisePayoutsService', () => {
       routingNumber: '110000000',
       stripeAccountKey: 'global',
       payoutToDefaultStripeBank: true,
-      europeAccountName: 'COLUMN NA WISE (Wise US)',
-      europeCurrency: 'USD',
-      europeBankName: 'Column National Association',
-      europeAccountNumber: '537681803567744',
-      europeRoutingNumber: '084009519',
-      europeSwiftBic: 'TRWIUS35XXX',
+      europeAccountName: 'Transferwise Europe (Wise)',
+      europeCurrency: 'EUR',
+      europeBankName: 'TransferWise',
+      europeAccountNumber: undefined,
+      europeRoutingNumber: undefined,
+      europeSwiftBic: undefined,
       europePayoutToDefaultStripeBank: true,
       iban: undefined,
     });
@@ -136,6 +136,14 @@ describe('StripeWisePayoutsService', () => {
       getReceivingAccountDetails: jest.fn().mockResolvedValue({
         configured: true,
         accounts: [
+          {
+            currency: 'EUR',
+            accountName: 'Transferwise Europe (Wise)',
+            bankName: 'TransferWise',
+            iban: 'BE68539007547034',
+            country: 'BE',
+            issued: true,
+          },
           {
             currency: 'USD',
             accountName: 'COLUMN NA WISE (Wise US)',

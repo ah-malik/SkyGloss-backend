@@ -75,7 +75,7 @@ export class StripeWiseDestination {
   @Prop({ default: 'Transferwise Europe (Wise)' })
   europeAccountName?: string;
 
-  @Prop({ default: 'USD' })
+  @Prop({ default: 'EUR' })
   europeCurrency?: string;
 
   @Prop()

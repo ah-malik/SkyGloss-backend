@@ -29,6 +29,7 @@ import { StripePaymentBreakdownService } from './stripe-payment-breakdown.servic
 import { WiseService } from './wise.service';
 import {
   hasReceivingBankDetails,
+  pickEuropeWiseReceivingAccount,
   pickWiseReceivingAccount,
 } from '../wise-receiving-details';
 import {
@@ -1748,12 +1749,12 @@ export class StripeWisePayoutsService implements OnModuleInit {
     return {
       ...base,
       accountName:
-        dest.europeAccountName || 'COLUMN NA WISE (Wise US)',
-      currency: normalizeCurrency(dest.europeCurrency) || 'USD',
-      country: dest.europeCountry || dest.country || 'US',
+        dest.europeAccountName || 'Transferwise Europe (Wise)',
+      currency: normalizeCurrency(dest.europeCurrency) || 'EUR',
+      country: dest.europeCountry || dest.country || 'BE',
       accountHolderName:
         dest.europeAccountHolderName || dest.accountHolderName,
-      bankName: dest.europeBankName || 'Column National Association',
+      bankName: dest.europeBankName || 'TransferWise',
       iban: dest.europeIban,
       accountNumber: dest.europeAccountNumber,
       routingNumber: dest.europeRoutingNumber,
@@ -1766,62 +1767,74 @@ export class StripeWisePayoutsService implements OnModuleInit {
     } as StripeWiseDestination;
   }
 
+  private isEuropeDestinationOnUsWise(
+    dest: StripeWiseDestinationDocument,
+  ): boolean {
+    const currency = normalizeCurrency(dest.europeCurrency);
+    const accountLast4 =
+      last4(dest.europeAccountNumber) || last4(dest.europeIban);
+    const name = String(dest.europeAccountName || '');
+    return (
+      currency === 'USD' ||
+      accountLast4 === '7744' ||
+      String(dest.europeRoutingNumber || '') === '084009519' ||
+      /COLUMN NA WISE|Wise US/i.test(name)
+    );
+  }
+
   private async syncEuropeDestinationFromWise(
     current: StripeWiseDestinationDocument,
   ): Promise<void> {
     if (!this.wiseService.isConfigured()) return;
     if (typeof this.wiseService.getReceivingAccountDetails !== 'function') {
       current.europeAccountName =
-        current.europeAccountName || 'COLUMN NA WISE (Wise US)';
-      current.europeCurrency = 'USD';
-      current.europeBankName =
-        current.europeBankName || 'Column National Association';
-      current.europeRoutingNumber =
-        current.europeRoutingNumber || '084009519';
-      current.europeSwiftBic = current.europeSwiftBic || 'TRWIUS35XXX';
+        current.europeAccountName || 'Transferwise Europe (Wise)';
+      if (!normalizeCurrency(current.europeCurrency) || this.isEuropeDestinationOnUsWise(current)) {
+        current.europeCurrency = 'EUR';
+      }
+      current.europeBankName = current.europeBankName || 'TransferWise';
       current.europePayoutToDefaultStripeBank = true;
       return;
     }
-    // Stripe Europe payout bank is Wise US (COLUMN NA WISE ****7744).
-    const details = await this.wiseService.getReceivingAccountDetails('USD');
+
+    // Stripe Europe → Wise Europe currency account (EUR), not US COLUMN.
+    const details = await this.wiseService.getReceivingAccountDetails('EUR');
     const accounts = details?.accounts || [];
-    const match =
-      accounts.find((account) => {
-        const accountLast4 =
-          last4(account.accountNumber) || last4(account.iban);
-        return (
-          accountLast4 === '7744' ||
-          String(account.routingNumber || '') === '084009519'
-        );
-      }) || pickWiseReceivingAccount(accounts, 'USD');
+    const match = pickEuropeWiseReceivingAccount(accounts);
 
     if (!match || !hasReceivingBankDetails(match)) {
-      current.europeAccountName =
-        current.europeAccountName || 'COLUMN NA WISE (Wise US)';
-      current.europeCurrency = 'USD';
-      current.europeBankName =
-        current.europeBankName || 'Column National Association';
-      current.europeRoutingNumber =
-        current.europeRoutingNumber || '084009519';
-      current.europeSwiftBic = current.europeSwiftBic || 'TRWIUS35XXX';
+      this.logger.warn(
+        'Wise Europe (EUR) receiving account not found; keep existing Europe destination fields.',
+      );
+      if (this.isEuropeDestinationOnUsWise(current)) {
+        current.europeAccountName = 'Transferwise Europe (Wise)';
+        current.europeCurrency = 'EUR';
+        current.europeBankName = 'TransferWise';
+        current.europeAccountNumber = undefined;
+        current.europeRoutingNumber = undefined;
+        current.europeIban = undefined;
+        current.europeSwiftBic = undefined;
+        current.europeLastVerifyError =
+          details?.error ||
+          'Wise EUR receiving account not found. Open a EUR account in Wise, then Refresh from Wise.';
+      }
       current.europePayoutToDefaultStripeBank = true;
       return;
     }
 
-    current.europeAccountName = 'COLUMN NA WISE (Wise US)';
-    current.europeCurrency = 'USD';
-    current.europeCountry = match.country || 'US';
+    current.europeAccountName =
+      match.accountName || `Wise ${match.currency} account`;
+    current.europeCurrency = normalizeCurrency(match.currency) || 'EUR';
+    current.europeCountry = match.country || current.europeCountry;
     current.europeAccountHolderName =
       match.accountHolderName || current.europeAccountHolderName;
-    current.europeBankName =
-      match.bankName || 'Column National Association';
-    current.europeIban = undefined;
-    current.europeAccountNumber =
-      match.accountNumber || current.europeAccountNumber;
-    current.europeRoutingNumber =
-      match.routingNumber || current.europeRoutingNumber || '084009519';
-    current.europeSwiftBic =
-      match.swiftBic || current.europeSwiftBic || 'TRWIUS35XXX';
+    current.europeBankName = match.bankName || 'TransferWise';
+    current.europeIban = match.iban || undefined;
+    current.europeAccountNumber = match.iban
+      ? undefined
+      : match.accountNumber || undefined;
+    current.europeRoutingNumber = match.routingNumber || undefined;
+    current.europeSwiftBic = match.swiftBic || undefined;
     current.europePayoutToDefaultStripeBank = true;
     current.europeLastVerifiedAt = new Date();
     current.europeLastVerifyError = undefined;
@@ -1836,11 +1849,9 @@ export class StripeWisePayoutsService implements OnModuleInit {
         currency: 'USD',
         stripeAccountKey: 'global',
         payoutToDefaultStripeBank: false,
-        europeAccountName: 'COLUMN NA WISE (Wise US)',
-        europeCurrency: 'USD',
-        europeBankName: 'Column National Association',
-        europeRoutingNumber: '084009519',
-        europeSwiftBic: 'TRWIUS35XXX',
+        europeAccountName: 'Transferwise Europe (Wise)',
+        europeCurrency: 'EUR',
+        europeBankName: 'TransferWise',
         europePayoutToDefaultStripeBank: true,
       });
     }
@@ -1854,30 +1865,23 @@ export class StripeWisePayoutsService implements OnModuleInit {
       europeDirty = true;
     }
     if (!normalizeCurrency(doc.europeCurrency)) {
-      doc.europeCurrency = 'USD';
+      doc.europeCurrency = 'EUR';
       europeDirty = true;
     }
     if (doc.europePayoutToDefaultStripeBank !== true) {
       doc.europePayoutToDefaultStripeBank = true;
       europeDirty = true;
     }
-    if (!doc.europeSwiftBic) {
-      doc.europeSwiftBic = 'TRWIUS35XXX';
-      europeDirty = true;
-    }
     if (!doc.europeBankName) {
-      doc.europeBankName = 'Column National Association';
+      doc.europeBankName = 'TransferWise';
       europeDirty = true;
     }
-    if (!doc.europeRoutingNumber) {
-      doc.europeRoutingNumber = '084009519';
-      europeDirty = true;
-    }
-    if (!doc.europeIban && !doc.europeAccountNumber) {
+    const needsEuropeSync =
+      !doc.europeIban && !doc.europeAccountNumber
+        ? true
+        : this.isEuropeDestinationOnUsWise(doc);
+    if (needsEuropeSync) {
       await this.syncEuropeDestinationFromWise(doc);
-      europeDirty = true;
-    } else if (doc.europePayoutToDefaultStripeBank !== true) {
-      doc.europePayoutToDefaultStripeBank = true;
       europeDirty = true;
     }
     if (
@@ -1931,19 +1935,20 @@ export class StripeWisePayoutsService implements OnModuleInit {
       stripeDestinationSummary: resolution.ok ? resolution.summary || null : null,
       lastVerifiedAt: dest.lastVerifiedAt || null,
       europe: {
-        accountName: dest.europeAccountName || 'COLUMN NA WISE (Wise US)',
-        currency: normalizeCurrency(dest.europeCurrency) || 'USD',
+        accountName: dest.europeAccountName || 'Transferwise Europe (Wise)',
+        currency: normalizeCurrency(dest.europeCurrency) || 'EUR',
         country: dest.europeCountry || null,
-        bankName: dest.europeBankName || 'Column National Association',
+        bankName: dest.europeBankName || 'TransferWise',
         ibanMasked: maskSecret(dest.europeIban),
         accountNumberMasked: maskSecret(dest.europeAccountNumber),
         routingNumberMasked: maskSecret(dest.europeRoutingNumber),
         swiftBicMasked: maskSecret(dest.europeSwiftBic),
         last4: europeLast4,
         payoutToDefaultStripeBank: dest.europePayoutToDefaultStripeBank !== false,
-        matchesWiseUs:
-          europeLast4 === '7744' ||
-          String(dest.europeRoutingNumber || '') === '084009519',
+        matchesEuropeCurrency:
+          normalizeCurrency(dest.europeCurrency) === 'EUR' &&
+          Boolean(dest.europeIban || dest.europeAccountNumber),
+        lastVerifyError: dest.europeLastVerifyError || null,
       },
     };
   }

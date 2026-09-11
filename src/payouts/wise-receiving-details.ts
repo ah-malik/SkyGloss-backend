@@ -173,6 +173,22 @@ export function pickWiseReceivingAccount(
   return pool.find((item) => item.currency === 'USD') || pool[0];
 }
 
+/** Prefer EUR / IBAN Europe receiving details — never fall back to US Wise. */
+export function pickEuropeWiseReceivingAccount(
+  accounts: WiseReceivingAccount[],
+): WiseReceivingAccount | undefined {
+  const usable = accounts.filter(
+    (item) => item.issued && (item.iban || item.accountNumber),
+  );
+  const pool = usable.length ? usable : accounts.filter((item) => item.issued);
+  return (
+    pool.find((item) => item.currency === 'EUR' && Boolean(item.iban)) ||
+    pool.find((item) => item.currency === 'EUR') ||
+    pool.find((item) => Boolean(item.iban) && item.currency !== 'USD') ||
+    pool.find((item) => item.currency !== 'USD')
+  );
+}
+
 export function hasReceivingBankDetails(account?: WiseReceivingAccount | null): boolean {
   return Boolean(account?.iban || account?.accountNumber);
 }
