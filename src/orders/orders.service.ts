@@ -43,7 +43,12 @@ import {
   registrationOrderExclusionFilter,
   shouldHideShopRegistrationFromViewer,
 } from '../common/order-totals';
-import { isOrderModifiable, getOrderAmountPaid, getOrderRemainingAmount } from '../common/order-modifiable';
+import {
+  isOrderModifiable,
+  getOrderAmountPaid,
+  getOrderRemainingAmount,
+  shouldMarkFailedOnCheckoutExpire,
+} from '../common/order-modifiable';
 import {
   createOrderPaymentToken,
   verifyOrderPaymentToken,
@@ -1734,10 +1739,7 @@ export class OrdersService implements OnModuleInit {
       const orderId = metadata?.orderId;
       if (orderId) {
         const existing = await this.orderModel.findById(orderId);
-        if (
-          existing &&
-          existing.status !== OrderStatus.PENDING_PAYMENT
-        ) {
+        if (shouldMarkFailedOnCheckoutExpire(existing?.status)) {
           console.log(
             `[USA Stripe Webhook] Marking order ${orderId} as FAILED due to: ${event.type}`,
           );
@@ -1746,7 +1748,7 @@ export class OrdersService implements OnModuleInit {
           });
         } else {
           console.log(
-            `[USA Stripe Webhook] Checkout session expired for ${orderId}; order remains pending payment until auto-cancel.`,
+            `[USA Stripe Webhook] Ignoring ${event.type} for ${orderId}; status is ${existing?.status || 'missing'}.`,
           );
         }
       }
@@ -1981,10 +1983,7 @@ export class OrdersService implements OnModuleInit {
       const orderId = metadata?.orderId;
       if (orderId) {
         const existing = await this.orderModel.findById(orderId);
-        if (
-          existing &&
-          existing.status !== OrderStatus.PENDING_PAYMENT
-        ) {
+        if (shouldMarkFailedOnCheckoutExpire(existing?.status)) {
           console.log(
             `[Europe Stripe Webhook] Marking order ${orderId} as FAILED due to: ${event.type}`,
           );
@@ -1993,7 +1992,7 @@ export class OrdersService implements OnModuleInit {
           });
         } else {
           console.log(
-            `[Europe Stripe Webhook] Checkout session expired for ${orderId}; order remains pending payment until auto-cancel.`,
+            `[Europe Stripe Webhook] Ignoring ${event.type} for ${orderId}; status is ${existing?.status || 'missing'}.`,
           );
         }
       }
@@ -2402,7 +2401,7 @@ export class OrdersService implements OnModuleInit {
       const orderId = metadata?.orderId;
       if (orderId) {
         const existing = await this.orderModel.findById(orderId);
-        if (existing && existing.status !== OrderStatus.PENDING_PAYMENT) {
+        if (shouldMarkFailedOnCheckoutExpire(existing?.status)) {
           console.log(
             `[Stripe Webhook] Marking order ${orderId} as FAILED due to event: ${event.type}`,
           );
@@ -2411,7 +2410,7 @@ export class OrdersService implements OnModuleInit {
           });
         } else {
           console.log(
-            `[Stripe Webhook] Checkout session expired for ${orderId}; order remains pending payment until auto-cancel.`,
+            `[Stripe Webhook] Ignoring ${event.type} for ${orderId}; status is ${existing?.status || 'missing'}.`,
           );
         }
       }
