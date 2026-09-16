@@ -101,6 +101,11 @@ export class CreateUserDto {
   @IsNotEmpty()
   city: string;
 
+  /** US state or Canadian province when country is USA/Canada. */
+  @IsString()
+  @IsOptional()
+  state?: string;
+
   @IsString()
   @IsOptional()
   zipCode?: string;

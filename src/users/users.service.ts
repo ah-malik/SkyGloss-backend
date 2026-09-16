@@ -3127,6 +3127,9 @@ export class UsersService implements OnModuleInit {
       if (targetUser && !targetUser.certificateNumber) {
         updatePayload.certificateNumber = await this.getNextCertificateNumber();
       }
+      if (targetUser && !targetUser.certifiedAt) {
+        updatePayload.certifiedAt = new Date();
+      }
     }
 
     // Explicitly sync isPartnerPaid to its DB name isDistributorPaid to ensure persistence during raw updates
@@ -3580,12 +3583,19 @@ export class UsersService implements OnModuleInit {
     courseName: string,
     stepId: string,
   ): Promise<UserDocument | null> {
-    const update: any = {};
-    update[`courseProgress.${courseName}`] = stepId;
+    const user = await this.userModel.findById(userId).exec();
+    if (!user) return null;
 
-    return this.userModel
-      .findByIdAndUpdate(userId, { $addToSet: update }, { new: true })
-      .exec();
+    const update: any = {
+      $addToSet: { [`courseProgress.${courseName}`]: stepId },
+    };
+
+    // First time a shop starts any course → enrolled date
+    if (!user.enrolledAt) {
+      update.$set = { enrolledAt: new Date() };
+    }
+
+    return this.userModel.findByIdAndUpdate(userId, update, { new: true }).exec();
   }
 
   async updateCertificationVideoUrl(

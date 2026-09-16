@@ -113,6 +113,8 @@ export class AuthService {
       isSelfRegistered: !!user.isSelfRegistered,
       isCertified: !!user.isCertified,
       isTrainingComplete: !!user.isTrainingComplete,
+      enrolledAt: user.enrolledAt || null,
+      certifiedAt: user.certifiedAt || null,
       partnerCode: user.partnerCode,
       hasSeenWelcomePopup: user.hasSeenWelcomePopup,
       preferredLanguage: user.preferredLanguage,

@@ -121,6 +121,10 @@ export class User {
   @Prop({ required: true })
   city: string;
 
+  /** US state or Canadian province (optional; mainly CA/US shops). */
+  @Prop()
+  state?: string;
+
   @Prop()
   zipCode?: string;
 
@@ -302,6 +306,14 @@ export class User {
 
   @Prop({ default: false })
   isCertified: boolean;
+
+  /** Set when the shop first starts any course (first course-progress step). */
+  @Prop()
+  enrolledAt?: Date;
+
+  /** Set when the shop is certified (isCertified becomes true). */
+  @Prop()
+  certifiedAt?: Date;
 
   @Prop({ default: false })
   isVisibleOnMap: boolean;

@@ -256,6 +256,7 @@ export class UsersController {
       'address',
       'streetAddress',
       'city',
+      'state',
       'zipCode',
       'country',
       'website',

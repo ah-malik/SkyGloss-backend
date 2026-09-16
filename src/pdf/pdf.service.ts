@@ -254,6 +254,7 @@ export class PdfService {
 
         // ── Mid-right: date (same row as signature) ──
         const certifiedAt =
+          (user as any).certifiedAt ||
           (user as any).updatedAt ||
           (user as any).createdAt ||
           new Date();
