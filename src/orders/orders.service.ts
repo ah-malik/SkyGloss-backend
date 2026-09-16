@@ -104,6 +104,11 @@ import { CouponsService, ShopRegistrationCouponResult } from '../coupons/coupons
 import { StripeCouponSyncService } from '../coupons/stripe-coupon-sync.service';
 import { CommissionsService } from '../payouts/services/commissions.service';
 import { registerShopCommissionRecalculationHandler } from '../common/shop-commission-recalculation';
+import {
+  softDeleteSetPayload,
+  softDeleteUnsetPayload,
+  SOFT_DELETE_RETENTION_DAYS,
+} from '../common/soft-delete';
 import { OrderCommissionTransferService } from '../payouts/services/order-commission-transfer.service';
 import {
   isEuropeCountryName,
@@ -4680,9 +4685,16 @@ export class OrdersService implements OnModuleInit {
     return this.exchangeRatesService.updateRate(currency, rateToBase);
   }
 
-  async deleteOrder(id: string): Promise<{ success: boolean }> {
+  async deleteOrder(id: string): Promise<{
+    success: boolean;
+    purgeAt: Date;
+    retentionDays: number;
+  }> {
     const order = await this.orderModel.findById(id).populate('user');
     if (!order) throw new NotFoundException('Order not found');
+    if ((order as any).deletedAt) {
+      throw new BadRequestException('Order is already soft-deleted');
+    }
 
     if (order.status === OrderStatus.PAID && order.stripeSessionId) {
       try {
@@ -4696,10 +4708,10 @@ export class OrdersService implements OnModuleInit {
           await stripeInstance.refunds.create({
             payment_intent: session.payment_intent as string,
           });
-          console.log(`[Order Deleted] Refund issued for order ${order.orderNumber}`);
+          console.log(`[Order Soft-Deleted] Refund issued for order ${order.orderNumber}`);
         }
       } catch (error) {
-        console.error(`[Order Deleted] Refund failed for order ${order.orderNumber}:`, error);
+        console.error(`[Order Soft-Deleted] Refund failed for order ${order.orderNumber}:`, error);
       }
     }
 
@@ -4712,8 +4724,33 @@ export class OrdersService implements OnModuleInit {
       });
     }
 
-    await this.orderModel.findByIdAndDelete(id);
-    return { success: true };
+    const payload = softDeleteSetPayload();
+    await this.orderModel.findByIdAndUpdate(id, { $set: payload }).exec();
+    return {
+      success: true,
+      purgeAt: payload.purgeAt,
+      retentionDays: SOFT_DELETE_RETENTION_DAYS,
+    };
+  }
+
+  async restoreOrder(id: string): Promise<{ success: boolean; order: OrderDocument }> {
+    const order = await this.orderModel
+      .findOne({ _id: id })
+      .setOptions({ withDeleted: true })
+      .exec();
+    if (!order) throw new NotFoundException('Order not found');
+    if (!(order as any).deletedAt) {
+      throw new BadRequestException('Order is not soft-deleted');
+    }
+
+    const restored = await this.orderModel
+      .findOneAndUpdate({ _id: id }, softDeleteUnsetPayload(), {
+        new: true,
+        withDeleted: true,
+      })
+      .exec();
+    if (!restored) throw new NotFoundException('Order not found');
+    return { success: true, order: restored };
   }
 
   private isUsaCountry(country: string): boolean {

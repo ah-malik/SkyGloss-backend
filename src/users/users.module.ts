@@ -4,18 +4,21 @@ import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
 import { PublicUsersController } from './public-users.controller';
 import { User, UserSchema } from './entities/user.entity';
+import { SoftDeleteScheduler } from './soft-delete.scheduler';
 
 import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { ChatModule } from '../chat/chat.module';
 import { MailModule } from 'src/mail/mail.module';
 import { ProductGroup, ProductGroupSchema } from '../product-groups/entities/product-group.entity';
+import { Order, OrderSchema } from '../orders/entities/order.entity';
 
 @Module({
   imports: [
     MongooseModule.forFeature([
       { name: User.name, schema: UserSchema },
-      { name: ProductGroup.name, schema: ProductGroupSchema }
+      { name: ProductGroup.name, schema: ProductGroupSchema },
+      { name: Order.name, schema: OrderSchema },
     ]),
     CloudinaryModule,
     forwardRef(() => NotificationsModule),
@@ -23,7 +26,7 @@ import { ProductGroup, ProductGroupSchema } from '../product-groups/entities/pro
     MailModule,
   ],
   controllers: [UsersController, PublicUsersController],
-  providers: [UsersService],
+  providers: [UsersService, SoftDeleteScheduler],
   exports: [UsersService, MongooseModule],
 })
 export class UsersModule { }

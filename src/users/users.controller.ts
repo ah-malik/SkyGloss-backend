@@ -96,6 +96,12 @@ export class UsersController {
     return this.usersService.getCountriesSummary();
   }
 
+  @Get('deleted')
+  @Roles(UserRole.ADMIN)
+  findSoftDeleted() {
+    return this.usersService.findSoftDeletedUsers();
+  }
+
   @Get()
   @Roles(
     UserRole.ADMIN,
@@ -350,6 +356,12 @@ export class UsersController {
   @Roles(UserRole.ADMIN)
   remove(@Param('id') id: string) {
     return this.usersService.remove(id);
+  }
+
+  @Post(':id/restore')
+  @Roles(UserRole.ADMIN)
+  restore(@Param('id') id: string) {
+    return this.usersService.restore(id);
   }
 
 

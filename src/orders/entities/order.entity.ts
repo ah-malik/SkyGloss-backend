@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Schema as MongooseSchema } from 'mongoose';
 import { User } from '../../users/entities/user.entity';
+import { applySoftDeletePlugin } from '../../common/soft-delete';
 
 export type OrderDocument = Order & Document;
 
@@ -208,9 +209,18 @@ export class Order {
     exchangeRate?: number;
     convertedUsdAmount?: number;
   }[];
+
+  /** Soft-delete timestamp. Null / missing = active. */
+  @Prop({ type: Date, default: null, index: true })
+  deletedAt?: Date | null;
+
+  /** When set, hard-deleted by the purge cron (deletedAt + 20 days). */
+  @Prop({ type: Date, default: null, index: true })
+  purgeAt?: Date | null;
 }
 
 export const OrderSchema = SchemaFactory.createForClass(Order);
+applySoftDeletePlugin(OrderSchema);
 
 OrderSchema.index({ user: 1, createdAt: -1 });
 OrderSchema.index({ createdAt: -1 });

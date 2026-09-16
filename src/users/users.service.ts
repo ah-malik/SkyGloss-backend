@@ -4,6 +4,7 @@ import {
   OnModuleInit,
   Logger,
   ForbiddenException,
+  NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -62,6 +63,15 @@ import {
   requiresOnlinePaymentShopOrder,
   resolveShopOrderStripeAccountKey,
 } from '../payouts/stripe-wise-payouts.logic';
+import {
+  Order,
+  OrderDocument,
+} from '../orders/entities/order.entity';
+import {
+  softDeleteSetPayload,
+  softDeleteUnsetPayload,
+  SOFT_DELETE_RETENTION_DAYS,
+} from '../common/soft-delete';
 
 export interface NetworkUsersResult {
   shops: UserDocument[];
@@ -82,6 +92,7 @@ export class UsersService implements OnModuleInit {
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(ProductGroup.name) private productGroupModel: Model<ProductGroupDocument>,
+    @InjectModel(Order.name) private orderModel: Model<OrderDocument>,
     private readonly cache: RedisCacheService,
     private readonly userActivityService: UserActivityService,
   ) { }
@@ -3285,11 +3296,105 @@ export class UsersService implements OnModuleInit {
     return shopForRecalc ?? updatedUser;
   }
 
-  async remove(id: string): Promise<UserDocument | null> {
-    const user = await this.userModel.findById(id);
-    // Role-based deletion blocks removed per user request to allow full management of all accounts
-    return this.userModel.findByIdAndDelete(id).exec();
-    return this.userModel.findByIdAndDelete(id).exec();
+  /**
+   * Soft-delete a user (and all of their orders). Restorable for
+   * {@link SOFT_DELETE_RETENTION_DAYS} days, then hard-purged by cron.
+   */
+  async remove(id: string): Promise<{
+    user: UserDocument;
+    ordersSoftDeleted: number;
+    purgeAt: Date;
+    retentionDays: number;
+  }> {
+    const user = await this.userModel.findById(id).exec();
+    if (!user) throw new NotFoundException('User not found');
+    if ((user as any).deletedAt) {
+      throw new BadRequestException('User is already soft-deleted');
+    }
+
+    const payload = softDeleteSetPayload();
+    const updated = await this.userModel
+      .findByIdAndUpdate(id, { $set: payload }, { new: true })
+      .exec();
+    if (!updated) throw new NotFoundException('User not found');
+
+    const ordersResult = await this.orderModel.updateMany(
+      { user: id as any, deletedAt: null } as any,
+      { $set: payload },
+    );
+
+    await this.cache.delByPrefix('users:');
+    await this.cache.delByPrefix('orders:');
+
+    return {
+      user: updated,
+      ordersSoftDeleted: ordersResult.modifiedCount,
+      purgeAt: payload.purgeAt,
+      retentionDays: SOFT_DELETE_RETENTION_DAYS,
+    };
+  }
+
+  /** Restore a soft-deleted user and all of their soft-deleted orders. */
+  async restore(id: string): Promise<{
+    user: UserDocument;
+    ordersRestored: number;
+  }> {
+    const user = await this.userModel
+      .findOne({ _id: id })
+      .setOptions({ withDeleted: true })
+      .exec();
+    if (!user) throw new NotFoundException('User not found');
+    if (!(user as any).deletedAt) {
+      throw new BadRequestException('User is not soft-deleted');
+    }
+
+    const updated = await this.userModel
+      .findOneAndUpdate({ _id: id }, softDeleteUnsetPayload(), {
+        new: true,
+        withDeleted: true,
+      })
+      .exec();
+    if (!updated) throw new NotFoundException('User not found');
+
+    const ordersResult = await this.orderModel.updateMany(
+      { user: id as any, deletedAt: { $ne: null } } as any,
+      softDeleteUnsetPayload(),
+    );
+
+    await this.cache.delByPrefix('users:');
+    await this.cache.delByPrefix('orders:');
+
+    return {
+      user: updated,
+      ordersRestored: ordersResult.modifiedCount,
+    };
+  }
+
+  async findSoftDeletedUsers(): Promise<UserDocument[]> {
+    return this.userModel
+      .find({ deletedAt: { $ne: null } })
+      .setOptions({ withDeleted: true })
+      .sort({ deletedAt: -1 })
+      .select(
+        'email role firstName lastName shopName partnerCode deletedAt purgeAt createdAt',
+      )
+      .lean()
+      .exec() as any;
+  }
+
+  /** Hard-delete users/orders whose purgeAt has passed. */
+  async purgeExpiredSoftDeletes(): Promise<{ users: number; orders: number }> {
+    const now = new Date();
+    const ordersResult = await this.orderModel.deleteMany({
+      purgeAt: { $lte: now },
+    });
+    const usersResult = await this.userModel.deleteMany({
+      purgeAt: { $lte: now },
+    });
+    return {
+      users: usersResult.deletedCount || 0,
+      orders: ordersResult.deletedCount || 0,
+    };
   }
 
   async migratePartnerRolesToRepresented(): Promise<{

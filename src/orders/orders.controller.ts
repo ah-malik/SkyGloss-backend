@@ -294,6 +294,13 @@ export class OrdersController {
     return this.ordersService.deleteOrder(id);
   }
 
+  @Post('admin/:id/restore')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  restoreOrder(@Param('id') id: string) {
+    return this.ordersService.restoreOrder(id);
+  }
+
   @Get('admin/stats')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)

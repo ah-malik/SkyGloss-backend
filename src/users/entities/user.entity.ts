@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Schema as MongooseSchema } from 'mongoose';
+import { applySoftDeletePlugin } from '../../common/soft-delete';
 
 export type UserDocument = User & Document;
 
@@ -358,10 +359,19 @@ export class User {
    */
   @Prop({ min: 0, max: 100 })
   partnerIntroRatePercent?: number;
+
+  /** Soft-delete timestamp. Null / missing = active. */
+  @Prop({ type: Date, default: null, index: true })
+  deletedAt?: Date | null;
+
+  /** When set, hard-deleted by the purge cron (deletedAt + 20 days). */
+  @Prop({ type: Date, default: null, index: true })
+  purgeAt?: Date | null;
 }
 
 
 export const UserSchema = SchemaFactory.createForClass(User);
+applySoftDeletePlugin(UserSchema);
 
 // One email may map to multiple portal accounts (shop vs partner), but not
 // two users with the same email AND the same role.
