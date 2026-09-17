@@ -386,13 +386,15 @@ export const UserSchema = SchemaFactory.createForClass(User);
 applySoftDeletePlugin(UserSchema);
 
 // One email may map to multiple portal accounts (shop vs partner), but not
-// two users with the same email AND the same role.
+// two *active* users with the same email AND the same role.
+// Soft-deleted rows are excluded so admins can recreate the same email.
 UserSchema.index(
   { email: 1, role: 1 },
   {
     unique: true,
     sparse: true,
     name: 'email_1_role_1',
+    partialFilterExpression: { deletedAt: null },
   },
 );
 

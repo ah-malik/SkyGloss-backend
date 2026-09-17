@@ -748,6 +748,12 @@ export class UsersService implements OnModuleInit {
         createUserDto.email,
         createUserDto.role as UserRole,
       );
+      // Soft-deleted users are hidden from the admin list but still held the
+      // unique email index — free that email so recreate works.
+      await this.releaseSoftDeletedEmailForRole(
+        createUserDto.email,
+        createUserDto.role as UserRole,
+      );
     }
 
     if (createUserDto.additionalEmail !== undefined) {
@@ -936,6 +942,25 @@ export class UsersService implements OnModuleInit {
       if (err?.code === 11000) {
         const key = Object.keys(err.keyPattern || err.keyValue || {})[0] || '';
         if (key === 'email' || key.includes('email')) {
+          const softDeleted = createUserDto.email
+            ? await this.userModel
+                .findOne({
+                  email: emailEqualsQuery(createUserDto.email),
+                  role: {
+                    $in: this.getEmailConflictRoles(
+                      createUserDto.role as UserRole,
+                    ),
+                  },
+                  deletedAt: { $ne: null },
+                })
+                .setOptions({ withDeleted: true })
+                .exec()
+            : null;
+          if (softDeleted) {
+            throw new BadRequestException(
+              'This email belongs to a soft-deleted account that is hidden from the users list. Restore it from Deleted Users, or wait until it is purged — then recreate.',
+            );
+          }
           throw new BadRequestException(
             'An account with this email already exists for this portal. Use a different email, or create the other portal role only if one does not already exist.',
           );
@@ -2559,6 +2584,41 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
+   * Soft-deleted accounts stay in Mongo (hidden from lists) and used to block
+   * email reuse via the unique index. Move their email aside so admins can
+   * recreate the same address for testing / replacements.
+   */
+  private async releaseSoftDeletedEmailForRole(
+    email: string,
+    role: UserRole,
+  ): Promise<void> {
+    const conflictingRoles = this.getEmailConflictRoles(role);
+    const softDeleted = await this.userModel
+      .find({
+        email: emailEqualsQuery(email),
+        role: { $in: conflictingRoles },
+        deletedAt: { $ne: null },
+      })
+      .setOptions({ withDeleted: true })
+      .select('_id email')
+      .exec();
+
+    for (const user of softDeleted) {
+      const freedEmail = `__deleted_${user._id}@skygloss.invalid`;
+      await this.userModel
+        .findOneAndUpdate(
+          { _id: user._id },
+          { $set: { email: freedEmail } },
+          { withDeleted: true },
+        )
+        .exec();
+      this.logger.log(
+        `[UsersService] Freed soft-deleted email ${email} → ${freedEmail}`,
+      );
+    }
+  }
+
+  /**
    * Drop the old globally-unique email index so shop + partner can share an email.
    * Ensures compound unique (email + role). Safe to re-run.
    */
@@ -2596,13 +2656,35 @@ export class UsersService implements OnModuleInit {
       }
     }
 
-    // Ensure compound unique exists even if syncIndexes is skipped/fails
+    // Ensure compound unique exists for *active* users only (deletedAt: null),
+    // so soft-deleted emails can be reused when recreating a testing user.
     try {
+      const existing = indexes.find((idx) => idx.name === 'email_1_role_1');
+      const partial = (existing as any)?.partialFilterExpression;
+      const hasActiveOnlyPartial =
+        partial &&
+        Object.prototype.hasOwnProperty.call(partial, 'deletedAt') &&
+        partial.deletedAt === null;
+
+      if (existing?.name && !hasActiveOnlyPartial) {
+        await collection.dropIndex('email_1_role_1');
+        this.logger.log(
+          'Dropped email_1_role_1 so it can be rebuilt excluding soft-deleted users.',
+        );
+      }
+
       await collection.createIndex(
         { email: 1, role: 1 },
-        { unique: true, sparse: true, name: 'email_1_role_1' },
+        {
+          unique: true,
+          sparse: true,
+          name: 'email_1_role_1',
+          partialFilterExpression: { deletedAt: null },
+        },
       );
-      this.logger.log('Ensured compound unique index email_1_role_1');
+      this.logger.log(
+        'Ensured compound unique index email_1_role_1 (active users only)',
+      );
     } catch (err: any) {
       // Already exists with same options — fine
       if (err?.code !== 85 && err?.code !== 86) {
@@ -3349,6 +3431,14 @@ export class UsersService implements OnModuleInit {
     if (!user) throw new NotFoundException('User not found');
     if (!(user as any).deletedAt) {
       throw new BadRequestException('User is not soft-deleted');
+    }
+
+    if (user.email) {
+      await this.assertEmailAvailableForRole(
+        user.email,
+        user.role as UserRole,
+        user._id.toString(),
+      );
     }
 
     const updated = await this.userModel
