@@ -143,7 +143,7 @@ export class PublicUsersController {
       ],
     }).select(
       'firstName lastName shopName companyName country city address latitude longitude role partnerCode phoneNumber email profileImage ' +
-      'facebook instagram linkedin youtube tiktok website'
+      'facebook instagram linkedin youtube tiktok website businessHours'
     ).lean();
 
     return users.map((user: any) => ({
@@ -159,6 +159,7 @@ export class PublicUsersController {
       phoneNumber: user.phoneNumber || '',
       email: user.email || '',
       profileImage: user.profileImage || null,
+      businessHours: user.businessHours || null,
       socials: {
         facebook: user.facebook,
         instagram: user.instagram,

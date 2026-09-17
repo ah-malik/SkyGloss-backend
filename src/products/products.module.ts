@@ -9,6 +9,7 @@ import {
 } from '../product-groups/entities/product-group.entity';
 import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 import { InventoryModule } from '../inventory/inventory.module';
+import { UsersModule } from '../users/users.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { InventoryModule } from '../inventory/inventory.module';
     ]),
     CloudinaryModule,
     forwardRef(() => InventoryModule),
+    forwardRef(() => UsersModule),
   ],
   controllers: [ProductsController],
   providers: [ProductsService],

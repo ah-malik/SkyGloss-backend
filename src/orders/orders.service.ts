@@ -4201,20 +4201,61 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException('At least one item is required');
     }
 
-    const newItems = rawItems.map((item) => ({
-      product: item.product,
-      name: item.name,
-      size: item.size,
-      quantity: Math.max(1, Number(item.quantity) || 1),
-      orderType: normalizeOrderItemType(item.orderType),
-      price: Number(item.price) || 0,
-      image: item.image || '',
-    }));
-
     const shopUser =
       typeof order.user === 'object' && order.user !== null
         ? (order.user as any)
         : await this.usersService.findOne(String(order.user));
+
+    // Resolve each line against the order customer's Pricing Group (not the
+    // Hub/Admin catalog). Unpaid self-registered shops also get +10%.
+    const newItems: Array<{
+      product: string;
+      name: string;
+      size: string;
+      quantity: number;
+      orderType: ReturnType<typeof normalizeOrderItemType>;
+      price: number;
+      image: string;
+    }> = [];
+    for (const item of rawItems) {
+      const quantity = Math.max(1, Number(item.quantity) || 1);
+      let price = Number(item.price) || 0;
+      let name = item.name;
+      let image = item.image || '';
+      try {
+        const pricedProduct = await this.productsService.findOne(
+          String(item.product),
+          shopUser,
+        );
+        const sizeEntry = (pricedProduct?.sizes || []).find(
+          (s: { size: string; price: number }) =>
+            String(s.size) === String(item.size),
+        );
+        if (sizeEntry?.price != null) {
+          price = Number(sizeEntry.price) || 0;
+        }
+        if (pricedProduct?.name) name = pricedProduct.name;
+        if (!image) {
+          image =
+            pricedProduct?.shopImages?.[0] || pricedProduct?.images?.[0] || '';
+        }
+      } catch (err) {
+        this.logger.warn(
+          `Could not resolve Pricing Group price for product ${item.product} on order ${orderId}; using client price`,
+          (err as Error)?.message || err,
+        );
+      }
+
+      newItems.push({
+        product: item.product,
+        name,
+        size: item.size,
+        quantity,
+        orderType: normalizeOrderItemType(item.orderType),
+        price,
+        image,
+      });
+    }
 
     await this.productInventoryService.assertStockAvailableForOrder({
       items: newItems,

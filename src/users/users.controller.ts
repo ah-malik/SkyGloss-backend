@@ -252,6 +252,8 @@ export class UsersController {
     const allowedFields = [
       'firstName',
       'lastName',
+      'shopName',
+      'companyName',
       'phoneNumber',
       'address',
       'streetAddress',
@@ -269,6 +271,7 @@ export class UsersController {
       'hasSeenWelcomePopup',
       'profileImage',
       'preferredLanguage',
+      'businessHours',
     ];
 
     const updatePayload: any = {};

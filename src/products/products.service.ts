@@ -15,6 +15,10 @@ import {
   DEFAULT_PRODUCT_STOCK,
   ProductInventoryService,
 } from '../inventory/product-inventory.service';
+import {
+  isUnpaidSelfRegisteredShop,
+  resolveChargePriceForShop,
+} from '../common/unpaid-shop-pricing';
 
 @Injectable()
 export class ProductsService {
@@ -101,10 +105,7 @@ export class ProductsService {
 
           return {
             ...productObj,
-            sizes: item.sizes.map((s) => ({
-              size: s.size,
-              price: s.price,
-            })),
+            ...this.withViewerSizePricing(item.sizes, user),
             currency: groupToUse.currency || 'USD',
             groupName: groupToUse.name,
           };
@@ -130,7 +131,12 @@ export class ProductsService {
         .exec();
     });
 
-    return this.attachViewerHubStock(catalog, user);
+    const pricedCatalog = catalog.map((product: any) => ({
+      ...product,
+      ...this.withViewerSizePricing(product.sizes || [], user),
+    }));
+
+    return this.attachViewerHubStock(pricedCatalog, user);
   }
 
   async findOne(id: string, user?: User): Promise<any> {
@@ -192,10 +198,7 @@ export class ProductsService {
         return this.attachViewerHubStockToOne(
           {
             ...productObj,
-            sizes: groupItem.sizes.map((s) => ({
-              size: s.size,
-              price: s.price,
-            })),
+            ...this.withViewerSizePricing(groupItem.sizes, user),
             currency: groupToUse.currency || 'USD',
             groupName: groupToUse.name,
           },
@@ -219,7 +222,45 @@ export class ProductsService {
       typeof (product as any).toObject === 'function'
         ? (product as any).toObject()
         : product;
-    return this.attachViewerHubStockToOne(productObj, user);
+    return this.attachViewerHubStockToOne(
+      {
+        ...productObj,
+        ...this.withViewerSizePricing(productObj.sizes || [], user),
+      },
+      user,
+    );
+  }
+
+  /**
+   * Map size prices for the viewing shop. Unpaid self-registered shops get +10%
+   * on the Pricing Group / catalog price; groupPrice keeps the pre-markup amount
+   * for strikethrough UI.
+   */
+  private withViewerSizePricing(
+    sizes: Array<{ size: string; price: number } | string>,
+    user?: User,
+  ): {
+    sizes: Array<{ size: string; price: number; groupPrice?: number }>;
+    isUnpaidPricing?: boolean;
+  } {
+    const unpaid = isUnpaidSelfRegisteredShop(user);
+    return {
+      sizes: (sizes || []).map((s) => {
+        if (typeof s === 'string') {
+          return { size: s, price: 0 };
+        }
+        const groupPrice = Number(s.price) || 0;
+        if (!unpaid) {
+          return { size: s.size, price: groupPrice };
+        }
+        return {
+          size: s.size,
+          price: resolveChargePriceForShop(groupPrice, user),
+          groupPrice,
+        };
+      }),
+      ...(unpaid ? { isUnpaidPricing: true } : {}),
+    };
   }
 
   async update(

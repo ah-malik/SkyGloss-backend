@@ -131,6 +131,16 @@ export class User {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'ProductGroup' })
   productGroup?: MongooseSchema.Types.ObjectId;
 
+  /**
+   * Weekly shop opening hours. Keys: monday..sunday.
+   * Example: { monday: { isClosed: false, open: '09:00', close: '18:00' }, wednesday: { isClosed: true } }
+   */
+  @Prop({ type: Object, default: {} })
+  businessHours?: Record<
+    string,
+    { isClosed?: boolean; open?: string; close?: string }
+  >;
+
   @Prop({ type: [String], default: [] })
   completedCourses: string[];
 
