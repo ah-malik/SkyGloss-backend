@@ -135,11 +135,11 @@ export class User {
    * Weekly shop opening hours. Keys: monday..sunday.
    * Example: { monday: { isClosed: false, open: '09:00', close: '18:00' }, wednesday: { isClosed: true } }
    */
-  @Prop({ type: Object, default: {} })
+  @Prop({ type: MongooseSchema.Types.Mixed, default: null })
   businessHours?: Record<
     string,
     { isClosed?: boolean; open?: string; close?: string }
-  >;
+  > | null;
 
   @Prop({ type: [String], default: [] })
   completedCourses: string[];

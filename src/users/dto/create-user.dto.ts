@@ -199,6 +199,13 @@ export class CreateUserDto {
   @IsOptional()
   preferredLanguage?: string;
 
+  /** Weekly shop opening hours (monday..sunday). */
+  @IsOptional()
+  businessHours?: Record<
+    string,
+    { isClosed?: boolean; open?: string; close?: string }
+  > | null;
+
   /** Shop Intro % override for Representative or Promoter (default 10). */
   @IsNumber()
   @Min(0)

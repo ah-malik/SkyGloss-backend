@@ -100,6 +100,7 @@ import {
 } from '../common/order-number';
 import { normalizeCurrencyCode } from '../common/currency-codes';
 import { normalizeOrderItemType } from '../common/order-type';
+import { resolveOrderLinePrice } from '../common/units-per-case';
 import { CouponsService, ShopRegistrationCouponResult } from '../coupons/coupons.service';
 import { StripeCouponSyncService } from '../coupons/stripe-coupon-sync.service';
 import { CommissionsService } from '../payouts/services/commissions.service';
@@ -4219,6 +4220,13 @@ export class OrdersService implements OnModuleInit {
     }> = [];
     for (const item of rawItems) {
       const quantity = Math.max(1, Number(item.quantity) || 1);
+      // Shop customers only buy units. Unit/Case is for partner-network orders.
+      const shopOnlyUnit =
+        String(shopUser?.role || '') === UserRole.CERTIFIED_SHOP ||
+        String(shopUser?.role || '') === 'certified_shop';
+      const orderType = shopOnlyUnit
+        ? normalizeOrderItemType('unit')
+        : normalizeOrderItemType(item.orderType);
       let price = Number(item.price) || 0;
       let name = item.name;
       let image = item.image || '';
@@ -4232,7 +4240,13 @@ export class OrdersService implements OnModuleInit {
             String(s.size) === String(item.size),
         );
         if (sizeEntry?.price != null) {
-          price = Number(sizeEntry.price) || 0;
+          // Pricing Group unit price (already includes unpaid markup when applicable).
+          // Case lines use unit × units-per-case (partner network only).
+          price = resolveOrderLinePrice(
+            Number(sizeEntry.price) || 0,
+            orderType,
+            pricedProduct?.name || item.name,
+          );
         }
         if (pricedProduct?.name) name = pricedProduct.name;
         if (!image) {
@@ -4251,7 +4265,7 @@ export class OrdersService implements OnModuleInit {
         name,
         size: item.size,
         quantity,
-        orderType: normalizeOrderItemType(item.orderType),
+        orderType,
         price,
         image,
       });

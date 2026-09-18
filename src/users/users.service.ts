@@ -3268,7 +3268,7 @@ export class UsersService implements OnModuleInit {
     const previousStatus = targetUserForHierarchy.status;
 
     const updatedUser = await this.userModel
-      .findByIdAndUpdate(id, updatePayload, { new: true })
+      .findByIdAndUpdate(id, { $set: updatePayload }, { new: true })
       .exec();
 
     if (
