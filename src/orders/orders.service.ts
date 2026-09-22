@@ -27,6 +27,7 @@ import { CreateDuplicateInvoiceDto } from './dto/create-duplicate-invoice.dto';
 import { CreateAdminTestOrderDto } from './dto/create-admin-test-order.dto';
 import { ProductsService } from '../products/products.service';
 import { ProductInventoryService } from '../inventory/product-inventory.service';
+import { FedexService } from '../fedex/fedex.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
 import { NotificationType } from '../notifications/entities/notification.entity';
@@ -162,6 +163,7 @@ export class OrdersService implements OnModuleInit {
     private productsService: ProductsService,
     private productInventoryService: ProductInventoryService,
     private readonly cache: RedisCacheService,
+    private fedexService: FedexService,
   ) {
     const stripeSecretKey = this.configService.get<string>('STRIPE_SECRET_KEY');
     const usaStripeSecretKey = this.configService.get<string>('USA_STRIPE_SECRET_KEY');
@@ -3986,6 +3988,138 @@ export class OrdersService implements OnModuleInit {
     const plain = (order as any).toObject ? (order as any).toObject() : order;
     const enriched = await this.enrichOrderDetails(plain);
     return this.withOrderManagementFlag(enriched, actor);
+  }
+
+  /**
+   * Quote FedEx rates from the order user's Hub address → order shipping address.
+   */
+  async calculateFedexShippingRates(
+    orderId: string,
+    actor: UserDocument,
+    weight: number,
+    weightUnits: 'LB' | 'KG' = 'LB',
+    originZipCode?: string,
+    destinationZipCode?: string,
+  ) {
+    const order = await this.orderModel.findById(orderId).populate('user');
+    if (!order) throw new NotFoundException('Order not found');
+
+    await this.assertHubOrAdminCanManageOrderRequest(order, actor);
+
+    const shop = order.user as UserDocument | undefined;
+    if (!shop) {
+      throw new BadRequestException('Order has no associated user.');
+    }
+
+    const hubCode =
+      await this.usersService.resolveTerritoryHubPartnerCodeForShop({
+        hubPartnerCode: (shop as any).hubPartnerCode,
+        country: shop.country,
+      });
+    const hub = await this.usersService.findByPartnerCode(hubCode);
+    if (!hub) {
+      throw new BadRequestException(
+        `Hub account not found for partner code ${hubCode}.`,
+      );
+    }
+
+    const hubLabel = `Hub origin (${hub.partnerCode || hubCode})`;
+    const shipper = this.fedexService.buildAddress(
+      {
+        streetAddress: hub.streetAddress,
+        address: hub.address,
+        city: hub.city,
+        state: hub.state,
+        zipCode: originZipCode || hub.zipCode,
+        country: hub.country,
+      },
+      hubLabel,
+    );
+
+    const shipTo = order.shippingAddress;
+    if (!shipTo) {
+      throw new BadRequestException('Order has no shipping address.');
+    }
+
+    const recipient = this.fedexService.buildAddress(
+      {
+        address: shipTo.address,
+        address2: shipTo.address2,
+        city: shipTo.city,
+        state: shipTo.state,
+        zipCode: destinationZipCode || shipTo.zipCode,
+        country: shipTo.country,
+        residential: true,
+      },
+      'Order shipping address',
+    );
+
+    const preferredCurrency = String(
+      order.originalCurrency || order.currency || 'USD',
+    ).toUpperCase();
+
+    const items = Array.isArray(order.items) ? order.items : [];
+    const customsValue = Math.max(
+      1,
+      getItemsSubtotal(items) || Number(order.totalAmount) || 1,
+    );
+    const itemCount = Math.max(
+      1,
+      items.reduce((sum, item) => sum + Math.max(1, Number(item.quantity) || 1), 0),
+    );
+    const commodities = items.length
+      ? items.map((item) => {
+          const quantity = Math.max(1, Number(item.quantity) || 1);
+          return {
+            description: String(item.name || 'Product').slice(0, 450),
+            quantity,
+            unitPrice: Math.max(0.01, Number(item.price) || 0.01),
+            weight: Math.max(0.1, weight / itemCount) * quantity,
+            countryOfManufacture: shipper.countryCode,
+          };
+        })
+      : undefined;
+
+    const rates = await this.fedexService.getRateQuotes({
+      shipper,
+      recipient,
+      weight,
+      weightUnits,
+      preferredCurrency,
+      customsValue,
+      commodities,
+    });
+
+    return {
+      hub: {
+        partnerCode: hub.partnerCode,
+        name:
+          [hub.firstName, hub.lastName].filter(Boolean).join(' ').trim() ||
+          hub.shopName ||
+          hub.companyName ||
+          hub.partnerCode,
+        address: {
+          streetLines: shipper.streetLines,
+          city: shipper.city,
+          stateOrProvinceCode: shipper.stateOrProvinceCode,
+          postalCode: shipper.postalCode,
+          countryCode: shipper.countryCode,
+        },
+      },
+      destination: {
+        name: [shipTo.firstName, shipTo.lastName].filter(Boolean).join(' ').trim(),
+        address: {
+          streetLines: recipient.streetLines,
+          city: recipient.city,
+          stateOrProvinceCode: recipient.stateOrProvinceCode,
+          postalCode: recipient.postalCode,
+          countryCode: recipient.countryCode,
+        },
+      },
+      weight,
+      weightUnits,
+      rates,
+    };
   }
 
   async setOrderRequestShipping(

@@ -13,7 +13,8 @@ export const UNPAID_SHOP_PRICE_MARKUP = 1.1;
 
 export function applyUnpaidShopPriceMarkup(price: number): number {
   const base = Number(price) || 0;
-  return Math.round(base * UNPAID_SHOP_PRICE_MARKUP * 100) / 100;
+  // +10%, then round to nearest whole number (e.g. $6 → $6.60 → $7)
+  return Math.round(base * UNPAID_SHOP_PRICE_MARKUP);
 }
 
 /**

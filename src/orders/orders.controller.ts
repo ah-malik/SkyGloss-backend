@@ -17,6 +17,7 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { AddOrderItemsDto } from './dto/add-order-items.dto';
 import { CreateAdminTestOrderDto } from './dto/create-admin-test-order.dto';
 import { SetOrderRequestShippingDto } from './dto/set-order-request-shipping.dto';
+import { CalculateFedexRatesDto } from './dto/calculate-fedex-rates.dto';
 import { CreateDuplicateInvoiceDto } from './dto/create-duplicate-invoice.dto';
 import { ValidateVatDto } from './dto/validate-vat.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -204,6 +205,24 @@ export class OrdersController {
     @GetUser() user: UserDocument,
   ) {
     return this.ordersService.setOrderRequestShipping(id, dto.shippingFee, user);
+  }
+
+  @Post(':id/fedex-rates')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.PARTNER)
+  calculateFedexRates(
+    @Param('id') id: string,
+    @Body() dto: CalculateFedexRatesDto,
+    @GetUser() user: UserDocument,
+  ) {
+    return this.ordersService.calculateFedexShippingRates(
+      id,
+      user,
+      dto.weight,
+      dto.weightUnits || 'LB',
+      dto.originZipCode,
+      dto.destinationZipCode,
+    );
   }
 
   @Post(':id/send-invoice')

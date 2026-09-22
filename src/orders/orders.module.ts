@@ -19,6 +19,7 @@ import { CouponsModule } from '../coupons/coupons.module';
 import { PayoutsModule } from '../payouts/payouts.module';
 import { ProductsModule } from '../products/products.module';
 import { InventoryModule } from '../inventory/inventory.module';
+import { FedexModule } from '../fedex/fedex.module';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { InventoryModule } from '../inventory/inventory.module';
     PayoutsModule,
     ProductsModule,
     InventoryModule,
+    FedexModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService, OrdersSchedulerService],
