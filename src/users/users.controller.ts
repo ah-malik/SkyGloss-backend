@@ -40,6 +40,47 @@ import { UserActivityService } from '../user-activity/user-activity.service';
 import { UserActivityAction } from '../user-activity/entities/user-activity-log.entity';
 import { getRequestMeta } from '../user-activity/request-meta';
 
+const WELCOME_SECTION_STEP_IDS = [
+  'intro_foundation',
+  'data_fusion',
+  'data_core',
+  'intro_replacement',
+  'learning_curve',
+  'intro_reality',
+  'data_real_world',
+  'intro_opportunity',
+  'data_access',
+  'intro_engine',
+  'data_bigger_picture',
+  'proper_perspective',
+  'new_craft',
+  'professional_mindset',
+  'payoff',
+  'intro_final',
+];
+
+function courseProgressIsComplete(
+  courseKey: string,
+  progress: unknown,
+  totalSteps: number,
+) {
+  const list = Array.isArray(progress) ? progress.map(String) : [];
+  if (courseKey !== 'WELCOME_TO_SKYGLOSS') {
+    return list.length >= totalSteps;
+  }
+
+  const questionHits = list.filter((id) => id.startsWith('q:')).length;
+  const nonQuestion = list.length - questionHits;
+  if (questionHits === 0 && nonQuestion >= WELCOME_SECTION_STEP_IDS.length) {
+    return true;
+  }
+
+  const sectionHits = WELCOME_SECTION_STEP_IDS.filter((id) =>
+    list.includes(id),
+  ).length;
+  return sectionHits + questionHits >= WELCOME_SECTION_STEP_IDS.length + 8;
+}
+
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class UsersController {
@@ -404,7 +445,7 @@ export class UsersController {
     }
 
     const COURSE_STEPS = {
-      WELCOME_TO_SKYGLOSS: 16,
+      WELCOME_TO_SKYGLOSS: 24,
       UNDERSTANDING_SKYGLOSS: 9,
       SOCIAL_MEDIA_COMMUNICATION: 11,
       SKYGLOSS_SHOP_SETUP: 4,
@@ -422,7 +463,7 @@ export class UsersController {
       const progressMap = JSON.parse(JSON.stringify(user.courseProgress || {}));
       Object.entries(COURSE_STEPS).forEach(([courseKey, totalSteps]) => {
         const progress = progressMap[courseKey] || progressMap[courseKey.replace('_', ' ')] || [];
-        if (progress && progress.length >= totalSteps) {
+        if (courseProgressIsComplete(courseKey, progress, totalSteps)) {
           completedCount++;
         }
       });
@@ -469,7 +510,7 @@ export class UsersController {
 
     // Verify all courses are actually completed before finalizing
     const COURSE_STEPS = {
-      WELCOME_TO_SKYGLOSS: 16,
+      WELCOME_TO_SKYGLOSS: 24,
       UNDERSTANDING_SKYGLOSS: 9,
       SOCIAL_MEDIA_COMMUNICATION: 11,
       SKYGLOSS_SHOP_SETUP: 4,
@@ -487,7 +528,7 @@ export class UsersController {
       const progressMap = JSON.parse(JSON.stringify(user.courseProgress || {}));
       Object.entries(COURSE_STEPS).forEach(([courseKey, totalSteps]) => {
         const progress = progressMap[courseKey] || progressMap[courseKey.replace('_', ' ')] || [];
-        if (progress && progress.length >= totalSteps) {
+        if (courseProgressIsComplete(courseKey, progress, totalSteps)) {
           completedCount++;
         }
       });

@@ -184,6 +184,16 @@ describe('stripe-wise-payouts.logic', () => {
       expect(requiresOnlinePaymentShopOrder('Pakistan', 'Germany')).toBe(false);
     });
 
+    it('requires online payment for Canada without using the USA Stripe account', () => {
+      expect(requiresOnlinePaymentShopOrder('Canada', 'Pakistan')).toBe(true);
+      expect(requiresOnlinePaymentShopOrder('CA', 'Germany')).toBe(true);
+      expect(requiresOnlinePaymentShopOrder('', 'Canada')).toBe(true);
+      expect(requiresOnlinePaymentShopOrder('Pakistan', 'Canada')).toBe(false);
+      expect(resolveShopOrderStripeAccountKey('Canada', 'United States')).toBe(
+        'global',
+      );
+    });
+
     it('falls back to user country when shipping is missing', () => {
       expect(resolveShopOrderStripeAccountKey('', 'United States')).toBe('usa');
       expect(resolveShopOrderStripeAccountKey(undefined, 'USA')).toBe('usa');

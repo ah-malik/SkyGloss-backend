@@ -93,6 +93,12 @@ export function isUsaCountryName(country?: string | null): boolean {
   return USA_COUNTRY_NAMES.has(String(country || '').toLowerCase().trim());
 }
 
+/** True when a country label refers to Canada. */
+export function isCanadaCountryName(country?: string | null): boolean {
+  const raw = String(country || '').toLowerCase().trim();
+  return raw === 'canada' || raw === 'ca';
+}
+
 /** True when a country label refers to a supported European Stripe region. */
 export function isEuropeCountryName(country?: string | null): boolean {
   const raw = String(country || '').trim();
@@ -142,6 +148,10 @@ export function requiresOnlinePaymentShopOrder(
   shippingCountry?: string | null,
   userCountry?: string | null,
 ): boolean {
+  const shipping = String(shippingCountry || '').trim();
+  const country = shipping || String(userCountry || '');
+  // Canada uses the same direct Stripe checkout as the USA, on the Global account.
+  if (isCanadaCountryName(country)) return true;
   const key = resolveShopOrderStripeAccountKey(shippingCountry, userCountry);
   return key === 'usa' || key === 'europe';
 }
