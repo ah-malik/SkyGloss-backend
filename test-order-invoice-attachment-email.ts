@@ -43,6 +43,13 @@ async function main() {
     throw new Error('No order found to build invoice PDF');
   }
 
+  if (order.user) {
+    const userDoc = await mongoose.connection.collection('users').findOne({
+      _id: order.user,
+    });
+    if (userDoc) order.user = userDoc;
+  }
+
   const pdfService = new PdfService();
   const invoiceBuffer = await pdfService.generateOrderDetails(order as any);
   const orderNumber = String(order.orderNumber);

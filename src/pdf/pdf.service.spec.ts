@@ -100,7 +100,8 @@ describe('PdfService.generateOrderDetails', () => {
     expect(pages).toBeGreaterThan(0);
     // Bug regression: last item cells each became their own page → 9 pages.
     expect(pages).toBeLessThan(brokenDownloadedPages);
-    expect(pages).toBe(1);
+    // Letterhead reserves header and footer, so a full order may use a second page.
+    expect(pages).toBeLessThanOrEqual(2);
   });
 
   it('paginates long item lists without exploding page count', async () => {
@@ -121,7 +122,7 @@ describe('PdfService.generateOrderDetails', () => {
 
     expect(buffer.length).toBeGreaterThan(1000);
     expect(buffer.subarray(0, 5).toString('utf8')).toBe('%PDF-');
-    expect(pdfService.countPdfPages(buffer)).toBe(1);
+    expect(pdfService.countPdfPages(buffer)).toBeLessThanOrEqual(2);
   });
 });
 

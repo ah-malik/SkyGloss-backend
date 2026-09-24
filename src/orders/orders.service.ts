@@ -873,7 +873,7 @@ export class OrdersService implements OnModuleInit {
   async getOrderById(id: string, viewer?: UserDocument): Promise<Order> {
     const order = await this.orderModel
       .findById(id)
-      .populate('user', 'firstName lastName email role country shopName hubPartnerCode parentLinkAssignedAt previousParentPartnerCode')
+      .populate('user', 'firstName lastName email role country shopName companyName hubPartnerCode parentLinkAssignedAt previousParentPartnerCode')
       .lean();
     if (!order) {
       throw new NotFoundException('Order not found');

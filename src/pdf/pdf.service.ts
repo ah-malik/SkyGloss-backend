@@ -93,6 +93,36 @@ export class PdfService {
     return candidates.find((candidate) => fs.existsSync(candidate)) || null;
   }
 
+  private resolveAssetPath(fileName: string, folder: string): string | null {
+    const candidates = [
+      path.join(process.cwd(), 'src', 'assets', folder, fileName),
+      path.join(process.cwd(), 'dist', 'assets', folder, fileName),
+      path.join(process.cwd(), 'assets', folder, fileName),
+      path.join(__dirname, '..', 'assets', folder, fileName),
+      path.join(__dirname, 'assets', folder, fileName),
+    ];
+    return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+  }
+
+  /** Full-page SkyGloss letterhead used as the invoice background. */
+  private resolveLetterheadPath(): string | null {
+    return (
+      this.resolveAssetPath('invoice-letterhead-page.jpg', '') ||
+      this.resolveAssetPath('invoice-letterhead.png', '')
+    );
+  }
+
+  /**
+   * Invoice body font is Mulish (SkyGloss standard).
+   * DejaVu remains only if the Mulish files are missing, so ₹ / € still render.
+   */
+  private resolveInvoiceFonts(): { regular: string; bold: string } | null {
+    const regular = this.resolveAssetPath('Mulish-Regular.ttf', 'fonts');
+    const bold = this.resolveAssetPath('Mulish-Bold.ttf', 'fonts');
+    if (regular && bold) return { regular, bold };
+    return this.resolveUnicodeFonts();
+  }
+
   /**
    * Helvetica (PDF built-in) cannot render ₹ / many Unicode currency glyphs.
    * Prefer DejaVu Sans so invoice symbols match the admin UI.
@@ -326,21 +356,39 @@ export class PdfService {
     return new Promise((resolve) => {
       const snapshot = this.toOrderPdfSnapshot(order, options);
 
-      const doc = new PDFDocument({ margin: 50 });
+      const doc = new PDFDocument({
+        margins: { top: 78, bottom: 118, left: 50, right: 50 },
+        bufferPages: true,
+      });
       const chunks: Buffer[] = [];
       doc.on('data', (chunk) => chunks.push(chunk));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
 
       const registrationOrder = isRegistrationOrder(snapshot);
 
-      // Unicode-capable fonts so ₹ / € / £ render (Helvetica cannot).
-      const unicodeFonts = this.resolveUnicodeFonts();
-      const fontRegular = unicodeFonts ? 'InvoiceSans' : 'Helvetica';
-      const fontBold = unicodeFonts ? 'InvoiceSans-Bold' : 'Helvetica-Bold';
-      if (unicodeFonts) {
-        doc.registerFont(fontRegular, unicodeFonts.regular);
-        doc.registerFont(fontBold, unicodeFonts.bold);
+      // Mulish is the SkyGloss invoice font. Fallback still covers ₹ / € / £.
+      const invoiceFonts = this.resolveInvoiceFonts();
+      const fontRegular = invoiceFonts ? 'InvoiceSans' : 'Helvetica';
+      const fontBold = invoiceFonts ? 'InvoiceSans-Bold' : 'Helvetica-Bold';
+      if (invoiceFonts) {
+        doc.registerFont(fontRegular, invoiceFonts.regular);
+        doc.registerFont(fontBold, invoiceFonts.bold);
       }
+
+      const letterheadPath = this.resolveLetterheadPath();
+      const drawLetterhead = () => {
+        if (!letterheadPath) return;
+        const savedX = doc.x;
+        const savedY = doc.y;
+        doc.image(letterheadPath, 0, 0, {
+          width: doc.page.width,
+          height: doc.page.height,
+        });
+        doc.x = savedX;
+        doc.y = savedY;
+      };
+      doc.on('pageAdded', drawLetterhead);
+      drawLetterhead();
 
       const currencyCode = this.getOrderCurrencyCode(snapshot);
       const currencySymbol = this.getCurrencySymbol(currencyCode);
@@ -365,25 +413,113 @@ export class PdfService {
       );
       doc.moveDown();
 
-      doc.fontSize(12).fillColor('#272727').font(fontRegular);
+      doc.fillColor('#272727');
       const displayOrderNumber =
         options?.displayOrderNumber || snapshot.orderNumber;
-      doc.text(`Order Number: ${displayOrderNumber}`);
-      if (options?.referenceOrderNumber) {
-        doc.text(`Original Order: ${options.referenceOrderNumber}`);
-      }
-      doc.text(`Date: ${new Date((snapshot as any).createdAt).toLocaleString()}`);
-      doc.text(`Status: ${String(snapshot.status || 'PENDING').toUpperCase()}`);
-      doc.text(`Currency: ${currencyCode}`);
-      doc.moveDown();
-
-      // Customer Info
-      doc.fontSize(14).font(fontBold).text('Customer Information:');
-      doc.fontSize(12).font(fontRegular);
       const user = snapshot.user as any;
-      doc.text(`Name: ${user?.firstName} ${user?.lastName}`);
-      doc.text(`Email: ${user?.email}`);
-      doc.moveDown();
+      const shippingPreview = snapshot.shippingAddress || {};
+      const clean = (value: unknown) => {
+        const text = String(value ?? '').trim();
+        if (!text || text === 'undefined' || text === 'null') return '';
+        return text;
+      };
+      const customerName =
+        [clean(user?.firstName), clean(user?.lastName)].filter(Boolean).join(' ') ||
+        [clean(shippingPreview.firstName), clean(shippingPreview.lastName)]
+          .filter(Boolean)
+          .join(' ') ||
+        'N/A';
+      const customerEmail =
+        clean(user?.email) || clean(shippingPreview.email) || 'N/A';
+      const addressLine2 = clean(shippingPreview.address2);
+      const businessName = [
+        user?.companyName,
+        user?.shopName,
+        shippingPreview.companyName,
+        addressLine2,
+      ]
+        .map((value) => clean(value))
+        .find(Boolean);
+      const addressLine2IsBusinessName =
+        !!addressLine2 && businessName === addressLine2;
+
+      const contentLeft = doc.page.margins.left;
+      const contentWidth =
+        doc.page.width - doc.page.margins.left - doc.page.margins.right;
+      const columnGap = 16;
+      const halfWidth = (contentWidth - columnGap) / 2;
+      const rightX = contentLeft + halfWidth + columnGap;
+      const columnsY = doc.y;
+
+      const drawColumn = (
+        x: number,
+        width: number,
+        y: number,
+        lines: Array<{ text: string; fontName: string; fontSize: number }>,
+      ) => {
+        let cursor = y;
+        lines.forEach((line) => {
+          doc.font(line.fontName).fontSize(line.fontSize).fillColor('#272727');
+          const height = doc.heightOfString(line.text, { width });
+          doc.text(line.text, x, cursor, { width, height });
+          cursor += height + 3;
+        });
+        return cursor;
+      };
+
+      const orderLines: Array<{ text: string; fontName: string; fontSize: number }> = [
+        {
+          text: `Order Number: ${displayOrderNumber}`,
+          fontName: fontBold,
+          fontSize: 14,
+        },
+      ];
+      if (options?.referenceOrderNumber) {
+        orderLines.push({
+          text: `Original Order: ${options.referenceOrderNumber}`,
+          fontName: fontRegular,
+          fontSize: 12,
+        });
+      }
+      orderLines.push(
+        {
+          text: `Date: ${new Date((snapshot as any).createdAt).toLocaleString()}`,
+          fontName: fontRegular,
+          fontSize: 12,
+        },
+        {
+          text: `Status: ${String(snapshot.status || 'PENDING').toUpperCase()}`,
+          fontName: fontRegular,
+          fontSize: 12,
+        },
+        {
+          text: `Currency: ${currencyCode}`,
+          fontName: fontRegular,
+          fontSize: 12,
+        },
+      );
+
+      const customerLines: Array<{ text: string; fontName: string; fontSize: number }> = [
+        { text: 'Customer Information:', fontName: fontBold, fontSize: 14 },
+        { text: `Name: ${customerName}`, fontName: fontRegular, fontSize: 12 },
+      ];
+      if (businessName) {
+        customerLines.push({
+          text: `Business Name: ${businessName}`,
+          fontName: fontRegular,
+          fontSize: 12,
+        });
+      }
+      customerLines.push({
+        text: `Email: ${customerEmail}`,
+        fontName: fontRegular,
+        fontSize: 12,
+      });
+
+      const leftEnd = drawColumn(contentLeft, halfWidth, columnsY, orderLines);
+      const rightEnd = drawColumn(rightX, halfWidth, columnsY, customerLines);
+      doc.x = contentLeft;
+      doc.y = Math.max(leftEnd, rightEnd) + 10;
 
       // Shipping Info
       const shipping = snapshot.shippingAddress || {};
@@ -397,7 +533,7 @@ export class PdfService {
         doc.text(`Company: ${shipping.companyName}`);
       }
       doc.text(`Address: ${shipping.address || 'N/A'}`);
-      if (shipping.address2) {
+      if (shipping.address2 && !addressLine2IsBusinessName) {
         doc.text(`Address Line 2: ${shipping.address2}`);
       }
       doc.text(`City: ${shipping.city || 'N/A'}`);
@@ -414,7 +550,7 @@ export class PdfService {
       doc.moveDown();
 
       // Items Table
-      doc.fontSize(14).font(fontBold).text('Order Items:', { underline: true });
+      doc.fontSize(14).font(fontBold).text('Order Items:');
       doc.moveDown(0.5);
 
       const itemColumns = {
@@ -426,7 +562,7 @@ export class PdfService {
         total: { x: 495, w: 55, align: 'right' as const },
       };
       const tableLineGap = 2;
-      const tableRowPadding = 8;
+      const tableRowPadding = 4;
 
       const measureCellHeight = (text: string, width: number) =>
         doc.heightOfString(text || ' ', { width, lineGap: tableLineGap });
@@ -477,7 +613,7 @@ export class PdfService {
       doc.moveDown(0.5);
 
       console.log(
-        `[PdfService] Generating PDF for order ${displayOrderNumber}. currency=${snapshot.currency} originalCurrency=${(snapshot as any).originalCurrency} resolved=${currencyCode} symbol=${currencySymbol} unicodeFont=${!!unicodeFonts}`,
+        `[PdfService] Generating PDF for order ${displayOrderNumber}. currency=${snapshot.currency} originalCurrency=${(snapshot as any).originalCurrency} resolved=${currencyCode} symbol=${currencySymbol} invoiceFont=${!!invoiceFonts}`,
       );
 
       doc.font(fontRegular);
@@ -572,16 +708,16 @@ export class PdfService {
       if (amountPaid > 0.01) {
         const remaining = Math.max(0, total - amountPaid);
         drawTotalsLine(
-          'You Already Paid',
+          'Paid',
           this.formatMoney(amountPaid, currencySymbol),
           fontRegular,
           12,
         );
         drawTotalsLine(
-          'Remaining Amount',
+          'Remaining',
           this.formatMoney(remaining, currencySymbol),
-          fontBold,
-          14,
+          fontRegular,
+          12,
         );
       }
 
