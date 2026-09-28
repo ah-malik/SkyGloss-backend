@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 const PDFDocument = require('pdfkit');
+const SVGtoPDF = require('svg-to-pdfkit');
 import * as fs from 'fs';
 import * as path from 'path';
 import { User } from '../users/entities/user.entity';
@@ -107,7 +108,7 @@ export class PdfService {
   /** Full-page SkyGloss letterhead used as the invoice background. */
   private resolveLetterheadPath(): string | null {
     return (
-      this.resolveAssetPath('invoice-letterhead-page.jpg', '') ||
+      this.resolveAssetPath('invoice-letterhead-page.svg', '') ||
       this.resolveAssetPath('invoice-letterhead.png', '')
     );
   }
@@ -380,10 +381,24 @@ export class PdfService {
         if (!letterheadPath) return;
         const savedX = doc.x;
         const savedY = doc.y;
-        doc.image(letterheadPath, 0, 0, {
-          width: doc.page.width,
-          height: doc.page.height,
-        });
+        if (letterheadPath.toLowerCase().endsWith('.svg')) {
+          const svg = fs
+            .readFileSync(letterheadPath, 'utf8')
+            .replace(
+              /font-family:\s*Poppins-Regular,\s*Poppins/g,
+              'font-family: Helvetica',
+            );
+          SVGtoPDF(doc, svg, 0, 0, {
+            width: doc.page.width,
+            height: doc.page.height,
+            preserveAspectRatio: 'none',
+          });
+        } else {
+          doc.image(letterheadPath, 0, 0, {
+            width: doc.page.width,
+            height: doc.page.height,
+          });
+        }
         doc.x = savedX;
         doc.y = savedY;
       };
