@@ -279,6 +279,13 @@ export class UsersController {
     return this.usersService.getShopProfileNetworkContacts(user);
   }
 
+  /** Operational Support shops + order counts for the logged-in Representative. */
+  @Get('me/operational-support-summary')
+  @Roles(UserRole.MASTER_PARTNER)
+  getOperationalSupportSummary(@GetUser() user: UserDocument) {
+    return this.usersService.getOperationalSupportSummary(user);
+  }
+
   @Get(':id')
   @Roles(UserRole.ADMIN)
   findOne(@Param('id') id: string) {

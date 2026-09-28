@@ -2599,6 +2599,14 @@ export class OrdersService implements OnModuleInit {
       addUser(viewer);
     }
 
+    // Include shops where this Representative is Operational Support Partner
+    // so they can view those shops' orders (commission UI already covers earnings).
+    const osShopIds =
+      await this.usersService.findOperationalSupportShopIds(viewer);
+    for (const id of osShopIds) {
+      idSet.add(id);
+    }
+
     return Array.from(idSet);
   }
 

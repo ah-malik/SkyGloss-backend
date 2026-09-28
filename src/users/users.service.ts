@@ -72,6 +72,7 @@ import {
   softDeleteUnsetPayload,
   SOFT_DELETE_RETENTION_DAYS,
 } from '../common/soft-delete';
+import { registrationOrderExclusionFilter } from '../common/order-totals';
 
 export interface NetworkUsersResult {
   shops: UserDocument[];
@@ -2764,6 +2765,10 @@ export class UsersService implements OnModuleInit {
     partnerCode?: string;
     profileImage?: string;
     role?: string;
+    city?: string;
+    country?: string;
+    shopName?: string;
+    companyName?: string;
   }) {
     const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ').trim();
     return {
@@ -2775,6 +2780,10 @@ export class UsersService implements OnModuleInit {
       partnerCode: user.partnerCode,
       profileImage: user.profileImage || null,
       role: user.role,
+      city: user.city || null,
+      country: user.country || null,
+      shopName: user.shopName || null,
+      companyName: user.companyName || null,
     };
   }
 
@@ -2795,32 +2804,65 @@ export class UsersService implements OnModuleInit {
     return this.toPublicNetworkContact(osRep);
   }
 
-  /** Shop Profile Settings: Operational Support Partner plus Hub or acting Distributor. */
+  /**
+   * Network contacts for Profile / Partner Home:
+   * - Shop → Operational Support Partner + Hub/Distributor parent link
+   * - Rep / Promoter / Distributor → owning Hub
+   * - Country Hub → Global Hub (when not already Global)
+   */
   async getShopProfileNetworkContacts(user: UserDocument) {
-    const shop = await this.userModel.findById(user._id).exec();
-    if (!shop || shop.role !== UserRole.CERTIFIED_SHOP) {
+    const me = await this.userModel.findById(user._id).exec();
+    if (!me) {
       return { representative: null, parentLink: null };
     }
 
-    const representative = await this.getOperationalSupportPartnerForShop(shop);
+    if (me.role === UserRole.CERTIFIED_SHOP) {
+      const representative = await this.getOperationalSupportPartnerForShop(me);
 
-    let parentLink: ReturnType<UsersService['toPublicNetworkContact']> | null =
-      null;
-    const actingCode = await this.resolveActingParentPartnerCodeForShop({
-      hubPartnerCode: shop.hubPartnerCode,
-      country: shop.country,
-    });
-    const parent = actingCode ? await this.findByPartnerCode(actingCode) : null;
-    if (parent && isShopParentLinkRole(parent.role)) {
-      parentLink = this.toPublicNetworkContact(parent);
-      const repCode = normalizePartnerCode(representative?.partnerCode);
-      const parentCode = normalizePartnerCode(parentLink.partnerCode);
-      if (repCode && parentCode && repCode === parentCode) {
-        parentLink = null;
+      let parentLink: ReturnType<UsersService['toPublicNetworkContact']> | null =
+        null;
+      const actingCode = await this.resolveActingParentPartnerCodeForShop({
+        hubPartnerCode: me.hubPartnerCode,
+        country: me.country,
+      });
+      const parent = actingCode ? await this.findByPartnerCode(actingCode) : null;
+      if (parent && isShopParentLinkRole(parent.role)) {
+        parentLink = this.toPublicNetworkContact(parent);
+        const repCode = normalizePartnerCode(representative?.partnerCode);
+        const parentCode = normalizePartnerCode(parentLink.partnerCode);
+        if (repCode && parentCode && repCode === parentCode) {
+          parentLink = null;
+        }
       }
+
+      return { representative, parentLink };
     }
 
-    return { representative, parentLink };
+    if (
+      me.role === UserRole.MASTER_PARTNER ||
+      me.role === UserRole.REGIONAL_PARTNER ||
+      me.role === UserRole.DISTRIBUTOR
+    ) {
+      const hubs = await this.findOwningHubPartners(String(me._id));
+      const hub = hubs[0] || null;
+      return {
+        representative: null,
+        parentLink: hub ? this.toPublicNetworkContact(hub) : null,
+      };
+    }
+
+    if (
+      me.role === UserRole.PARTNER &&
+      !isGlobalHubPartnerCode(me.partnerCode)
+    ) {
+      const globalHub = await this.findByPartnerCode(GLOBAL_HUB_PARTNER_CODE);
+      return {
+        representative: null,
+        parentLink: globalHub ? this.toPublicNetworkContact(globalHub) : null,
+      };
+    }
+
+    return { representative: null, parentLink: null };
   }
 
   async update(
@@ -2858,17 +2900,26 @@ export class UsersService implements OnModuleInit {
         throw new ForbiddenException('You do not have permission to update this user');
       }
 
-      if (
-        updateUserDto.isCertified === true &&
-        !canCertifyShops(currentUser.role, currentUser.partnerCode)
-      ) {
-        throw new ForbiddenException(
-          'You do not have permission to certify this shop.',
-        );
+      if (updateUserDto.isCertified === true) {
+        if (!canCertifyShops(currentUser.role, currentUser.partnerCode)) {
+          throw new ForbiddenException(
+            'You do not have permission to certify this shop.',
+          );
+        }
+        // Operational Support assignment alone is view-only — certify requires
+        // the shop to be in the viewer's referral / linked network tree.
+        if (!isGlobalPartner) {
+          const inCertifyNetwork = await this.isShopInViewerCertifyNetwork(
+            currentUser,
+            targetUser._id.toString(),
+          );
+          if (!inCertifyNetwork) {
+            throw new ForbiddenException(
+              'Operational Support Partners cannot certify shops. Certification is handled by the shop’s network partner.',
+            );
+          }
+        }
       }
-
-      // Optional: Restrict what fields a Partner can update
-      // For now, let's just proceed since we trust the DTO validation for other roles
     }
 
     const updatePayload: any = { ...updateUserDto };
@@ -3729,6 +3780,126 @@ export class UsersService implements OnModuleInit {
   //     .exec();
   // }
 
+  /**
+   * Shop IDs where Admin assigned this Representative as Operational Support.
+   */
+  async findOperationalSupportShopIds(
+    viewer: UserDocument,
+  ): Promise<string[]> {
+    const code = normalizePartnerCode(viewer.partnerCode);
+    if (!code || viewer.role !== UserRole.MASTER_PARTNER) {
+      return [];
+    }
+
+    const shops = await this.userModel
+      .find({
+        role: UserRole.CERTIFIED_SHOP,
+        operationalSupportRepresentativeCode: code,
+      })
+      .select('_id')
+      .lean()
+      .exec();
+
+    return shops.map((shop) => String(shop._id));
+  }
+
+  /**
+   * True when the shop is in the viewer's referral / linked network tree
+   * (certify-eligible). Operational Support assignment alone does not qualify.
+   */
+  async isShopInViewerCertifyNetwork(
+    viewer: UserDocument,
+    shopId: string,
+  ): Promise<boolean> {
+    if (isGlobalHubPartnerCode(viewer.partnerCode)) return true;
+    if (!canCertifyShops(viewer.role, viewer.partnerCode)) return false;
+
+    const network = await this.findNetworkUsersForViewer(viewer);
+    return network.shops.some((shop) => String(shop._id) === String(shopId));
+  }
+
+  /**
+   * Shops where Admin assigned this Representative as Operational Support,
+   * plus non-registration order counts for those shops.
+   * Additive summary — does not alter network tree / referred-shops scope.
+   */
+  async getOperationalSupportSummary(viewer: UserDocument): Promise<{
+    shopCount: number;
+    orderCount: number;
+    shops: any[];
+  }> {
+    const empty = { shopCount: 0, orderCount: 0, shops: [] as any[] };
+    const code = normalizePartnerCode(viewer.partnerCode);
+    if (!code || viewer.role !== UserRole.MASTER_PARTNER) {
+      return empty;
+    }
+
+    const shops = await this.userModel
+      .find({
+        role: UserRole.CERTIFIED_SHOP,
+        operationalSupportRepresentativeCode: code,
+      })
+      .select(
+        '-password -refreshTokenHash -resetPasswordToken -resetPasswordExpires',
+      )
+      .lean()
+      .exec();
+
+    if (shops.length === 0) {
+      return empty;
+    }
+
+    const shopIds = shops.map((shop) => shop._id);
+    const registrationExclusion = registrationOrderExclusionFilter();
+    const orderStats = await this.orderModel.aggregate([
+      {
+        $match: {
+          user: { $in: shopIds },
+          deletedAt: null,
+          ...registrationExclusion,
+        },
+      },
+      {
+        $group: {
+          _id: '$user',
+          orderCount: { $sum: 1 },
+          totalSpent: { $sum: { $ifNull: ['$totalAmount', 0] } },
+        },
+      },
+    ]);
+
+    const statsByShopId = new Map(
+      orderStats.map((row: { _id: unknown; orderCount: number; totalSpent: number }) => [
+        String(row._id),
+        {
+          orderCount: row.orderCount || 0,
+          totalSpent: row.totalSpent || 0,
+        },
+      ]),
+    );
+
+    let orderCount = 0;
+    const shopsWithStats = shops.map((shop) => {
+      const stats = statsByShopId.get(String(shop._id)) || {
+        orderCount: 0,
+        totalSpent: 0,
+      };
+      orderCount += stats.orderCount;
+      return {
+        ...shop,
+        orderCount: stats.orderCount,
+        totalSpent: stats.totalSpent,
+        isOperationalSupportShop: true,
+      };
+    });
+
+    return {
+      shopCount: shopsWithStats.length,
+      orderCount,
+      shops: shopsWithStats,
+    };
+  }
+
   async findNetworkUsersForViewer(
     viewer: UserDocument,
   ): Promise<NetworkUsersResult> {
@@ -4060,7 +4231,27 @@ export class UsersService implements OnModuleInit {
       ...network.represented,
       ...network.distributors,
     ];
-    return all.some((u) => u._id.toString() === targetUserId);
+    if (all.some((u) => u._id.toString() === targetUserId)) {
+      return true;
+    }
+
+    // Operational Support Partner may manage shops Admin assigned to them,
+    // even when those shops sit outside the referral / linked-rep tree.
+    const viewerCode = normalizePartnerCode(viewer.partnerCode);
+    if (viewer.role === UserRole.MASTER_PARTNER && viewerCode) {
+      const osShop = await this.userModel
+        .findOne({
+          _id: targetUserId,
+          role: UserRole.CERTIFIED_SHOP,
+          operationalSupportRepresentativeCode: viewerCode,
+        })
+        .select('_id')
+        .lean()
+        .exec();
+      if (osShop) return true;
+    }
+
+    return false;
   }
 
   /**
