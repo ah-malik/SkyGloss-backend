@@ -739,4 +739,165 @@ export class PdfService {
       doc.end();
     });
   }
+
+  /**
+   * Portrait business card (55×85mm).
+   * Front matches the shared SkyGloss card: name, role, company, email, phone,
+   * social block, and the factory forever signature on a cyan bar.
+   * Back is the same logo card for every user.
+   */
+  async generateBusinessCard(user: User): Promise<Buffer> {
+    const mm = 72 / 25.4;
+    const width = 55 * mm;
+    const height = 85 * mm;
+    const cyan = '#0EA0DC';
+    const ink = '#111111';
+
+    const fullName = (
+      `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'SkyGloss'
+    ).toUpperCase();
+    const title = this.businessCardTitle(user.role);
+    const phone = String(user.phoneNumber || '').trim();
+    const email = String(user.email || '').trim().toUpperCase();
+
+    return new Promise((resolve, reject) => {
+      try {
+        const doc = new PDFDocument({
+          size: [width, height],
+          margin: 0,
+          autoFirstPage: false,
+        });
+        const chunks: Buffer[] = [];
+        doc.on('data', (chunk) => chunks.push(chunk));
+        doc.on('end', () => resolve(Buffer.concat(chunks)));
+        doc.on('error', reject);
+
+        const page = { size: [width, height] as [number, number], margin: 0 };
+        const padX = 16;
+
+        doc.addPage(page);
+        doc.rect(0, 0, width, height).fill('#ffffff');
+
+        let y = 22;
+        doc.font('Times-Bold').fillColor(ink);
+        let nameSize = 15;
+        doc.fontSize(nameSize);
+        while (nameSize > 9 && doc.widthOfString(fullName) > width - padX * 2) {
+          nameSize -= 0.5;
+          doc.fontSize(nameSize);
+        }
+        doc.text(fullName, padX, y, { lineBreak: false });
+        y += nameSize + 3;
+
+        if (title) {
+          doc.font('Times-Roman').fontSize(9).fillColor(ink);
+          doc.text(title, padX, y, {
+            width: width - padX * 2,
+            lineBreak: false,
+          });
+          y += 12;
+        }
+
+        doc.font('Times-Bold').fontSize(9).fillColor(ink);
+        doc.text('SkyGloss Global', padX, y, { lineBreak: false });
+        y += 18;
+
+        if (email) {
+          doc.font('Helvetica').fillColor(ink);
+          let emailSize = 7.5;
+          doc.fontSize(emailSize);
+          while (emailSize > 5 && doc.widthOfString(email) > width - padX * 2) {
+            emailSize -= 0.25;
+            doc.fontSize(emailSize);
+          }
+          doc.text(email, padX, y, { lineBreak: false });
+          y += emailSize + 4;
+        }
+        if (phone) {
+          doc.font('Helvetica').fontSize(7.5).fillColor(ink);
+          doc.text(phone, padX, y, { lineBreak: false });
+          y += 16;
+        } else {
+          y += 8;
+        }
+
+        const badgeSize = 24;
+        const badgePath = this.resolveAssetPath('social-badge.svg', '');
+        if (badgePath) {
+          const savedX = doc.x;
+          const savedY = doc.y;
+          SVGtoPDF(doc, fs.readFileSync(badgePath, 'utf8'), padX, y, {
+            width: badgeSize,
+            height: badgeSize,
+            assumePt: true,
+            preserveAspectRatio: 'xMinYMin meet',
+          });
+          doc.x = savedX;
+          doc.y = savedY;
+        }
+        const socialX = padX + badgeSize + 7;
+        doc.font('Helvetica-Bold').fontSize(7).fillColor(ink);
+        doc.text('SKYGLOSS.COM', socialX, y + 5, { lineBreak: false });
+        doc.font('Helvetica-Bold').fontSize(7).fillColor(ink);
+        doc.text('@SKYGLOSS.SERVICES', socialX, y + 15, { lineBreak: false });
+
+        const barInset = 14;
+        const barH = height * 0.18;
+        const barY = height - barH;
+        doc.save();
+        doc.rect(barInset, barY, width - barInset * 2, barH).fill(cyan);
+        doc.restore();
+
+        const signPath = this.resolveAssetPath('factory-forever.png', '');
+        if (signPath) {
+          const signW = width * 0.58;
+          const signH = signW * (171 / 509);
+          const signX = width - signW - 12;
+          const signY = barY - signH * 0.55;
+          doc.image(signPath, signX, signY, { width: signW, height: signH });
+        }
+
+        doc.addPage(page);
+        doc.rect(0, 0, width, height).fill('#ffffff');
+        const bandH = height * 0.3;
+        doc.rect(0, height - bandH, width, bandH).fill(cyan);
+
+        const logoPath = this.resolveAssetPath('skygloss-logo.png', '');
+        if (logoPath) {
+          const logoW = width * 0.72;
+          const logoH = logoW * (32 / 169);
+          const whiteH = height - bandH;
+          doc.image(logoPath, (width - logoW) / 2, (whiteH - logoH) / 2, {
+            width: logoW,
+            height: logoH,
+          });
+        }
+
+        doc.end();
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  private businessCardTitle(role?: string): string {
+    switch (role) {
+      case 'partner':
+        return 'Hub';
+      case 'distributor':
+        return 'Distributor';
+      case 'master_partner':
+        return 'Representative';
+      case 'regional_partner':
+        return 'Promoter';
+      case 'sub_promoter':
+        return 'Sub-Promoter';
+      case 'certified_shop':
+        return 'Certified Shop';
+      case 'admin':
+        return 'Admin';
+      default:
+        return '';
+    }
+  }
 }

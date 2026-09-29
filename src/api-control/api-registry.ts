@@ -234,6 +234,7 @@ export const FRONTEND_APIS: ApiEndpointDef[] = [
 
   // PDF
   def('frontend', 'PDF', 'GET', '/pdf/certificate', 'Download certificate'),
+  def('frontend', 'PDF', 'GET', '/pdf/business-card', 'Download business card'),
 
   // Inventory
   def('frontend', 'Inventory', 'GET', '/inventory/me', 'Get my inventory'),

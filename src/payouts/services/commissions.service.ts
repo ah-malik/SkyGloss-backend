@@ -90,9 +90,18 @@ export class CommissionsService {
         earningType: entry.earningType || 'Shop Introduction',
       });
 
-      if (existing) {
+        if (existing) {
         // Keep PENDING_HOLD rows aligned with locked order.commissions
         // (e.g. legacy Shop Intro 20% repaired back to 10% after ship).
+        let changed = false;
+        if (
+          existing.status === CommissionLifecycleStatus.PENDING_HOLD &&
+          existing.availableAt?.getTime() !== availableAt.getTime()
+        ) {
+          existing.availableAt = availableAt;
+          existing.shippedAt = shippedAt;
+          changed = true;
+        }
         if (
           existing.status === CommissionLifecycleStatus.PENDING_HOLD &&
           (Number(existing.percentage) !== Number(entry.percentage) ||
@@ -104,23 +113,19 @@ export class CommissionsService {
           existing.originalCurrency = entry.originalCurrency;
           existing.exchangeRate = entry.exchangeRate;
           existing.convertedUsdAmount = entry.convertedUsdAmount;
-          if (
-            !existing.actingParentPartnerCode &&
-            actingParentPartnerCode
-          ) {
-            existing.actingParentPartnerCode = actingParentPartnerCode;
-          }
-          await existing.save();
+          changed = true;
           this.logger.log(
             `Updated PENDING_HOLD commission ${existing._id} for order ${order.orderNumber}: ${entry.percentage}% / $${entry.amount}`,
           );
-        } else if (
+        }
+        if (
           !existing.actingParentPartnerCode &&
           actingParentPartnerCode
         ) {
           existing.actingParentPartnerCode = actingParentPartnerCode;
-          await existing.save();
+          changed = true;
         }
+        if (changed) await existing.save();
         continue;
       }
 
@@ -171,11 +176,24 @@ export class CommissionsService {
       });
     }
 
-    // Keep embedded commissions pending until 30-day hold completes
-    order.commissions = order.commissions.map((c) => ({
-      ...c,
-      status: 'pending' as const,
-    }));
+    // Pending until this order's hold completes. Already available or paid
+    // lines stay earned so a later ship sync cannot put them back on hold.
+    const records = await this.commissionModel.find({ orderId: order._id }).lean();
+    order.commissions = order.commissions.map((c) => {
+      const match = records.find(
+        (record) =>
+          String(record.recipientUserId) === String(c.recipientUserId) &&
+          (record.earningType || 'Shop Introduction') ===
+            (c.earningType || 'Shop Introduction'),
+      );
+      if (!match || match.status === CommissionLifecycleStatus.PENDING_HOLD) {
+        return { ...c, status: 'pending' as const };
+      }
+      if (match.status === CommissionLifecycleStatus.CANCELLED) {
+        return c;
+      }
+      return { ...c, status: 'earned' as const };
+    });
     order.markModified('commissions');
     await order.save();
   }

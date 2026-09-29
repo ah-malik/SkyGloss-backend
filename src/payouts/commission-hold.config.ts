@@ -1,30 +1,42 @@
-/** Production default — 30 days after shipment */
+/** Portal (https://portal.skygloss.com/) hold — days after shipment. */
 export const COMMISSION_HOLD_DAYS_PRODUCTION = 30;
 
-/** Development default — 1 minute after shipment */
+/** Non-portal default when COMMISSION_HOLD_MINUTES is unset. */
 export const COMMISSION_HOLD_MINUTES_DEV = 1;
 
-/** TEMPORARY: 1-minute hold in all environments for testing. Set to null to restore prod/dev defaults. */
-export const COMMISSION_HOLD_OVERRIDE_MINUTES: number | null = 1;
+const PORTAL_HOLD_HOST = 'portal.skygloss.com';
 
-function isProductionEnvironment(): boolean {
-  return process.env.NODE_ENV === 'production';
+function readPositiveNumber(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
 }
 
-/** Hold duration in milliseconds (prod: days, dev: minutes) */
-export function getCommissionHoldMs(): number {
-  if (COMMISSION_HOLD_OVERRIDE_MINUTES != null) {
-    const minutes = Number(
-      process.env.COMMISSION_HOLD_MINUTES ?? COMMISSION_HOLD_OVERRIDE_MINUTES,
-    );
-    return minutes * 60 * 1000;
+/** True only for the production portal host. Any other FRONTEND_URL uses the minute hold. */
+export function isPortalCommissionHold(
+  frontendUrl: string | undefined = process.env.FRONTEND_URL,
+): boolean {
+  const raw = (frontendUrl || '').trim();
+  if (!raw) return false;
+  try {
+    return new URL(raw).hostname.toLowerCase() === PORTAL_HOLD_HOST;
+  } catch {
+    return raw.replace(/\/+$/, '').toLowerCase() === `https://${PORTAL_HOLD_HOST}`;
   }
-  if (isProductionEnvironment()) {
-    const days = Number(process.env.COMMISSION_HOLD_DAYS ?? COMMISSION_HOLD_DAYS_PRODUCTION);
+}
+
+/** Hold duration in milliseconds. Portal: days. Everywhere else: minutes. */
+export function getCommissionHoldMs(): number {
+  if (isPortalCommissionHold()) {
+    const days = readPositiveNumber(
+      process.env.COMMISSION_HOLD_DAYS,
+      COMMISSION_HOLD_DAYS_PRODUCTION,
+    );
     return days * 24 * 60 * 60 * 1000;
   }
-  const minutes = Number(
-    process.env.COMMISSION_HOLD_MINUTES ?? COMMISSION_HOLD_MINUTES_DEV,
+  const minutes = readPositiveNumber(
+    process.env.COMMISSION_HOLD_MINUTES,
+    COMMISSION_HOLD_MINUTES_DEV,
   );
   return minutes * 60 * 1000;
 }
@@ -34,18 +46,21 @@ export function computeCommissionAvailableAt(shippedAt: Date): Date {
 }
 
 export function getCommissionHoldDescription(): string {
-  if (COMMISSION_HOLD_OVERRIDE_MINUTES != null) {
-    const minutes = process.env.COMMISSION_HOLD_MINUTES ?? COMMISSION_HOLD_OVERRIDE_MINUTES;
-    return `${minutes} minute(s) [testing]`;
+  if (isPortalCommissionHold()) {
+    const days = readPositiveNumber(
+      process.env.COMMISSION_HOLD_DAYS,
+      COMMISSION_HOLD_DAYS_PRODUCTION,
+    );
+    return `${days} day(s) after shipment [portal]`;
   }
-  if (isProductionEnvironment()) {
-    const days = process.env.COMMISSION_HOLD_DAYS ?? COMMISSION_HOLD_DAYS_PRODUCTION;
-    return `${days} day(s)`;
-  }
-  const minutes = process.env.COMMISSION_HOLD_MINUTES ?? COMMISSION_HOLD_MINUTES_DEV;
-  return `${minutes} minute(s) [dev]`;
+  const minutes = readPositiveNumber(
+    process.env.COMMISSION_HOLD_MINUTES,
+    COMMISSION_HOLD_MINUTES_DEV,
+  );
+  return `${minutes} minute(s) after shipment`;
 }
 
+/** Minute holds need a frequent release. The portal 30-day hold stays hourly. */
 export function useFrequentCommissionReleaseCron(): boolean {
-  return !isProductionEnvironment();
+  return !isPortalCommissionHold();
 }

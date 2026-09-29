@@ -34,6 +34,25 @@ export class PdfController {
     res.end(buffer);
   }
 
+  @Get('business-card')
+  async downloadBusinessCard(@Req() req: any, @Res() res: Response) {
+    const user = await this.usersService.findOne(req.user.id);
+    if (!user) throw new NotFoundException('User not found');
+
+    const buffer = await this.pdfService.generateBusinessCard(user);
+    const safeName = `${user.firstName || 'User'}_${user.lastName || ''}`
+      .replace(/[^\w.-]+/g, '_')
+      .replace(/_+$/g, '');
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename=SkyGloss_Business_Card_${safeName}.pdf`,
+      'Content-Length': buffer.length,
+    });
+
+    res.end(buffer);
+  }
+
   @Get('order/:id')
   @Roles(UserRole.ADMIN)
   async downloadOrderDetails(@Param('id') id: string, @Res() res: Response) {
