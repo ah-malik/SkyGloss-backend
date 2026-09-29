@@ -98,6 +98,12 @@ export class UsersService implements OnModuleInit {
     private readonly userActivityService: UserActivityService,
   ) { }
 
+  /**
+   * Commission recipients are locked at first calculation (order-time snapshot).
+   * Admin changing OSP / Shop Intro / rates must NOT rewrite past orders —
+   * only brand-new orders (empty commissions) still need a first apply.
+   * Recalc still runs so any never-stamped orders can pick up current assignments once.
+   */
   private shouldRecalculateShopCommissions(
     before: UserDocument,
     after: UserDocument,
@@ -108,6 +114,9 @@ export class UsersService implements OnModuleInit {
 
     const prevOs = normalizePartnerCode(before.operationalSupportRepresentativeCode);
     const nextOs = normalizePartnerCode(after.operationalSupportRepresentativeCode);
+    // Queue only so orders with empty commissions can be stamped once.
+    // Existing lines are preserved inside recalculateCommissionsForShop /
+    // applyOrderCommissions (snapshot lock).
     if (operationalSupportProvided && prevOs !== nextOs) return true;
 
     if (dto.referredByPartnerCode !== undefined) {

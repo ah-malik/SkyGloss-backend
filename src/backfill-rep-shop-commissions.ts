@@ -1,5 +1,7 @@
 /**
- * Backfill commissions on existing shop orders after a Representative link.
+ * Stamp commissions on shop orders that still have an empty commissions array
+ * after a Representative / OSP link. Does NOT rewrite orders that already have
+ * commission snapshots (order-time recipients stay locked).
  * Run: npm run backfill-rep-shop-commissions -- SKYGLOSSPNW
  * Or for one shop: npm run backfill-rep-shop-commissions -- SKYGLOSSPNW <shopUserId>
  */

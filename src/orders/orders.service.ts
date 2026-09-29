@@ -824,13 +824,19 @@ export class OrdersService implements OnModuleInit {
       }
     }
 
-    // Non-USA checkout starts as PENDING — show commission as pending immediately.
-    if (order?.status === OrderStatus.PENDING) {
+    // Stamp commissions at checkout create (PENDING or PENDING_PAYMENT) so OSP/SI
+    // are locked to order-time partners — not whoever is assigned when payment clears.
+    if (
+      order?.status === OrderStatus.PENDING ||
+      order?.status === OrderStatus.PENDING_PAYMENT
+    ) {
       await this.applyOrderCommissions(
         order._id.toString(),
-        OrderStatus.PENDING,
+        order.status as OrderStatus,
       );
-      await this.deductProductInventoryForOrder(order._id);
+      if (order.status === OrderStatus.PENDING) {
+        await this.deductProductInventoryForOrder(order._id);
+      }
     }
 
     try {
@@ -2657,6 +2663,7 @@ export class OrdersService implements OnModuleInit {
   ): Promise<void> {
     if (
       newStatus !== OrderStatus.PENDING &&
+      newStatus !== OrderStatus.PENDING_PAYMENT &&
       newStatus !== OrderStatus.PAID &&
       newStatus !== OrderStatus.SHIPPED &&
       newStatus !== OrderStatus.DELIVERED
@@ -2677,6 +2684,53 @@ export class OrdersService implements OnModuleInit {
 
     let shopUser = await this.usersService.findOne(shopUserId);
     if (!shopUser || shopUser.role !== UserRole.CERTIFIED_SHOP) return;
+
+    // SNAPSHOT LOCK (early): once commission lines exist on the order, never
+    // rebuild recipients from the live shop. Admin OSP/SI changes must not move
+    // past commissions. Amounts for SI/OS may refresh from the locked % when the
+    // order USD base changes (e.g. items appended); Partner Intro amounts stay.
+    if (order.commissions && order.commissions.length > 0) {
+      const monetary = resolveCommissionOrderAmounts(order);
+      let changed = this.normalizeLegacyShopIntroRateOnOrder(
+        order,
+        monetary,
+        shopUser,
+      );
+
+      for (const entry of order.commissions) {
+        const type = String(entry.earningType || '')
+          .replace(/\s*\(partial[^)]*\)\s*$/i, '')
+          .trim();
+        if (type === 'Partner Development') continue;
+        const pct = Number(entry.percentage);
+        if (!Number.isFinite(pct) || pct <= 0) continue;
+        const nextAmount = roundMoney(
+          monetary.convertedUsdAmount * (pct / 100),
+        );
+        if (Math.abs(Number(entry.amount || 0) - nextAmount) >= 0.02) {
+          entry.amount = nextAmount;
+          changed = true;
+        }
+      }
+
+      const commissionStatus = 'pending' as const;
+      const statusChanged = order.commissions.some(
+        (entry) => entry.status !== commissionStatus,
+      );
+      if (statusChanged) {
+        order.commissions = order.commissions.map((entry) => ({
+          ...entry,
+          status: commissionStatus,
+        }));
+        changed = true;
+      }
+
+      if (changed) {
+        order.markModified('commissions');
+        await order.save();
+      }
+      return;
+    }
 
     // Promoter Network FO first (same stamp shape as Rep FO: SI=P2, PD=P1).
     // Must run before Rep re-assignment so we don't keep an upstream-Rep SI
@@ -2807,111 +2861,7 @@ export class OrdersService implements OnModuleInit {
       return;
     }
 
-    if (order.commissions && order.commissions.length > 0) {
-      let rebuildCommissions = false;
-
-      if (useHierarchyCommission) {
-        const promCode = normalizePartnerCode(
-          hierarchyChain.promoter!.partnerCode,
-        );
-        const hasPromSi = order.commissions.some(
-          (entry) =>
-            entry.earningType === 'Shop Introduction' &&
-            normalizePartnerCode(entry.recipientPartnerCode) === promCode,
-        );
-        // OS is Admin-assigned only — do not require auto hierarchy OS.
-        rebuildCommissions = !hasPromSi;
-      }
-
-      // Rebuild when Shop Intro, Partner Intro, or Operational Support lines are missing or stale.
-      if (useFoNetwork) {
-        const expectedSi = normalizePartnerCode(
-          shopUser.shopIntroductionRepresentativeCode,
-        );
-        const expectedPd = normalizePartnerCode(livePartnerIntroCode);
-        const expectedOs = normalizePartnerCode(
-          shopUser.operationalSupportRepresentativeCode,
-        );
-        if (expectedSi) {
-          const hasSi = order.commissions.some(
-            (entry) =>
-              entry.earningType === 'Shop Introduction' &&
-              normalizePartnerCode(entry.recipientPartnerCode) === expectedSi,
-          );
-          rebuildCommissions = rebuildCommissions || !hasSi;
-        } else {
-          const hasSi = order.commissions.some(
-            (entry) => entry.earningType === 'Shop Introduction',
-          );
-          rebuildCommissions = rebuildCommissions || hasSi;
-        }
-        if (expectedPd) {
-          const hasPd = order.commissions.some(
-            (entry) =>
-              entry.earningType === 'Partner Development' &&
-              normalizePartnerCode(entry.recipientPartnerCode) === expectedPd,
-          );
-          rebuildCommissions = rebuildCommissions || !hasPd;
-        }
-        if (expectedOs) {
-          const hasOs = order.commissions.some(
-            (entry) =>
-              entry.earningType === 'Operational Support' &&
-              normalizePartnerCode(entry.recipientPartnerCode) === expectedOs,
-          );
-          rebuildCommissions = rebuildCommissions || !hasOs;
-        } else {
-          const hasOs = order.commissions.some(
-            (entry) => entry.earningType === 'Operational Support',
-          );
-          rebuildCommissions = rebuildCommissions || hasOs;
-        }
-      }
-
-      const expectedSi = normalizePartnerCode(
-        shopUser.shopIntroductionRepresentativeCode,
-      );
-      const existingSiLine = order.commissions.find(
-        (entry) => entry.earningType === 'Shop Introduction',
-      );
-      const actualSi = normalizePartnerCode(existingSiLine?.recipientPartnerCode);
-      const siMismatch =
-        !useHierarchyCommission &&
-        !!expectedSi &&
-        !!actualSi &&
-        actualSi !== expectedSi;
-
-      if (rebuildCommissions || siMismatch) {
-        order.commissions = [];
-        order.markModified('commissions');
-        await order.save();
-        // Fall through to fresh commission build below.
-      } else if (useHierarchyCommission) {
-        const commissionStatus = 'pending' as const;
-        order.commissions = order.commissions.map((entry) => ({
-          ...entry,
-          status: commissionStatus,
-        }));
-        order.markModified('commissions');
-        await order.save();
-        return;
-      } else {
-        // Rates are locked at first calculation. Never re-pull live shop FO
-        // stamps on SHIPPED/PAID — that caused Shop Intro 10% → 20% flips when
-        // shops still carried the legacy unlinked 20% stamp.
-        const monetary = resolveCommissionOrderAmounts(order);
-        this.normalizeLegacyShopIntroRateOnOrder(order, monetary, shopUser);
-        const commissionStatus = 'pending' as const;
-        order.commissions = order.commissions.map((entry) => ({
-          ...entry,
-          status: commissionStatus,
-        }));
-        order.markModified('commissions');
-        await order.save();
-        return;
-      }
-    }
-
+    // commissions is empty here (existing lines returned early via snapshot lock).
     const monetary = resolveCommissionOrderAmounts(order);
 
     const introPartnerCode = normalizePartnerCode(
@@ -3021,9 +2971,11 @@ export class OrdersService implements OnModuleInit {
   }
 
   /**
-   * Rebuild commissions on existing shop orders after Admin links a Representative
-   * (Operational Support / network parent). Ensures past orders pick up the
-   * current shop earning assignments and syncs payout records for shipped orders.
+   * After Admin updates shop earning assignments (OSP / SI / rates), stamp
+   * commissions only on orders that still have an empty commissions array.
+   *
+   * Orders that already have commission lines keep their order-time snapshot —
+   * changing OSP/SI must never move past commissions to a new recipient.
    */
   async recalculateCommissionsForShop(shopUserId: string): Promise<{
     processed: number;
@@ -3040,6 +2992,7 @@ export class OrdersService implements OnModuleInit {
         status: {
           $in: [
             OrderStatus.PENDING,
+            OrderStatus.PENDING_PAYMENT,
             OrderStatus.PAID,
             OrderStatus.SHIPPED,
             OrderStatus.DELIVERED,
@@ -3050,15 +3003,15 @@ export class OrdersService implements OnModuleInit {
       .exec();
 
     let updated = 0;
+    let processed = 0;
     for (const order of orders) {
-      const before = JSON.stringify(order.commissions || []);
-
-      // Force a full rebuild so admin rate / rep assignment changes apply to past orders.
+      // Snapshot lock: never clear or rebuild existing commission recipients.
       if (order.commissions?.length) {
-        order.commissions = [];
-        order.markModified('commissions');
-        await order.save();
+        continue;
       }
+
+      processed += 1;
+      const before = JSON.stringify(order.commissions || []);
 
       await this.applyOrderCommissions(
         order._id.toString(),
@@ -3094,11 +3047,11 @@ export class OrdersService implements OnModuleInit {
 
     if (orders.length > 0) {
       this.logger.log(
-        `[Commission] Shop ${shopUserId}: recalculated ${orders.length} order(s), ${updated} changed`,
+        `[Commission] Shop ${shopUserId}: snapshot-safe recalc — ${processed} unstamped order(s) processed, ${updated} stamped (${orders.length - processed} already locked)`,
       );
     }
 
-    return { processed: orders.length, updated };
+    return { processed, updated };
   }
 
   /** Queue Stripe→Wise transfer using commissions already saved on the order. */
@@ -3857,6 +3810,7 @@ export class OrdersService implements OnModuleInit {
 
     if (
       status === OrderStatus.PENDING ||
+      status === OrderStatus.PENDING_PAYMENT ||
       status === OrderStatus.PAID ||
       status === OrderStatus.SHIPPED ||
       status === OrderStatus.DELIVERED
