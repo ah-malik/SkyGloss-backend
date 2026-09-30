@@ -103,15 +103,15 @@ export function isSealCatalogProduct(name?: string | null): boolean {
   return true;
 }
 
-/** Prefer pre-markup group price for unpaid viewers; else charge price. */
+/** Use catalog charge price (includes unpaid +10% when present). */
 export function resolveComponentUnitPrice(sizeEntry: {
   price?: number;
   groupPrice?: number;
 }): number {
-  if (sizeEntry.groupPrice != null && Number.isFinite(Number(sizeEntry.groupPrice))) {
-    return Number(sizeEntry.groupPrice);
+  if (sizeEntry.price != null && Number.isFinite(Number(sizeEntry.price))) {
+    return Number(sizeEntry.price);
   }
-  return Number(sizeEntry.price) || 0;
+  return Number(sizeEntry.groupPrice) || 0;
 }
 
 export function roundMoney(amount: number): number {
@@ -152,7 +152,7 @@ type CatalogProduct = {
 
 /**
  * Resolve kit components from a shop-priced catalog.
- * Uses groupPrice (pre +10%) when present so the kit is not double-marked-up.
+ * Uses charge `price` (already includes unpaid +10% for eligible shops).
  */
 export function resolveCertificationKitComponents(
   catalog: CatalogProduct[],
