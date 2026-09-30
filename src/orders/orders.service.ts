@@ -5737,7 +5737,7 @@ export class OrdersService implements OnModuleInit {
   ): Promise<void> {
     const siblings = await this.orderModel
       .find({
-        user: userId,
+        user: userId as any,
         includesCertificationKit: true,
         _id: { $ne: orderId },
         status: {

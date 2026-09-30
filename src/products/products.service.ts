@@ -338,7 +338,7 @@ export class ProductsService {
     if (!userId) return false;
     const existing = await this.orderModel
       .findOne({
-        user: userId,
+        user: userId as any,
         includesCertificationKit: true,
         status: {
           $in: [
