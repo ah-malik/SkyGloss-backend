@@ -8,6 +8,12 @@ export const CERTIFICATION_KIT_NAME = 'Certification Kit Bundle';
 
 export const CERTIFICATION_KIT_SIZE = 'Kit';
 
+/**
+ * Temporary kill-switch: set to true to show/sell the Certification Kit Bundle
+ * again for unpaid self-registered shops.
+ */
+export const CERTIFICATION_KIT_ENABLED = false;
+
 /** Percent off component subtotal (e.g. €1070 → ~€995). */
 export const CERTIFICATION_KIT_DISCOUNT_PERCENT = 7;
 
@@ -54,6 +60,7 @@ export function isCertificationKitCartItem(item: {
 
 /** Eligible: unpaid self-registered shop (activation fee still owed). */
 export function isCertificationKitEligibleUser(user: any): boolean {
+  if (!CERTIFICATION_KIT_ENABLED) return false;
   return isUnpaidSelfRegisteredShop(user);
 }
 

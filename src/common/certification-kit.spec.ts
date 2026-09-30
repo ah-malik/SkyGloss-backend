@@ -1,11 +1,24 @@
 import {
   applyCertificationKitDiscount,
   CERTIFICATION_KIT_DISCOUNT_PERCENT,
+  CERTIFICATION_KIT_ENABLED,
+  isCertificationKitEligibleUser,
   isCertificationKitProductId,
   resolveCertificationKitComponents,
 } from './certification-kit';
 
 describe('certification-kit', () => {
+  it('is temporarily disabled via CERTIFICATION_KIT_ENABLED', () => {
+    expect(CERTIFICATION_KIT_ENABLED).toBe(false);
+    expect(
+      isCertificationKitEligibleUser({
+        role: 'shop',
+        registrationSource: 'self',
+        isPaid: false,
+      }),
+    ).toBe(false);
+  });
+
   it('applies ~7% discount (1070 → 995.1)', () => {
     const result = applyCertificationKitDiscount(1070);
     expect(result.subtotal).toBe(1070);
