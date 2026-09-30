@@ -19,6 +19,17 @@ import {
   isUnpaidSelfRegisteredShop,
   resolveChargePriceForShop,
 } from '../common/unpaid-shop-pricing';
+import {
+  Order,
+  OrderDocument,
+  OrderStatus,
+} from '../orders/entities/order.entity';
+import {
+  buildCertificationKitCatalogProduct,
+  CERTIFICATION_KIT_PRODUCT_ID,
+  isCertificationKitEligibleUser,
+  resolveCertificationKitComponents,
+} from '../common/certification-kit';
 
 @Injectable()
 export class ProductsService {
@@ -26,6 +37,7 @@ export class ProductsService {
     @InjectModel(Product.name) private productModel: Model<ProductDocument>,
     @InjectModel(ProductGroup.name)
     private productGroupModel: Model<ProductGroupDocument>,
+    @InjectModel(Order.name) private orderModel: Model<OrderDocument>,
     private readonly cache: RedisCacheService,
     @Inject(forwardRef(() => ProductInventoryService))
     private readonly productInventoryService: ProductInventoryService,
@@ -112,7 +124,10 @@ export class ProductsService {
         })
         .filter((p) => p !== null);
 
-      return this.attachViewerHubStock(grouped, user);
+      return this.attachViewerHubStock(
+        await this.attachCertificationKitIfEligible(grouped, user),
+        user,
+      );
     }
 
     // 2. Fallback to standard fetching ONLY for users WITHOUT a product group or anonymous users
@@ -136,7 +151,10 @@ export class ProductsService {
       ...this.withViewerSizePricing(product.sizes || [], user),
     }));
 
-    return this.attachViewerHubStock(pricedCatalog, user);
+    return this.attachViewerHubStock(
+      await this.attachCertificationKitIfEligible(pricedCatalog, user),
+      user,
+    );
   }
 
   async findOne(id: string, user?: User): Promise<any> {
@@ -144,6 +162,20 @@ export class ProductsService {
       `[ProductsService] findOne called for ID: ${id}. User:`,
       user ? (user as any)._id : 'Anonymous',
     );
+
+    if (id === CERTIFICATION_KIT_PRODUCT_ID) {
+      if (!isCertificationKitEligibleUser(user)) {
+        throw new NotFoundException('Certification Kit is not available');
+      }
+      const catalog = await this.findAll('published', 'shop', user);
+      const kit = catalog.find(
+        (p) => String(p?._id) === CERTIFICATION_KIT_PRODUCT_ID,
+      );
+      if (!kit) {
+        throw new NotFoundException('Certification Kit is not available');
+      }
+      return kit;
+    }
 
     let groupToUse: any = null;
 
@@ -263,6 +295,67 @@ export class ProductsService {
     };
   }
 
+  /**
+   * Unpaid self-registered shops see a one-time Certification Kit at the top
+   * of the catalog. Hidden once purchased / reserved on an open order.
+   */
+  private async attachCertificationKitIfEligible(
+    products: any[],
+    user?: User,
+  ): Promise<any[]> {
+    if (!user || !isCertificationKitEligibleUser(user)) {
+      return products;
+    }
+
+    const alreadyPurchased = await this.hasActiveCertificationKitOrder(
+      (user as any)._id?.toString?.() || String((user as any)._id || ''),
+    );
+    if (alreadyPurchased) {
+      return products;
+    }
+
+    const components = resolveCertificationKitComponents(products);
+    if (!components) {
+      return products;
+    }
+
+    const currency =
+      products.find((p) => p?.currency)?.currency || 'USD';
+    const kit = buildCertificationKitCatalogProduct({
+      components,
+      currency,
+      alreadyPurchased: false,
+    });
+
+    // Pin to top; strip any accidental duplicate virtual id.
+    const withoutKit = products.filter(
+      (p) => String(p?._id) !== String(kit._id),
+    );
+    return [kit, ...withoutKit];
+  }
+
+  async hasActiveCertificationKitOrder(userId: string): Promise<boolean> {
+    if (!userId) return false;
+    const existing = await this.orderModel
+      .findOne({
+        user: userId,
+        includesCertificationKit: true,
+        status: {
+          $in: [
+            OrderStatus.PENDING,
+            OrderStatus.PENDING_PAYMENT,
+            OrderStatus.PAID,
+            OrderStatus.SHIPPED,
+            OrderStatus.DELIVERED,
+          ],
+        },
+      })
+      .select('_id')
+      .lean()
+      .exec();
+    return !!existing;
+  }
+
   async update(
     id: string,
     updateProductDto: UpdateProductDto,
@@ -310,6 +403,17 @@ export class ProductsService {
 
       return products.map((product) => {
         const id = String(product._id || product.id || '');
+        // Virtual Certification Kit keeps its own stock (1 / 0) — not hub inventory.
+        if (
+          product?.isCertificationKitBundle ||
+          id === CERTIFICATION_KIT_PRODUCT_ID
+        ) {
+          return {
+            ...product,
+            stockStatus:
+              Number(product.stock) > 0 ? 'available' : 'out_of_stock',
+          };
+        }
         const stock = stockMap.has(id)
           ? stockMap.get(id)!
           : DEFAULT_PRODUCT_STOCK;

@@ -157,6 +157,13 @@ export class Order {
   @Prop()
   couponCode?: string;
 
+  /**
+   * Unpaid-shop Certification Kit Bundle order.
+   * Components are expanded as line items; activation fee is waived on PAID.
+   */
+  @Prop({ default: false })
+  includesCertificationKit?: boolean;
+
   @Prop()
   stripeSessionId: string;
 

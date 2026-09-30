@@ -102,6 +102,12 @@ import {
 import { normalizeCurrencyCode } from '../common/currency-codes';
 import { normalizeOrderItemType } from '../common/order-type';
 import { resolveOrderLinePrice } from '../common/units-per-case';
+import {
+  applyCertificationKitDiscount,
+  isCertificationKitCartItem,
+  isCertificationKitEligibleUser,
+  resolveCertificationKitComponents,
+} from '../common/certification-kit';
 import { CouponsService, ShopRegistrationCouponResult } from '../coupons/coupons.service';
 import { StripeCouponSyncService } from '../coupons/stripe-coupon-sync.service';
 import { CommissionsService } from '../payouts/services/commissions.service';
@@ -755,11 +761,22 @@ export class OrdersService implements OnModuleInit {
       orderType: normalizeOrderItemType(item.orderType),
     }));
 
+    const kitResolved = await this.resolveCertificationKitOrderItems(
+      currentUser as any,
+      items,
+    );
+    const resolvedItems = kitResolved.items;
+    const includesCertificationKit = kitResolved.includesCertificationKit;
+
     // Calculate total amount from items
     // Note: In a real app, we should fetch product prices from DB to secure against client-side manipulation.
     // For this implementation, we'll use the prices sent from frontend but ensure strict types.
-    const itemsSubtotal = getItemsSubtotal(items);
-    const shippingFee = calculateShippingFee(shippingCountry, itemsSubtotal);
+    // Certification Kit prices are always server-resolved from catalog components.
+    const itemsSubtotal = getItemsSubtotal(resolvedItems);
+    let shippingFee = calculateShippingFee(shippingCountry, itemsSubtotal);
+    if (includesCertificationKit) {
+      shippingFee = 0;
+    }
 
     let discount = 0;
     let appliedCouponCode: string | undefined;
@@ -771,11 +788,14 @@ export class OrdersService implements OnModuleInit {
       discount = validation.discountAmount;
       appliedCouponCode = validation.code;
     }
+    if (includesCertificationKit) {
+      discount = Math.max(discount, kitResolved.kitDiscount);
+    }
 
     const orderTotal = Math.max(0, itemsSubtotal + shippingFee - discount);
 
     await this.productInventoryService.assertStockAvailableForOrder({
-      items,
+      items: resolvedItems,
       user: currentUser as any,
       actingParentPartnerCode: (
         await this.actingParentStampForUser(userId)
@@ -796,7 +816,7 @@ export class OrdersService implements OnModuleInit {
         );
         order = new this.orderModel({
           user: userId,
-          items,
+          items: resolvedItems,
           shippingFee,
           shippingAddress,
           status: requiresOnlinePayment
@@ -807,10 +827,17 @@ export class OrdersService implements OnModuleInit {
           paymentReminderCount: 0,
           discount,
           couponCode: appliedCouponCode,
+          includesCertificationKit: includesCertificationKit || undefined,
           ...(await this.actingParentStampForUser(userId)),
           ...monetary,
         });
         await order.save();
+        if (includesCertificationKit) {
+          await this.assertSingleActiveCertificationKitOrder(
+            userId,
+            order._id.toString(),
+          );
+        }
         break;
       } catch (saveError: any) {
         if (saveError.code === 11000 && retries > 1) {
@@ -1673,6 +1700,9 @@ export class OrdersService implements OnModuleInit {
       const existingOrder = await this.orderModel.findById(orderId);
       if (existingOrder && existingOrder.status === OrderStatus.PAID) {
         console.log(`[USA Stripe Webhook] Order ${existingOrder.orderNumber} is already PAID. Skipping duplicate notifications/emails.`);
+        if (existingOrder.includesCertificationKit) {
+          await this.applyCertificationKitPurchaseBenefits(existingOrder);
+        }
         await this.sendPaidOrderNotificationsIfNeeded(orderId);
         this.queuePaidOrderCommissionTransfer(orderId, {
           stripeAccountKey: 'usa',
@@ -1739,6 +1769,9 @@ export class OrdersService implements OnModuleInit {
               : session.payment_intent?.id || session.id,
         });
         await this.deductProductInventoryForOrder(updatedOrder._id);
+        if (updatedOrder.includesCertificationKit) {
+          await this.applyCertificationKitPurchaseBenefits(updatedOrder);
+        }
       } else {
         console.error(`[USA Stripe Webhook] Order ${orderId} not found in DB.`);
       }
@@ -1919,6 +1952,9 @@ export class OrdersService implements OnModuleInit {
       const existingOrder = await this.orderModel.findById(orderId);
       if (existingOrder && existingOrder.status === OrderStatus.PAID) {
         console.log(`[Europe Stripe Webhook] Order ${existingOrder.orderNumber} is already PAID. Skipping duplicate notifications/emails.`);
+        if (existingOrder.includesCertificationKit) {
+          await this.applyCertificationKitPurchaseBenefits(existingOrder);
+        }
         await this.sendPaidOrderNotificationsIfNeeded(orderId);
         this.queuePaidOrderCommissionTransfer(orderId, {
           stripeAccountKey: 'europe',
@@ -1984,6 +2020,9 @@ export class OrdersService implements OnModuleInit {
               : session.payment_intent?.id || session.id,
         });
         await this.deductProductInventoryForOrder(updatedOrder._id);
+        if (updatedOrder.includesCertificationKit) {
+          await this.applyCertificationKitPurchaseBenefits(updatedOrder);
+        }
       } else {
         console.error(`[Europe Stripe Webhook] Order ${orderId} not found in DB.`);
       }
@@ -2335,6 +2374,9 @@ export class OrdersService implements OnModuleInit {
         const existingOrder = await this.orderModel.findById(orderId);
         if (existingOrder && existingOrder.status === OrderStatus.PAID) {
           console.log(`[Stripe Webhook] Order ${existingOrder.orderNumber} is already PAID. Skipping duplicate notifications/emails.`);
+          if (existingOrder.includesCertificationKit) {
+            await this.applyCertificationKitPurchaseBenefits(existingOrder);
+          }
           await this.sendPaidOrderNotificationsIfNeeded(orderId);
           this.queuePaidOrderCommissionTransfer(orderId, {
             stripeAccountKey: 'global',
@@ -2400,6 +2442,9 @@ export class OrdersService implements OnModuleInit {
                 : session.payment_intent?.id || session.id,
           });
           await this.deductProductInventoryForOrder(updatedOrder._id);
+          if (updatedOrder.includesCertificationKit) {
+            await this.applyCertificationKitPurchaseBenefits(updatedOrder);
+          }
         } else {
           console.error(`[Stripe Webhook] Order with id ${orderId} not found in DB.`);
         }
@@ -3857,6 +3902,9 @@ export class OrdersService implements OnModuleInit {
       // Full payment received — clear remaining balance tracking.
       updatedOrder.amountPaid = updatedOrder.totalAmount;
       await updatedOrder.save();
+      if (updatedOrder.includesCertificationKit) {
+        await this.applyCertificationKitPurchaseBenefits(updatedOrder);
+      }
     }
 
     return actor
@@ -4298,6 +4346,12 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException('At least one item is required');
     }
 
+    if (rawItems.some((item) => isCertificationKitCartItem(item as any))) {
+      throw new BadRequestException(
+        'The Certification Kit Bundle cannot be added to an existing order. It must be purchased as its own checkout.',
+      );
+    }
+
     const shopUser =
       typeof order.user === 'object' && order.user !== null
         ? (order.user as any)
@@ -4492,15 +4546,22 @@ export class OrdersService implements OnModuleInit {
         throw new BadRequestException('Order items are required');
       }
 
-      await this.productInventoryService.assertStockAvailableForOrder({
+      const kitResolved = await this.resolveCertificationKitOrderItems(
+        currentUser as any,
         items,
+      );
+      const resolvedItems = kitResolved.items;
+      const includesCertificationKit = kitResolved.includesCertificationKit;
+
+      await this.productInventoryService.assertStockAvailableForOrder({
+        items: resolvedItems,
         user: currentUser as any,
         actingParentPartnerCode: (
           await this.actingParentStampForUser(userId)
         ).actingParentPartnerCode,
       });
 
-      const itemsSubtotal = getItemsSubtotal(items);
+      const itemsSubtotal = getItemsSubtotal(resolvedItems);
       const shippingCountry =
         shippingAddress?.country || currentUser?.country || '';
       if (
@@ -4514,7 +4575,10 @@ export class OrdersService implements OnModuleInit {
         );
       }
 
-      const shippingFee = calculateShippingFee(shippingCountry, itemsSubtotal);
+      let shippingFee = calculateShippingFee(shippingCountry, itemsSubtotal);
+      if (includesCertificationKit) {
+        shippingFee = 0;
+      }
 
       let discount = 0;
       let appliedCouponCode: string | undefined;
@@ -4525,6 +4589,9 @@ export class OrdersService implements OnModuleInit {
         );
         discount = validation.discountAmount;
         appliedCouponCode = validation.code;
+      }
+      if (includesCertificationKit) {
+        discount = Math.max(discount, kitResolved.kitDiscount);
       }
 
       const finalAmount = Math.max(0, itemsSubtotal + shippingFee - discount);
@@ -4543,7 +4610,7 @@ export class OrdersService implements OnModuleInit {
           );
           const order = new this.orderModel({
             user: userId,
-            items,
+            items: resolvedItems,
             shippingFee,
             shippingAddress,
             status: OrderStatus.PENDING,
@@ -4551,10 +4618,17 @@ export class OrdersService implements OnModuleInit {
             orderFlow: 'request',
             discount,
             couponCode: appliedCouponCode,
+            includesCertificationKit: includesCertificationKit || undefined,
             ...(await this.actingParentStampForUser(userId)),
             ...monetary,
           });
           savedOrder = await order.save();
+          if (includesCertificationKit) {
+            await this.assertSingleActiveCertificationKitOrder(
+              userId,
+              savedOrder._id.toString(),
+            );
+          }
           break;
         } catch (saveError: any) {
           if (saveError.code === 11000 && retries > 1) {
@@ -5206,7 +5280,9 @@ export class OrdersService implements OnModuleInit {
 
     const session = await stripeInstance.checkout.sessions.create({
       payment_method_types: ['card'],
-      allow_promotion_codes: !chargeRemainingOnly,
+      // Kit pricing is fixed server-side (7% + free shipping); block Stripe promo stacking.
+      allow_promotion_codes:
+        !chargeRemainingOnly && !order.includesCertificationKit,
       line_items,
       mode: 'payment',
       success_url: `${baseUrl}${dashboardPath}?success=true&order_id=${order._id}`,
@@ -5524,5 +5600,168 @@ export class OrdersService implements OnModuleInit {
       duplicateInvoice: duplicate.toObject(),
       order: await this.returnManagedOrder(order, actor),
     };
+  }
+
+  /**
+   * Expand Certification Kit cart line into real component order items,
+   * enforce one-time / qty=1 rules, and return the kit discount amount.
+   */
+  private async resolveCertificationKitOrderItems(
+    user: UserDocument,
+    items: Array<{
+      product: string;
+      name: string;
+      size: string;
+      quantity: number;
+      orderType?: 'unit' | 'case';
+      price: number;
+      image?: string;
+    }>,
+  ): Promise<{
+    items: typeof items;
+    includesCertificationKit: boolean;
+    kitDiscount: number;
+  }> {
+    const kitIndexes = items
+      .map((item, index) => (isCertificationKitCartItem(item) ? index : -1))
+      .filter((index) => index >= 0);
+
+    if (kitIndexes.length === 0) {
+      return { items, includesCertificationKit: false, kitDiscount: 0 };
+    }
+
+    if (!isCertificationKitEligibleUser(user)) {
+      throw new BadRequestException(
+        'The Certification Kit Bundle is only available to unpaid self-registered shops.',
+      );
+    }
+
+    if (kitIndexes.length > 1) {
+      throw new BadRequestException(
+        'Only one Certification Kit Bundle can be purchased.',
+      );
+    }
+
+    const kitItem = items[kitIndexes[0]];
+    if (Number(kitItem.quantity) !== 1) {
+      throw new BadRequestException(
+        'Certification Kit Bundle quantity must be 1.',
+      );
+    }
+
+    const alreadyOrdered = await this.productsService.hasActiveCertificationKitOrder(
+      user._id.toString(),
+    );
+    if (alreadyOrdered) {
+      throw new BadRequestException(
+        'You have already purchased or reserved the Certification Kit Bundle.',
+      );
+    }
+
+    const catalog = await this.productsService.findAll(
+      'published',
+      'shop',
+      user as any,
+    );
+    // findAll may already include the virtual kit — components resolve from real products.
+    const components = resolveCertificationKitComponents(catalog);
+    if (!components) {
+      throw new BadRequestException(
+        'Certification Kit components are not available in your catalog.',
+      );
+    }
+
+    const componentsSubtotal = components.reduce(
+      (sum, c) => sum + c.unitPrice * c.quantity,
+      0,
+    );
+    const { discount: kitDiscount } =
+      applyCertificationKitDiscount(componentsSubtotal);
+
+    const expanded = components.map((c) => ({
+      product: c.productId,
+      name: c.name,
+      size: c.size,
+      quantity: c.quantity,
+      orderType: 'unit' as const,
+      price: c.unitPrice,
+      image: c.image || '',
+    }));
+
+    const withoutKit = items.filter((_, index) => index !== kitIndexes[0]);
+    return {
+      items: [...withoutKit, ...expanded],
+      includesCertificationKit: true,
+      kitDiscount,
+    };
+  }
+
+  /** Waive activation: mark shop paid after a successful kit purchase. */
+  private async applyCertificationKitPurchaseBenefits(
+    order: OrderDocument,
+  ): Promise<void> {
+    const userId = String((order as any).user?._id || (order as any).user || '');
+    if (!userId) return;
+
+    try {
+      const existing = await this.usersService.findOne(userId);
+      if (existing?.isPartnerPaid) {
+        return;
+      }
+      await this.usersService.update(
+        userId,
+        {
+          isPartnerPaid: true,
+          status: UserStatus.ACTIVE,
+        } as any,
+        { role: UserRole.ADMIN } as any,
+      );
+      this.logger.log(
+        `Certification Kit purchase unlocked shop ${userId} (order ${order.orderNumber})`,
+      );
+    } catch (err) {
+      this.logger.error(
+        `Failed to unlock shop after Certification Kit purchase for order ${order.orderNumber}`,
+        err,
+      );
+    }
+  }
+
+  /**
+   * After save: if a concurrent request also created an active kit order,
+   * cancel this one and reject so only one reservation remains.
+   */
+  private async assertSingleActiveCertificationKitOrder(
+    userId: string,
+    orderId: string,
+  ): Promise<void> {
+    const siblings = await this.orderModel
+      .find({
+        user: userId,
+        includesCertificationKit: true,
+        _id: { $ne: orderId },
+        status: {
+          $in: [
+            OrderStatus.PENDING,
+            OrderStatus.PENDING_PAYMENT,
+            OrderStatus.PAID,
+            OrderStatus.SHIPPED,
+            OrderStatus.DELIVERED,
+          ],
+        },
+      })
+      .select('_id')
+      .lean()
+      .exec();
+
+    if (!siblings.length) return;
+
+    await this.orderModel.findByIdAndUpdate(orderId, {
+      status: OrderStatus.CANCELLED,
+      cancellationReason: 'Duplicate Certification Kit Bundle order',
+    });
+    throw new BadRequestException(
+      'You have already purchased or reserved the Certification Kit Bundle.',
+    );
   }
 }

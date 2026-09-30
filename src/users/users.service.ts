@@ -50,6 +50,7 @@ import {
 } from '../common/global-hub';
 import {
   hubCountriesOverlapError,
+  hubOwnsCountry,
   normalizeCountryName,
   normalizeHubCountries,
 } from '../common/hub-countries';
@@ -3086,6 +3087,24 @@ export class UsersService implements OnModuleInit {
           : null;
     }
 
+    // Shop Introduction Partner: Admin or managing Hub only (extend Admin logic).
+    // Other network roles may still update shops (certify/block) but cannot reassign SI.
+    if (
+      targetUserForHierarchy.role === UserRole.CERTIFIED_SHOP &&
+      updatePayload.referredByPartnerCode !== undefined &&
+      currentUser.role !== UserRole.ADMIN
+    ) {
+      const canManageSi =
+        currentUser.role === UserRole.PARTNER &&
+        (await this.canActorManageShopEarnings(
+          currentUser,
+          targetUserForHierarchy,
+        ));
+      if (!canManageSi) {
+        delete updatePayload.referredByPartnerCode;
+      }
+    }
+
     if (updatePayload.customCommissionRate !== undefined) {
       if (currentUser.role !== UserRole.ADMIN) {
         delete updatePayload.customCommissionRate;
@@ -3102,7 +3121,7 @@ export class UsersService implements OnModuleInit {
       }
     }
 
-    // Shop-only commission rate overrides (Admin).
+    // Shop-only commission rate overrides (Admin + Hub for managed shops).
     if (targetUserForHierarchy.role !== UserRole.CERTIFIED_SHOP) {
       delete updatePayload.shopIntroductionFirstOrderRatePercent;
       delete updatePayload.partnerDevelopmentRatePercent;
@@ -3120,6 +3139,23 @@ export class UsersService implements OnModuleInit {
         updatePayload,
         'operationalSupportRatePercent',
       );
+    } else if (
+      currentUser.role === UserRole.PARTNER &&
+      (await this.canActorManageShopEarnings(
+        currentUser,
+        targetUserForHierarchy,
+      ))
+    ) {
+      this.normalizeShopCommissionRateField(
+        updatePayload,
+        'shopIntroductionFirstOrderRatePercent',
+      );
+      this.normalizeShopCommissionRateField(
+        updatePayload,
+        'operationalSupportRatePercent',
+      );
+      // Partner Development rate remains Admin-only.
+      delete updatePayload.partnerDevelopmentRatePercent;
     } else {
       delete updatePayload.shopIntroductionFirstOrderRatePercent;
       delete updatePayload.partnerDevelopmentRatePercent;
@@ -3304,11 +3340,24 @@ export class UsersService implements OnModuleInit {
       }
     }
 
-    // Shop Network: Admin may assign / clear Operational Support (REP only).
+    // Shop Network: Admin or managing Hub may assign / clear Operational Support (REP only).
     if (
       targetUserForHierarchy.role === UserRole.CERTIFIED_SHOP &&
       operationalSupportCodeRaw !== undefined
     ) {
+      const canAssignOs =
+        currentUser.role === UserRole.ADMIN ||
+        (currentUser.role === UserRole.PARTNER &&
+          (await this.canActorManageShopEarnings(
+            currentUser,
+            targetUserForHierarchy,
+          )));
+      if (!canAssignOs) {
+        throw new ForbiddenException(
+          'You do not have permission to assign Operational Support for this shop.',
+        );
+      }
+
       const osCode = normalizePartnerCode(operationalSupportCodeRaw || '');
       if (!osCode) {
         updatePayload.operationalSupportRepresentativeCode = null;
@@ -4222,6 +4271,93 @@ export class UsersService implements OnModuleInit {
     }
 
     return empty;
+  }
+
+  /**
+   * Admin always may manage shop earning fields (Shop Intro / OSP / rates).
+   * Hub (PARTNER) may manage shops in their territory — same scope as
+   * findNetworkUsersForViewer Hub branch (hubPartnerCode or Hub.countries).
+   * Representative assignment itself is not limited to Hub-subtree reps.
+   */
+  async canActorManageShopEarnings(
+    actor: UserDocument,
+    shop: Pick<
+      UserDocument,
+      'role' | 'hubPartnerCode' | 'country' | '_id'
+    >,
+  ): Promise<boolean> {
+    if (actor.role === UserRole.ADMIN) return true;
+    if (shop.role !== UserRole.CERTIFIED_SHOP) return false;
+    if (actor.role !== UserRole.PARTNER) return false;
+    if (isGlobalHubPartnerCode(actor.partnerCode)) return true;
+
+    const actorCode = normalizePartnerCode(actor.partnerCode);
+    if (!actorCode) return false;
+
+    const shopHubCode = normalizePartnerCode(shop.hubPartnerCode);
+    if (shopHubCode && shopHubCode === actorCode) return true;
+
+    const freshHub = await this.userModel
+      .findById(actor._id)
+      .select('countries country partnerCode')
+      .lean();
+    const hubCountries = normalizeHubCountries(
+      freshHub?.countries?.length
+        ? freshHub.countries
+        : freshHub?.country
+          ? [freshHub.country]
+          : actor.country
+            ? [actor.country]
+            : [],
+    );
+    return hubOwnsCountry(hubCountries, shop.country);
+  }
+
+  /**
+   * Full Representative / Promoter lists for Shop Intro + OSP assignment.
+   * Hub may assign any of these to managed shops (not limited to Hub subtree).
+   */
+  async findShopAssignmentOptions(): Promise<{
+    introductionPartners: Array<{
+      _id: unknown;
+      firstName?: string;
+      lastName?: string;
+      partnerCode?: string;
+      role?: string;
+      status?: string;
+    }>;
+    operationalSupportRepresentatives: Array<{
+      _id: unknown;
+      firstName?: string;
+      lastName?: string;
+      partnerCode?: string;
+      role?: string;
+      status?: string;
+    }>;
+  }> {
+    const candidates = await this.userModel
+      .find({
+        role: {
+          $in: [UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER],
+        },
+        partnerCode: { $exists: true, $nin: [null, ''] },
+        deletedAt: null,
+      })
+      .select('firstName lastName partnerCode role status')
+      .sort({ firstName: 1, lastName: 1 })
+      .lean()
+      .exec();
+
+    const introductionPartners = candidates.filter(
+      (u) =>
+        u.role === UserRole.MASTER_PARTNER ||
+        u.role === UserRole.REGIONAL_PARTNER,
+    );
+    const operationalSupportRepresentatives = candidates.filter(
+      (u) => u.role === UserRole.MASTER_PARTNER,
+    );
+
+    return { introductionPartners, operationalSupportRepresentatives };
   }
 
   async isUserInViewerNetwork(

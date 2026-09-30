@@ -7,6 +7,7 @@ import {
   ProductGroup,
   ProductGroupSchema,
 } from '../product-groups/entities/product-group.entity';
+import { Order, OrderSchema } from '../orders/entities/order.entity';
 import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 import { InventoryModule } from '../inventory/inventory.module';
 import { UsersModule } from '../users/users.module';
@@ -16,6 +17,7 @@ import { UsersModule } from '../users/users.module';
     MongooseModule.forFeature([
       { name: Product.name, schema: ProductSchema },
       { name: ProductGroup.name, schema: ProductGroupSchema },
+      { name: Order.name, schema: OrderSchema },
     ]),
     CloudinaryModule,
     forwardRef(() => InventoryModule),

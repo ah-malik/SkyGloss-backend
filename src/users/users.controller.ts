@@ -177,6 +177,17 @@ export class UsersController {
     };
   }
 
+  /**
+   * All Representatives (and Promoters for Shop Intro) available for
+   * Admin / Hub Shop Intro + Operational Support assignment.
+   * Not scoped to the viewer's Hub subtree — any rep may be assigned.
+   */
+  @Get('shop-assignment-options')
+  @Roles(UserRole.ADMIN, UserRole.PARTNER)
+  getShopAssignmentOptions() {
+    return this.usersService.findShopAssignmentOptions();
+  }
+
   @Get('admin/network/:ownerId/links')
   @Roles(UserRole.ADMIN)
   getAdminNetworkLinks(@Param('ownerId') ownerId: string) {
