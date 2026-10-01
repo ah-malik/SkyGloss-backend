@@ -285,6 +285,7 @@ export function resolveCommissionOrderAmounts(order: {
   totalAmount?: number;
   originalAmount?: number;
   shippingFee?: number;
+  vatAmount?: number;
   originalCurrency?: string;
   currency?: string;
   exchangeRateAtOrderTime?: number;
@@ -297,8 +298,9 @@ export function resolveCommissionOrderAmounts(order: {
   ).toUpperCase();
   const grossAmount = roundMoney(order.originalAmount ?? order.totalAmount ?? 0);
   const shippingFee = roundMoney(Math.max(0, Number(order.shippingFee) || 0));
-  // Commission is on product/subtotal only — never on shipping.
-  const remainingAmount = roundMoney(Math.max(0, grossAmount - shippingFee));
+  const vatAmount = roundMoney(Math.max(0, Number(order.vatAmount) || 0));
+  // Commission is on product/subtotal only — never on shipping or VAT.
+  const remainingAmount = roundMoney(Math.max(0, grossAmount - shippingFee - vatAmount));
   // Then deduct 3.5% from remaining → commissionable base.
   const orderAmount = roundMoney(
     remainingAmount * (1 - COMMISSION_PLATFORM_DEDUCTION_RATE),

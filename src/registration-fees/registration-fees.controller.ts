@@ -5,6 +5,8 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { UserRole } from '../users/entities/user.entity';
+import { getEuropeVatRatePercent } from '../common/europe-vat';
+import { roundMoney } from '../common/order-monetary';
 
 @Controller('registration-fees')
 export class RegistrationFeesController {
@@ -13,8 +15,29 @@ export class RegistrationFeesController {
   @Get('public/by-country/:country')
   async getFeeByCountry(@Param('country') country: string) {
     const fee = await this.registrationFeesService.findByCountry(country);
-    if (!fee) return { feeAmount: 250, currency: 'USD' }; // Fallback
-    return fee;
+    const vatRate = getEuropeVatRatePercent(country);
+    if (!fee) {
+      const feeAmount = 250;
+      const taxAmount =
+        vatRate != null && vatRate > 0
+          ? roundMoney((feeAmount * vatRate) / 100)
+          : 0;
+      return { feeAmount, taxAmount, currency: 'USD', vatRate: vatRate ?? 0 };
+    }
+    const feeAmount = fee.feeAmount;
+    const taxAmount =
+      vatRate != null
+        ? roundMoney((feeAmount * vatRate) / 100)
+        : fee.taxAmount || 0;
+    const plain =
+      typeof (fee as any).toObject === 'function'
+        ? (fee as any).toObject()
+        : { ...fee };
+    return {
+      ...plain,
+      taxAmount,
+      vatRate: vatRate ?? 0,
+    };
   }
 
   @Post()

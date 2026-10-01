@@ -664,10 +664,8 @@ export class PdfService {
       doc.moveDown(0.5);
 
       const userCountry = (snapshot.user as any)?.country;
-      const { subtotal, shippingFee, discount, total } = getOrderTotalsBreakdown(
-        snapshot as any,
-        userCountry,
-      );
+      const { subtotal, shippingFee, discount, vatAmount, vatRate, total } =
+        getOrderTotalsBreakdown(snapshot as any, userCountry);
 
       const drawTotalsLine = (
         label: string,
@@ -707,6 +705,15 @@ export class PdfService {
           shippingFee > 0.01
             ? this.formatMoney(shippingFee, currencySymbol)
             : 'FREE',
+          fontRegular,
+          12,
+        );
+      }
+
+      if (vatAmount > 0.01) {
+        drawTotalsLine(
+          vatRate > 0 ? `VAT (${vatRate}%)` : 'VAT',
+          this.formatMoney(vatAmount, currencySymbol),
           fontRegular,
           12,
         );

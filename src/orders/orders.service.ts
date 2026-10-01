@@ -45,6 +45,11 @@ import {
   shouldHideShopRegistrationFromViewer,
 } from '../common/order-totals';
 import {
+  calculateEuropeVatAmount,
+  getEuropeVatRatePercent,
+  getOrderVatTaxableBase,
+} from '../common/europe-vat';
+import {
   isOrderModifiable,
   getOrderAmountPaid,
   getOrderRemainingAmount,
@@ -470,7 +475,15 @@ export class OrdersService implements OnModuleInit {
     if (feeGroup) {
       currency = feeGroup.currency.toLowerCase();
       unit_amount = Math.round(feeGroup.feeAmount * 100);
-      tax_amount = Math.round((feeGroup.taxAmount || 0) * 100);
+      const vatRate = getEuropeVatRatePercent(country);
+      if (vatRate != null) {
+        // Europe VAT table wins for registration tax (rate × fee, no shipping).
+        tax_amount = Math.round(
+          roundMoney((feeGroup.feeAmount * vatRate) / 100) * 100,
+        );
+      } else {
+        tax_amount = Math.round((feeGroup.taxAmount || 0) * 100);
+      }
       console.log(
         `[Stripe Registration] Fee group="${feeGroup.name}" currency=${currency} amount=${unit_amount} tax=${tax_amount} country="${country}" default=${!!feeGroup.isDefault}`,
       );
@@ -478,6 +491,10 @@ export class OrdersService implements OnModuleInit {
       console.log(
         `[Stripe Registration] No fee group matched country="${country}"; using hardcoded USD $250 fallback`,
       );
+      const vatRate = getEuropeVatRatePercent(country);
+      if (vatRate != null && vatRate > 0) {
+        tax_amount = Math.round(roundMoney((250 * vatRate) / 100) * 100);
+      }
     }
 
     const totalBeforeDiscount = unit_amount + tax_amount;
@@ -776,6 +793,7 @@ export class OrdersService implements OnModuleInit {
     const rateToUsd = await this.exchangeRatesService.getRateToBase(orderCurrency);
     let shippingFee = calculateShippingFee(shippingCountry, itemsSubtotal, {
       rateToUsd,
+      currency: orderCurrency,
     });
     if (includesCertificationKit) {
       shippingFee = 0;
@@ -795,7 +813,11 @@ export class OrdersService implements OnModuleInit {
       discount = Math.max(discount, kitResolved.kitDiscount);
     }
 
-    const orderTotal = Math.max(0, itemsSubtotal + shippingFee - discount);
+    const { rate: vatRate, amount: vatAmount } = calculateEuropeVatAmount(
+      getOrderVatTaxableBase(itemsSubtotal, discount),
+      shippingCountry,
+    );
+    const orderTotal = Math.max(0, itemsSubtotal - discount + vatAmount + shippingFee);
 
     await this.productInventoryService.assertStockAvailableForOrder({
       items: resolvedItems,
@@ -821,6 +843,8 @@ export class OrdersService implements OnModuleInit {
           user: userId,
           items: resolvedItems,
           shippingFee,
+          vatAmount,
+          vatRate,
           shippingAddress,
           status: requiresOnlinePayment
             ? OrderStatus.PENDING_PAYMENT
@@ -1367,7 +1391,17 @@ export class OrdersService implements OnModuleInit {
       if (feeGroup) {
         currency = (feeGroup.currency || 'USD').toUpperCase();
         feeAmount = feeGroup.feeAmount;
-        taxAmount = feeGroup.taxAmount || 0;
+        const vatRate = getEuropeVatRatePercent(user.country);
+        if (vatRate != null) {
+          taxAmount = roundMoney((feeAmount * vatRate) / 100);
+        } else {
+          taxAmount = feeGroup.taxAmount || 0;
+        }
+      } else {
+        const vatRate = getEuropeVatRatePercent(user.country);
+        if (vatRate != null && vatRate > 0) {
+          taxAmount = roundMoney((feeAmount * vatRate) / 100);
+        }
       }
     } catch (err) {
       console.error('[Registration Order] Failed to fetch fee group:', err);
@@ -4163,9 +4197,15 @@ export class OrdersService implements OnModuleInit {
 
     const itemsSubtotal = getItemsSubtotal(order.items);
     const discount = order.discount ?? 0;
-    const newTotal = Math.max(0, itemsSubtotal + shippingFee - discount);
+    const { rate: vatRate, amount: vatAmount } = calculateEuropeVatAmount(
+      getOrderVatTaxableBase(itemsSubtotal, discount),
+      order.shippingAddress?.country,
+    );
+    const newTotal = Math.max(0, itemsSubtotal - discount + vatAmount + shippingFee);
     Object.assign(order, this.buildAmountUpdateWithLockedRate(order, newTotal));
     order.shippingFee = shippingFee;
+    order.vatAmount = vatAmount;
+    order.vatRate = vatRate;
     order.shippingSetAt = new Date();
 
     const updatedOrder = await order.save();
@@ -4462,8 +4502,14 @@ export class OrdersService implements OnModuleInit {
     const itemsSubtotal = getItemsSubtotal(order.items);
     const shippingFee = Number(order.shippingFee) || 0;
     const discount = Number(order.discount) || 0;
-    const newTotal = Math.max(0, itemsSubtotal + shippingFee - discount);
+    const { rate: vatRate, amount: vatAmount } = calculateEuropeVatAmount(
+      getOrderVatTaxableBase(itemsSubtotal, discount),
+      order.shippingAddress?.country || shopUser?.country,
+    );
+    const newTotal = Math.max(0, itemsSubtotal - discount + vatAmount + shippingFee);
     Object.assign(order, this.buildAmountUpdateWithLockedRate(order, newTotal));
+    order.vatAmount = vatAmount;
+    order.vatRate = vatRate;
 
     const remaining = getOrderRemainingAmount(order);
     if (remaining > 0.01 && wasPaid) {
@@ -4580,6 +4626,7 @@ export class OrdersService implements OnModuleInit {
 
       let shippingFee = calculateShippingFee(shippingCountry, itemsSubtotal, {
         rateToUsd: await this.exchangeRatesService.getRateToBase(orderCurrency),
+        currency: orderCurrency,
       });
       if (includesCertificationKit) {
         shippingFee = 0;
@@ -4599,7 +4646,11 @@ export class OrdersService implements OnModuleInit {
         discount = Math.max(discount, kitResolved.kitDiscount);
       }
 
-      const finalAmount = Math.max(0, itemsSubtotal + shippingFee - discount);
+      const { rate: vatRate, amount: vatAmount } = calculateEuropeVatAmount(
+        getOrderVatTaxableBase(itemsSubtotal, discount),
+        shippingCountry,
+      );
+      const finalAmount = Math.max(0, itemsSubtotal - discount + vatAmount + shippingFee);
 
       let savedOrder;
       let retries = 3;
@@ -4617,6 +4668,8 @@ export class OrdersService implements OnModuleInit {
             user: userId,
             items: resolvedItems,
             shippingFee,
+            vatAmount,
+            vatRate,
             shippingAddress,
             status: OrderStatus.PENDING,
             orderNumber,
@@ -4792,8 +4845,13 @@ export class OrdersService implements OnModuleInit {
       rateToUsd: await this.exchangeRatesService.getRateToBase(
         orderCurrency || 'usd',
       ),
+      currency: orderCurrency || 'usd',
     });
-    const finalAmount = Math.max(0, itemsSubtotal + shippingFee);
+    const { rate: vatRate, amount: vatAmount } = calculateEuropeVatAmount(
+      getOrderVatTaxableBase(itemsSubtotal, 0),
+      shippingCountry,
+    );
+    const finalAmount = Math.max(0, itemsSubtotal + vatAmount + shippingFee);
 
     const initialStatus = dto.initialStatus || OrderStatus.PAID;
 
@@ -4813,6 +4871,8 @@ export class OrdersService implements OnModuleInit {
           user: shop._id,
           items: orderItems,
           shippingFee,
+          vatAmount,
+          vatRate,
           shippingAddress,
           status: initialStatus,
           orderNumber,
@@ -5278,6 +5338,22 @@ export class OrdersService implements OnModuleInit {
           quantity: 1,
         });
       }
+
+      const vatAmount = Number(order.vatAmount) || 0;
+      const vatRate = Number(order.vatRate) || 0;
+      if (vatAmount > 0.001) {
+        line_items.push({
+          price_data: {
+            currency: orderCurrency,
+            product_data: {
+              name: vatRate > 0 ? `VAT (${vatRate}%)` : 'VAT',
+              description: 'Value Added Tax on order (excludes shipping)',
+            },
+            unit_amount: Math.round(vatAmount * 100),
+          },
+          quantity: 1,
+        });
+      }
     }
 
     const baseUrl = this.getFrontendBaseUrl();
@@ -5510,8 +5586,12 @@ export class OrdersService implements OnModuleInit {
     }
 
     const subtotal = getItemsSubtotal(items);
+    const { amount: vatAmount, rate: vatRate } = calculateEuropeVatAmount(
+      getOrderVatTaxableBase(subtotal, discount),
+      order.shippingAddress?.country,
+    );
     const totalAmount = roundMoney(
-      Math.max(0, subtotal + shippingFee - discount),
+      Math.max(0, subtotal - discount + vatAmount + shippingFee),
     );
 
     const existingCount = await this.duplicateInvoiceModel.countDocuments({
@@ -5527,6 +5607,8 @@ export class OrdersService implements OnModuleInit {
       items,
       totalAmount,
       shippingFee,
+      vatAmount,
+      vatRate,
       discount,
       currency: order.currency || 'USD',
       shippingAddress: order.shippingAddress,

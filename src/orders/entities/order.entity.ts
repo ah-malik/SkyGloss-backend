@@ -93,6 +93,14 @@ export class Order {
   @Prop({ default: 0 })
   shippingFee?: number;
 
+  /** VAT amount on items after discount (excludes shipping). */
+  @Prop({ default: 0 })
+  vatAmount?: number;
+
+  /** VAT rate percent applied at order time (e.g. 19 for Germany). */
+  @Prop({ default: 0 })
+  vatRate?: number;
+
   /** Set when Hub/Admin explicitly saves shipping on an order request. */
   @Prop()
   shippingSetAt?: Date;

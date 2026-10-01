@@ -1,5 +1,10 @@
 import { calculateShippingFee } from './shipping-config';
 import { UserRole } from '../users/entities/user.entity';
+import {
+  calculateEuropeVatAmount,
+  getOrderVatTaxableBase,
+} from './europe-vat';
+import { roundMoney } from './order-monetary';
 
 export function isRegistrationOrder(order: {
   items?: { product?: string }[];
@@ -99,6 +104,7 @@ export function resolveOrderShippingFee(
     totalAmount: number;
     discount?: number;
     shippingFee?: number;
+    vatAmount?: number;
     shippingAddress?: { country?: string };
     orderNumber?: string;
   },
@@ -113,9 +119,10 @@ export function resolveOrderShippingFee(
   }
 
   const subtotal = getItemsSubtotal(order.items);
+  const vatAmount = Number(order.vatAmount) || 0;
   const derived = Math.max(
     0,
-    (order.totalAmount || 0) + (order.discount || 0) - subtotal,
+    (order.totalAmount || 0) + (order.discount || 0) - subtotal - vatAmount,
   );
   if (derived > 0) {
     return derived;
@@ -126,12 +133,43 @@ export function resolveOrderShippingFee(
   return calculateShippingFee(country, subtotal);
 }
 
+export function resolveOrderVat(
+  order: {
+    items: { price: number; quantity: number; product?: string }[];
+    discount?: number;
+    vatAmount?: number;
+    vatRate?: number;
+    shippingAddress?: { country?: string };
+    orderNumber?: string;
+  },
+  countryFallback?: string,
+): { vatAmount: number; vatRate: number } {
+  if (order.vatAmount != null && order.vatAmount >= 0) {
+    return {
+      vatAmount: roundMoney(order.vatAmount),
+      vatRate: Number(order.vatRate) || 0,
+    };
+  }
+  if (isRegistrationOrder(order)) {
+    return { vatAmount: 0, vatRate: 0 };
+  }
+  const country = order.shippingAddress?.country || countryFallback || '';
+  const taxable = getOrderVatTaxableBase(
+    getItemsSubtotal(order.items),
+    order.discount || 0,
+  );
+  const { rate, amount } = calculateEuropeVatAmount(taxable, country);
+  return { vatAmount: amount, vatRate: rate };
+}
+
 export function getOrderTotalsBreakdown(
   order: {
     items: { price: number; quantity: number; product?: string }[];
     totalAmount: number;
     discount?: number;
     shippingFee?: number;
+    vatAmount?: number;
+    vatRate?: number;
     shippingAddress?: { country?: string };
     orderNumber?: string;
     couponCode?: string;
@@ -141,10 +179,11 @@ export function getOrderTotalsBreakdown(
   const subtotal = getItemsSubtotal(order.items);
   const discount = order.discount || 0;
   const shippingFee = resolveOrderShippingFee(order, countryFallback);
+  const { vatAmount, vatRate } = resolveOrderVat(order, countryFallback);
   const total =
     order.totalAmount != null && order.totalAmount > 0
       ? order.totalAmount
-      : subtotal + shippingFee - discount;
+      : roundMoney(subtotal - discount + vatAmount + shippingFee);
 
-  return { subtotal, shippingFee, discount, total };
+  return { subtotal, shippingFee, discount, vatAmount, vatRate, total };
 }

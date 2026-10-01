@@ -48,6 +48,8 @@ import {
 import { UserActivityService } from '../user-activity/user-activity.service';
 import { UserActivityAction } from '../user-activity/entities/user-activity-log.entity';
 import { parseDurationToMs } from './auth-cookies';
+import { getEuropeVatRatePercent } from '../common/europe-vat';
+import { roundMoney } from '../common/order-monetary';
 
 export interface IssuedAuthTokens {
   access_token: string;
@@ -605,7 +607,17 @@ export class AuthService {
     try {
       const feeGroup = await this.registrationFeesService.findByCountry(country || '');
       if (feeGroup) {
-        subtotal = feeGroup.feeAmount + (feeGroup.taxAmount || 0);
+        const vatRate = getEuropeVatRatePercent(country);
+        const tax =
+          vatRate != null
+            ? roundMoney((feeGroup.feeAmount * vatRate) / 100)
+            : feeGroup.taxAmount || 0;
+        subtotal = feeGroup.feeAmount + tax;
+      } else {
+        const vatRate = getEuropeVatRatePercent(country);
+        if (vatRate != null && vatRate > 0) {
+          subtotal = roundMoney(250 + (250 * vatRate) / 100);
+        }
       }
     } catch (err) {
       console.error('[AuthService] Failed to resolve registration fee for coupon:', err);

@@ -30,6 +30,12 @@ export class DuplicateInvoice {
   shippingFee?: number;
 
   @Prop({ default: 0 })
+  vatAmount?: number;
+
+  @Prop({ default: 0 })
+  vatRate?: number;
+
+  @Prop({ default: 0 })
   discount?: number;
 
   @Prop({ default: 'USD' })
