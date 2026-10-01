@@ -39,6 +39,10 @@ import { GLOBAL_HUB_PARTNER_CODE, isGlobalHubAccount, isGlobalHubPartnerCode } f
 import { UserActivityService } from '../user-activity/user-activity.service';
 import { UserActivityAction } from '../user-activity/entities/user-activity-log.entity';
 import { getRequestMeta } from '../user-activity/request-meta';
+import {
+  COURSE_STEPS,
+  getRequiredCourseKeysForRole,
+} from '../common/course-catalog';
 
 const WELCOME_SECTION_STEP_IDS = [
   'intro_foundation',
@@ -79,6 +83,38 @@ function courseProgressIsComplete(
     list.includes(id),
   ).length;
   return sectionHits + questionHits >= WELCOME_SECTION_STEP_IDS.length + 8;
+}
+
+function countCompletedRequiredCourses(user: {
+  role?: string | null;
+  courseProgress?: Record<string, string[]> | Map<string, string[]> | null;
+  completedCourses?: string[] | null;
+}) {
+  const requiredKeys = getRequiredCourseKeysForRole(user.role);
+  const progressMap = user.courseProgress
+    ? JSON.parse(JSON.stringify(user.courseProgress || {}))
+    : {};
+
+  let completedCount = 0;
+  for (const courseKey of requiredKeys) {
+    const totalSteps = COURSE_STEPS[courseKey] || 1;
+    const progress =
+      progressMap[courseKey] ||
+      progressMap[courseKey.replace('_', ' ')] ||
+      [];
+    if (courseProgressIsComplete(courseKey, progress, totalSteps)) {
+      completedCount++;
+    }
+  }
+
+  const legacyCount = user.completedCourses?.length || 0;
+  return {
+    completedCount: Math.min(
+      Math.max(completedCount, legacyCount),
+      requiredKeys.length,
+    ),
+    totalRequired: requiredKeys.length,
+  };
 }
 
 @Controller('users')
@@ -462,35 +498,13 @@ export class UsersController {
       throw new BadRequestException('Only self-registered distributors can upload a certification video.');
     }
 
-    const COURSE_STEPS = {
-      WELCOME_TO_SKYGLOSS: 24,
-      UNDERSTANDING_SKYGLOSS: 9,
-      SOCIAL_MEDIA_COMMUNICATION: 11,
-      SKYGLOSS_SHOP_SETUP: 4,
-      FUSION: 20,
-      RESIN_FILM: 7,
-      SHINE: 6,
-      MATTE: 6,
-      SEAL: 5,
-    };
+    const { completedCount, totalRequired } =
+      countCompletedRequiredCourses(user);
 
-    let completedCount = 0;
-    const legacyCount = user.completedCourses?.length || 0;
-
-    if (user.courseProgress) {
-      const progressMap = JSON.parse(JSON.stringify(user.courseProgress || {}));
-      Object.entries(COURSE_STEPS).forEach(([courseKey, totalSteps]) => {
-        const progress = progressMap[courseKey] || progressMap[courseKey.replace('_', ' ')] || [];
-        if (courseProgressIsComplete(courseKey, progress, totalSteps)) {
-          completedCount++;
-        }
-      });
-    }
-
-    completedCount = Math.max(completedCount, legacyCount);
-
-    if (completedCount < 9) {
-      throw new BadRequestException('You must complete all 9 courses before uploading a certification video.');
+    if (completedCount < totalRequired) {
+      throw new BadRequestException(
+        `You must complete all ${totalRequired} courses before uploading a certification video.`,
+      );
     }
 
     // Upload to Cloudinary
@@ -527,35 +541,13 @@ export class UsersController {
     }
 
     // Verify all courses are actually completed before finalizing
-    const COURSE_STEPS = {
-      WELCOME_TO_SKYGLOSS: 24,
-      UNDERSTANDING_SKYGLOSS: 9,
-      SOCIAL_MEDIA_COMMUNICATION: 11,
-      SKYGLOSS_SHOP_SETUP: 4,
-      FUSION: 20,
-      RESIN_FILM: 7,
-      SHINE: 6,
-      MATTE: 6,
-      SEAL: 5,
-    };
+    const { completedCount, totalRequired } =
+      countCompletedRequiredCourses(user);
 
-    let completedCount = 0;
-    const legacyCount = user.completedCourses?.length || 0;
-
-    if (user.courseProgress) {
-      const progressMap = JSON.parse(JSON.stringify(user.courseProgress || {}));
-      Object.entries(COURSE_STEPS).forEach(([courseKey, totalSteps]) => {
-        const progress = progressMap[courseKey] || progressMap[courseKey.replace('_', ' ')] || [];
-        if (courseProgressIsComplete(courseKey, progress, totalSteps)) {
-          completedCount++;
-        }
-      });
-    }
-
-    completedCount = Math.max(completedCount, legacyCount);
-
-    if (completedCount < 9) {
-      throw new BadRequestException('You must complete all 9 training courses before finalizing certification.');
+    if (completedCount < totalRequired) {
+      throw new BadRequestException(
+        `You must complete all ${totalRequired} training courses before finalizing certification.`,
+      );
     }
     const updatedUser = await this.usersService.update(user._id.toString(), {
       isTrainingComplete: true,
