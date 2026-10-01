@@ -77,6 +77,10 @@ export class ShippingAddress {
 
   @Prop()
   taxId: string;
+
+  /** Buyer declared they have no VAT ID — Europe order VAT should be charged. */
+  @Prop({ default: false })
+  noVatId?: boolean;
 }
 
 @Schema({ timestamps: true })

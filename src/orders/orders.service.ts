@@ -45,7 +45,7 @@ import {
   shouldHideShopRegistrationFromViewer,
 } from '../common/order-totals';
 import {
-  calculateEuropeVatAmount,
+  calculateEuropeOrderVatAmount,
   getEuropeVatRatePercent,
   getOrderVatTaxableBase,
 } from '../common/europe-vat';
@@ -813,9 +813,13 @@ export class OrdersService implements OnModuleInit {
       discount = Math.max(discount, kitResolved.kitDiscount);
     }
 
-    const { rate: vatRate, amount: vatAmount } = calculateEuropeVatAmount(
+    const { rate: vatRate, amount: vatAmount } = calculateEuropeOrderVatAmount(
       getOrderVatTaxableBase(itemsSubtotal, discount),
-      shippingCountry,
+      {
+        country: shippingCountry,
+        taxId: shippingAddress?.taxId,
+        noVatId: shippingAddress?.noVatId,
+      },
     );
     const orderTotal = Math.max(0, itemsSubtotal - discount + vatAmount + shippingFee);
 
@@ -4197,9 +4201,13 @@ export class OrdersService implements OnModuleInit {
 
     const itemsSubtotal = getItemsSubtotal(order.items);
     const discount = order.discount ?? 0;
-    const { rate: vatRate, amount: vatAmount } = calculateEuropeVatAmount(
+    const { rate: vatRate, amount: vatAmount } = calculateEuropeOrderVatAmount(
       getOrderVatTaxableBase(itemsSubtotal, discount),
-      order.shippingAddress?.country,
+      {
+        country: order.shippingAddress?.country,
+        taxId: order.shippingAddress?.taxId,
+        noVatId: (order.shippingAddress as any)?.noVatId,
+      },
     );
     const newTotal = Math.max(0, itemsSubtotal - discount + vatAmount + shippingFee);
     Object.assign(order, this.buildAmountUpdateWithLockedRate(order, newTotal));
@@ -4502,9 +4510,13 @@ export class OrdersService implements OnModuleInit {
     const itemsSubtotal = getItemsSubtotal(order.items);
     const shippingFee = Number(order.shippingFee) || 0;
     const discount = Number(order.discount) || 0;
-    const { rate: vatRate, amount: vatAmount } = calculateEuropeVatAmount(
+    const { rate: vatRate, amount: vatAmount } = calculateEuropeOrderVatAmount(
       getOrderVatTaxableBase(itemsSubtotal, discount),
-      order.shippingAddress?.country || shopUser?.country,
+      {
+        country: order.shippingAddress?.country || shopUser?.country,
+        taxId: order.shippingAddress?.taxId,
+        noVatId: (order.shippingAddress as any)?.noVatId,
+      },
     );
     const newTotal = Math.max(0, itemsSubtotal - discount + vatAmount + shippingFee);
     Object.assign(order, this.buildAmountUpdateWithLockedRate(order, newTotal));
@@ -4646,9 +4658,13 @@ export class OrdersService implements OnModuleInit {
         discount = Math.max(discount, kitResolved.kitDiscount);
       }
 
-      const { rate: vatRate, amount: vatAmount } = calculateEuropeVatAmount(
+      const { rate: vatRate, amount: vatAmount } = calculateEuropeOrderVatAmount(
         getOrderVatTaxableBase(itemsSubtotal, discount),
-        shippingCountry,
+        {
+          country: shippingCountry,
+          taxId: shippingAddress?.taxId,
+          noVatId: shippingAddress?.noVatId,
+        },
       );
       const finalAmount = Math.max(0, itemsSubtotal - discount + vatAmount + shippingFee);
 
@@ -4847,9 +4863,13 @@ export class OrdersService implements OnModuleInit {
       ),
       currency: orderCurrency || 'usd',
     });
-    const { rate: vatRate, amount: vatAmount } = calculateEuropeVatAmount(
+    const { rate: vatRate, amount: vatAmount } = calculateEuropeOrderVatAmount(
       getOrderVatTaxableBase(itemsSubtotal, 0),
-      shippingCountry,
+      {
+        country: shippingCountry,
+        taxId: shippingAddress?.taxId,
+        noVatId: (shippingAddress as any)?.noVatId,
+      },
     );
     const finalAmount = Math.max(0, itemsSubtotal + vatAmount + shippingFee);
 
@@ -5052,9 +5072,8 @@ export class OrdersService implements OnModuleInit {
   }
 
   /**
-   * European destinations (existing Europe country list) require a VAT number
-   * verified via VIES before the order can be created. Mutates shippingAddress.taxId
-   * to a normalized value when validation succeeds. Non-European orders are untouched.
+   * European destinations require a VAT number verified via VIES — unless the
+   * buyer declares they have no VAT ID (noVatId), in which case country VAT is charged.
    */
   private async assertAndNormalizeEuropeanVat(
     shippingAddress?: CreateOrderDto['shippingAddress'] | null,
@@ -5064,6 +5083,11 @@ export class OrdersService implements OnModuleInit {
       !requiresEuropeanVat(shippingAddress?.country, userCountry) ||
       !shippingAddress
     ) {
+      return;
+    }
+
+    if (shippingAddress.noVatId === true) {
+      shippingAddress.taxId = '';
       return;
     }
 
@@ -5586,9 +5610,13 @@ export class OrdersService implements OnModuleInit {
     }
 
     const subtotal = getItemsSubtotal(items);
-    const { amount: vatAmount, rate: vatRate } = calculateEuropeVatAmount(
+    const { amount: vatAmount, rate: vatRate } = calculateEuropeOrderVatAmount(
       getOrderVatTaxableBase(subtotal, discount),
-      order.shippingAddress?.country,
+      {
+        country: order.shippingAddress?.country,
+        taxId: order.shippingAddress?.taxId,
+        noVatId: (order.shippingAddress as any)?.noVatId,
+      },
     );
     const totalAmount = roundMoney(
       Math.max(0, subtotal - discount + vatAmount + shippingFee),

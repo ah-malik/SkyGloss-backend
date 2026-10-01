@@ -1,7 +1,7 @@
 import { calculateShippingFee } from './shipping-config';
 import { UserRole } from '../users/entities/user.entity';
 import {
-  calculateEuropeVatAmount,
+  calculateEuropeOrderVatAmount,
   getOrderVatTaxableBase,
 } from './europe-vat';
 import { roundMoney } from './order-monetary';
@@ -139,7 +139,11 @@ export function resolveOrderVat(
     discount?: number;
     vatAmount?: number;
     vatRate?: number;
-    shippingAddress?: { country?: string };
+    shippingAddress?: {
+      country?: string;
+      taxId?: string;
+      noVatId?: boolean;
+    };
     orderNumber?: string;
   },
   countryFallback?: string,
@@ -158,7 +162,11 @@ export function resolveOrderVat(
     getItemsSubtotal(order.items),
     order.discount || 0,
   );
-  const { rate, amount } = calculateEuropeVatAmount(taxable, country);
+  const { rate, amount } = calculateEuropeOrderVatAmount(taxable, {
+    country,
+    taxId: order.shippingAddress?.taxId,
+    noVatId: order.shippingAddress?.noVatId,
+  });
   return { vatAmount: amount, vatRate: rate };
 }
 

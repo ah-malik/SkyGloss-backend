@@ -1,5 +1,6 @@
 import {
   IsArray,
+  IsBoolean,
   IsEmail,
   IsNotEmpty,
   IsNumber,
@@ -90,6 +91,10 @@ class ShippingAddressDto {
   @IsString()
   @IsOptional()
   taxId?: string;
+
+  @IsBoolean()
+  @IsOptional()
+  noVatId?: boolean;
 }
 
 export class CreateOrderDto {

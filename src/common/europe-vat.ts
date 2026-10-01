@@ -96,3 +96,31 @@ export function getOrderVatTaxableBase(
 ): number {
   return roundMoney(Math.max(0, (Number(itemsSubtotal) || 0) - (Number(discount) || 0)));
 }
+
+/**
+ * Europe shop-order VAT is charged only when the buyer declares no VAT ID.
+ * Valid VAT ID → no order VAT. Registration fees keep using calculateEuropeVatAmount.
+ */
+export function shouldApplyEuropeOrderVat(params: {
+  country?: string | null;
+  taxId?: string | null;
+  noVatId?: boolean | null;
+}): boolean {
+  if (getEuropeVatRatePercent(params.country) == null) return false;
+  return params.noVatId === true;
+}
+
+export function calculateEuropeOrderVatAmount(
+  taxableBase: number,
+  params: {
+    country?: string | null;
+    taxId?: string | null;
+    noVatId?: boolean | null;
+  },
+): { rate: number; amount: number } {
+  if (!shouldApplyEuropeOrderVat(params)) {
+    const rate = getEuropeVatRatePercent(params.country);
+    return { rate: rate ?? 0, amount: 0 };
+  }
+  return calculateEuropeVatAmount(taxableBase, params.country);
+}
