@@ -3,7 +3,8 @@
 // Bulgaria: always charged fixed €25 (no free-shipping threshold)
 //
 // NA + USD / EU + EUR → literal 25 fee, free at 500 (unchanged).
-// Any other price-group currency → $25 / $500 USD converted via exchange rate.
+// Other countries → always free ($0), any order size.
+// NA/EU with non-native currency → $25 / $500 USD converted via exchange rate.
 
 export const EXCLUDED_COUNTRIES = [
   'russia', 'ukraine', 'turkey', 'north macedonia', 'belarus',
@@ -109,7 +110,8 @@ export function isNativeShippingCurrency(
 /**
  * Free-shipping threshold in the order's price-group currency.
  * NA+USD / EU+EUR → literal 500.
- * Any other currency → $500 USD equivalent when rate is available.
+ * NA/EU with non-native currency → $500 USD equivalent when rate is available.
+ * Other countries → null (always free; no threshold UI).
  */
 export function getFreeShippingThreshold(
   country: string,
@@ -119,23 +121,26 @@ export function getFreeShippingThreshold(
   if (isExcludedShippingCountry(country)) return null;
 
   const region = getShippingRegion(country);
+  if (region !== 'NA' && region !== 'EU') return null;
+
   const rate = options?.rateToUsd;
 
-  if (region === 'NA' || region === 'EU') {
-    if (isNativeShippingCurrency(region, options?.currency)) {
-      return SHIPPING_FEE_THRESHOLD;
-    }
-    if (!rate || rate <= 0) return null;
-    return usdToLocalAmount(FREE_SHIPPING_USD_THRESHOLD, rate);
+  if (isNativeShippingCurrency(region, options?.currency)) {
+    return SHIPPING_FEE_THRESHOLD;
   }
-
-  if (!rate || rate <= 0) return null;
+  if (!rate || rate <= 0) {
+    if ((options?.currency || '').trim().toUpperCase() === 'USD') {
+      return FREE_SHIPPING_USD_THRESHOLD;
+    }
+    return null;
+  }
   return usdToLocalAmount(FREE_SHIPPING_USD_THRESHOLD, rate);
 }
 
 /**
- * NA+USD / EU+EUR: existing $25/€25 + free at 500.
- * Any other price-group currency (incl. Europe shop on PKR): $25/$500 USD → local.
+ * NA+USD / EU+EUR: $25/€25, free at 500.
+ * NA/EU non-native currency: $25/$500 USD → local.
+ * Other countries: always free ($0).
  */
 export function calculateShippingFee(
   country: string,
@@ -170,9 +175,6 @@ export function calculateShippingFee(
     return usdToLocalAmount(SHIPPING_FEE_AMOUNT, rate);
   }
 
-  if (!rate || rate <= 0) return 0;
-
-  const thresholdLocal = usdToLocalAmount(FREE_SHIPPING_USD_THRESHOLD, rate);
-  if (subtotal >= thresholdLocal) return 0;
-  return usdToLocalAmount(SHIPPING_FEE_AMOUNT, rate);
+  // Other countries — always free shipping (no fee, no threshold).
+  return 0;
 }
