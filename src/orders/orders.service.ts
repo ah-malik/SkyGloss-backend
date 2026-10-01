@@ -773,7 +773,10 @@ export class OrdersService implements OnModuleInit {
     // For this implementation, we'll use the prices sent from frontend but ensure strict types.
     // Certification Kit prices are always server-resolved from catalog components.
     const itemsSubtotal = getItemsSubtotal(resolvedItems);
-    let shippingFee = calculateShippingFee(shippingCountry, itemsSubtotal);
+    const rateToUsd = await this.exchangeRatesService.getRateToBase(orderCurrency);
+    let shippingFee = calculateShippingFee(shippingCountry, itemsSubtotal, {
+      rateToUsd,
+    });
     if (includesCertificationKit) {
       shippingFee = 0;
     }
@@ -4575,7 +4578,9 @@ export class OrdersService implements OnModuleInit {
         );
       }
 
-      let shippingFee = calculateShippingFee(shippingCountry, itemsSubtotal);
+      let shippingFee = calculateShippingFee(shippingCountry, itemsSubtotal, {
+        rateToUsd: await this.exchangeRatesService.getRateToBase(orderCurrency),
+      });
       if (includesCertificationKit) {
         shippingFee = 0;
       }
@@ -4783,7 +4788,11 @@ export class OrdersService implements OnModuleInit {
     const orderCurrency = await this.getCurrencyForUser(shop);
     const itemsSubtotal = getItemsSubtotal(orderItems);
     const shippingCountry = shippingAddress.country || shop.country || '';
-    const shippingFee = calculateShippingFee(shippingCountry, itemsSubtotal);
+    const shippingFee = calculateShippingFee(shippingCountry, itemsSubtotal, {
+      rateToUsd: await this.exchangeRatesService.getRateToBase(
+        orderCurrency || 'usd',
+      ),
+    });
     const finalAmount = Math.max(0, itemsSubtotal + shippingFee);
 
     const initialStatus = dto.initialStatus || OrderStatus.PAID;

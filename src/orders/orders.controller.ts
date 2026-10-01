@@ -105,6 +105,13 @@ export class OrdersController {
     return this.ordersService.getMyOrders(userId);
   }
 
+  /** Read-only FX map for free-shipping threshold (1 unit → USD). */
+  @Get('exchange-rates')
+  @UseGuards(JwtAuthGuard)
+  getExchangeRatesMapForUser() {
+    return this.ordersService.getExchangeRatesMap();
+  }
+
   @Get('network-orders')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(

@@ -1,6 +1,7 @@
 // Shipping configuration for North America & Europe regions
 // Excluded countries: Russia, Ukraine, Turkey, North Macedonia, Belarus
 // Bulgaria: always charged fixed €25 (no free-shipping threshold)
+// Other countries: $25 USD fee / free at $500 USD, both converted to price-group currency
 
 export const EXCLUDED_COUNTRIES = [
   'russia', 'ukraine', 'turkey', 'north macedonia', 'belarus',
@@ -42,8 +43,30 @@ export const EUROPE_COUNTRIES = [
   'vatican city', 'holy see', 'holy see (vatican city state)',
 ];
 
-export const SHIPPING_FEE_THRESHOLD = 500; // $500 or €500
-export const SHIPPING_FEE_AMOUNT = 25;     // $25 or €25
+export const SHIPPING_FEE_THRESHOLD = 500; // $500 or €500 (NA / EU)
+export const SHIPPING_FEE_AMOUNT = 25; // $25 or €25 (NA / EU)
+/** USD baseline used for other-country free-shipping threshold. */
+export const FREE_SHIPPING_USD_THRESHOLD = 500;
+
+export type ShippingFeeOptions = {
+  /** 1 unit of order currency → USD (existing exchange-rate rateToBase). */
+  rateToUsd?: number;
+};
+
+function roundShippingMoney(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+/** Convert a USD amount into local price-group currency using rateToBase. */
+export function usdToLocalAmount(usdAmount: number, rateToUsd: number): number {
+  if (!rateToUsd || rateToUsd <= 0) return usdAmount;
+  return roundShippingMoney(usdAmount / rateToUsd);
+}
+
+export function isExcludedShippingCountry(country: string): boolean {
+  if (!country) return false;
+  return EXCLUDED_COUNTRIES.includes(country.toLowerCase().trim());
+}
 
 export function hasFixedShippingFee(country: string): boolean {
   if (!country) return false;
@@ -59,11 +82,51 @@ export function getShippingRegion(country: string): 'NA' | 'EU' | null {
   return null;
 }
 
-export function calculateShippingFee(country: string, subtotal: number): number {
+/**
+ * Free-shipping threshold in the order's price-group currency.
+ * NA/EU → literal 500. Other countries → $500 USD equivalent when rate is available.
+ */
+export function getFreeShippingThreshold(
+  country: string,
+  options?: ShippingFeeOptions,
+): number | null {
   const region = getShippingRegion(country);
-  if (!region) return 0;
-  // Bulgaria (and any fixed list): always €25 / $25 — no free shipping over threshold
-  if (hasFixedShippingFee(country)) return SHIPPING_FEE_AMOUNT;
-  if (subtotal >= SHIPPING_FEE_THRESHOLD) return 0;
-  return SHIPPING_FEE_AMOUNT;
+  if (region === 'NA' || region === 'EU') {
+    if (hasFixedShippingFee(country)) return null;
+    return SHIPPING_FEE_THRESHOLD;
+  }
+  if (isExcludedShippingCountry(country)) return null;
+  const rate = options?.rateToUsd;
+  if (!rate || rate <= 0) return null;
+  return usdToLocalAmount(FREE_SHIPPING_USD_THRESHOLD, rate);
+}
+
+/**
+ * NA/EU: existing $25/€25 + free at 500 (unchanged).
+ * Other countries: $25 USD fee in local currency; free when subtotal >= $500 USD equivalent.
+ */
+export function calculateShippingFee(
+  country: string,
+  subtotal: number,
+  options?: ShippingFeeOptions,
+): number {
+  const region = getShippingRegion(country);
+
+  // NA / EU — keep existing behavior exactly
+  if (region === 'NA' || region === 'EU') {
+    if (hasFixedShippingFee(country)) return SHIPPING_FEE_AMOUNT;
+    if (subtotal >= SHIPPING_FEE_THRESHOLD) return 0;
+    return SHIPPING_FEE_AMOUNT;
+  }
+
+  // Excluded / empty → no shipping fee
+  if (!country || isExcludedShippingCountry(country)) return 0;
+
+  // Other countries — $500 USD equivalent free shipping in price-group currency
+  const rate = options?.rateToUsd;
+  if (!rate || rate <= 0) return 0;
+
+  const thresholdLocal = usdToLocalAmount(FREE_SHIPPING_USD_THRESHOLD, rate);
+  if (subtotal >= thresholdLocal) return 0;
+  return usdToLocalAmount(SHIPPING_FEE_AMOUNT, rate);
 }
