@@ -22,25 +22,24 @@ export const NORTH_AMERICA_COUNTRIES = [
 ];
 
 export const EUROPE_COUNTRIES = [
-  'albania', 'andorra', 'armenia', 'austria', 'azerbaijan',
+  'albania', 'andorra', 'austria',
   'belgium', 'bosnia and herzegovina',
-  'bulgaria',
   'croatia', 'cyprus', 'czech republic', 'czechia',
   'denmark',
   'estonia',
   'finland', 'france',
-  'georgia', 'germany', 'greece',
+  'germany', 'greece',
   'hungary',
   'iceland', 'ireland', 'italy',
-  'kazakhstan', 'kosovo',
+  'kosovo',
   'latvia', 'liechtenstein', 'lithuania', 'luxembourg',
   'malta', 'moldova', 'monaco', 'montenegro',
-  'netherlands', 'norway',
+  'netherlands', 'holland', 'the netherlands', 'norway',
   'poland', 'portugal',
   'romania',
   'san marino', 'serbia', 'slovakia', 'slovenia', 'spain', 'sweden', 'switzerland',
   'united kingdom', 'uk', 'england', 'scotland', 'wales', 'northern ireland',
-  'vatican city',
+  'vatican city', 'holy see', 'holy see (vatican city state)',
 ];
 
 export const SHIPPING_FEE_THRESHOLD = 500; // $500 or €500
