@@ -29,6 +29,8 @@ export const FRONTEND_APIS: ApiEndpointDef[] = [
   def('frontend', 'Auth', 'POST', '/auth/login/access-code', 'Login with access code'),
   def('frontend', 'Auth', 'POST', '/auth/forgot-password', 'Forgot password'),
   def('frontend', 'Auth', 'POST', '/auth/reset-password', 'Reset password'),
+  def('frontend', 'Auth', 'GET', '/auth/setup-password/:token', 'Validate partner password setup token'),
+  def('frontend', 'Auth', 'POST', '/auth/setup-password', 'Complete partner password setup from invite'),
   def('frontend', 'Auth', 'POST', '/auth/register-shop', 'Register shop'),
   def('frontend', 'Auth', 'POST', '/auth/register-partner', 'Register partner'),
   def('frontend', 'Auth', 'POST', '/auth/register', 'Register'),

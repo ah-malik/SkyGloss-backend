@@ -36,6 +36,7 @@ import { Request } from 'express';
 import { ForbiddenException } from '@nestjs/common';
 import { MailService } from 'src/mail/mail.service';
 import { GLOBAL_HUB_PARTNER_CODE, isGlobalHubAccount, isGlobalHubPartnerCode } from '../common/global-hub';
+import { isPartnerNetworkRole } from '../common/role-labels';
 import { UserActivityService } from '../user-activity/user-activity.service';
 import { UserActivityAction } from '../user-activity/entities/user-activity-log.entity';
 import { getRequestMeta } from '../user-activity/request-meta';
@@ -43,6 +44,7 @@ import {
   COURSE_STEPS,
   getRequiredCourseKeysForRole,
 } from '../common/course-catalog';
+import * as crypto from 'crypto';
 
 const WELCOME_SECTION_STEP_IDS = [
   'intro_foundation',
@@ -158,6 +160,39 @@ export class UsersController {
         actorRole: admin?.role,
       },
     });
+
+    // Admin-created partner network accounts: bind Access Now token + send email.
+    // Soft-fail so a mail outage never blocks account creation.
+    if (
+      isPartnerNetworkRole((user as any).role) &&
+      createUserDto.password &&
+      (user as any).email &&
+      !(user as any).isSelfRegistered
+    ) {
+      const setupToken = crypto.randomBytes(32).toString('hex');
+      const setupExpires = new Date();
+      setupExpires.setDate(setupExpires.getDate() + 7); // 7 days to complete setup
+
+      await this.usersService.setPartnerPasswordSetupToken(
+        (user as any)._id.toString(),
+        setupToken,
+        setupExpires,
+      );
+
+      this.mailService
+        .sendPartnerOnboardingCredentialsEmail((user as any).email, {
+          ...((user as any).toObject?.() ?? user),
+          plainPassword: createUserDto.password,
+          passwordSetupToken: setupToken,
+        })
+        .catch((err) =>
+          console.error(
+            'Failed to send partner onboarding credentials email',
+            err,
+          ),
+        );
+    }
+
     return user;
   }
 

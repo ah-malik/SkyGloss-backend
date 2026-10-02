@@ -20,6 +20,7 @@ import { LoginAccessCodeDto } from './dto/login-access-code.dto';
 import { CreateUserDto } from '../users/dto/create-user.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { SetupPasswordDto } from './dto/setup-password.dto';
 import { ValidateShopRegistrationCouponDto } from '../coupons/dto/validate-shop-registration-coupon.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from './guards/optional-jwt-auth.guard';
@@ -220,6 +221,19 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async resetPassword(@Body() resetPasswordDto: ResetPasswordDto) {
     return this.authService.resetPassword(resetPasswordDto);
+  }
+
+  /** Public: preview account for Admin onboarding Access Now link. */
+  @Get('setup-password/:token')
+  async getPasswordSetupInfo(@Param('token') token: string) {
+    return this.authService.getPasswordSetupInfo(token);
+  }
+
+  /** Public: set personal password via Admin onboarding Access Now token. */
+  @Post('setup-password')
+  @HttpCode(HttpStatus.OK)
+  async setupPassword(@Body() setupPasswordDto: SetupPasswordDto) {
+    return this.authService.setupPasswordFromInvite(setupPasswordDto);
   }
 
   @Post('impersonate/:userId')

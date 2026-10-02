@@ -287,6 +287,100 @@ export class MailService {
     }
   }
 
+  /**
+   * Admin-created partner onboarding: portal URL + login email + Admin-set password.
+   * Recipient is the account email only (no Hub CC — credentials must stay private).
+   * "Access Now" uses a one-time token bound to this user for Update Password.
+   */
+  async sendPartnerOnboardingCredentialsEmail(
+    to: string,
+    userDetails: {
+      email?: string;
+      firstName?: string;
+      lastName?: string;
+      role?: string;
+      plainPassword?: string;
+      partnerCode?: string;
+      passwordSetupToken?: string;
+    },
+  ) {
+    const plainPassword = userDetails?.plainPassword || '';
+    const setupToken = userDetails?.passwordSetupToken || '';
+    if (!to || !plainPassword || !setupToken) {
+      this.logger.warn(
+        'Skipping partner onboarding email: missing recipient, password, or setup token',
+      );
+      return;
+    }
+
+    const escapeHtml = (value: string) =>
+      String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+
+    const frontendBase = (
+      this.configService.get<string>('FRONTEND_URL') ||
+      'https://portal.skygloss.com'
+    ).replace(/\/$/, '');
+    const loginLink = `${frontendBase}/login/partner`;
+    const accessNowLink = `${frontendBase}/setup-password?token=${encodeURIComponent(setupToken)}`;
+    const roleLabel = formatRoleLabel(userDetails?.role) || 'Partner';
+    const displayName =
+      [userDetails?.firstName, userDetails?.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim() || roleLabel;
+    const loginEmail = userDetails?.email || to;
+
+    const accessNowButton = `
+              <table width="100%" cellpadding="0" cellspacing="0" style="margin:25px 0;">
+                <tr>
+                  <td align="center">
+                    <a href="${escapeHtml(accessNowLink)}" style="background-color:#0ea0dc; color:#ffffff; padding:14px 28px; text-decoration:none; border-radius:6px; font-weight:bold; display:inline-block;">
+                      Access Now
+                    </a>
+                  </td>
+                </tr>
+              </table>`;
+
+    const mailOptions = {
+      from: '"SkyGloss Support" <sales@skygloss.com>',
+      to,
+      subject: `Your SkyGloss ${roleLabel} Account is Ready`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+          <h2 style="color: #0EA0DC; text-align: center;">Welcome to SkyGloss</h2>
+          <p>Hello ${escapeHtml(displayName)},</p>
+          <p>Your <strong>${escapeHtml(roleLabel)}</strong> account has been created. Use the login details below to access the Partner portal:</p>
+          <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:16px; margin:20px 0;">
+            <p style="margin:0 0 10px 0;"><strong>Portal Login URL:</strong><br/><a href="${escapeHtml(loginLink)}" style="color:#0EA0DC; word-break:break-all;">${escapeHtml(loginLink)}</a></p>
+            <p style="margin:0 0 10px 0;"><strong>Username / Email:</strong><br/>${escapeHtml(loginEmail)}</p>
+            <p style="margin:0;"><strong>Password:</strong><br/>${escapeHtml(plainPassword)}</p>
+          </div>
+          ${accessNowButton}
+          <p style="color:#64748b; font-size:14px;">Click <strong>Access Now</strong> to set your personal password. After updating, log in with your email and new password. This link is unique to your account and expires in 7 days.</p>
+          <p style="word-break: break-all; color: #666; font-size:12px;">If the button doesn't work, open this link:<br/><a href="${escapeHtml(accessNowLink)}">${escapeHtml(accessNowLink)}</a></p>
+          <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+          <p style="font-size: 12px; color: #999; text-align: center;">&copy; 2026 SkyGloss. All rights reserved.</p>
+        </div>
+      `,
+    };
+
+    try {
+      await this.salesTransporter.sendMail(mailOptions);
+      this.logger.log(`Partner onboarding credentials email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(
+        `Failed to send partner onboarding credentials email to ${to}`,
+        error.stack,
+      );
+      throw error;
+    }
+  }
+
   async sendDistributorRegistrationUserConfirmation(
     to: string,
     userDetails: any,

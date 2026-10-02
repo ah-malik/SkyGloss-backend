@@ -875,6 +875,12 @@ export class UsersService implements OnModuleInit {
       // Auto-activate partners created by Admin
       userData.status = UserStatus.ACTIVE;
 
+      // Admin-created partners (not self-registered) must change the
+      // Admin-set password on first login after the onboarding email.
+      if (createUserDto.password && !createUserDto.isSelfRegistered) {
+        userData.mustChangePassword = true;
+      }
+
       const codeError = validatePartnerCode(userData.partnerCode, userData.role);
       if (codeError) {
         throw new BadRequestException(codeError);
@@ -2477,7 +2483,41 @@ export class UsersService implements OnModuleInit {
   async findOneForAuth(id: string): Promise<UserDocument | null> {
     return this.userModel
       .findById(id)
-      .select('-password -refreshTokenHash -resetPasswordToken -resetPasswordExpires')
+      .select(
+        '-password -refreshTokenHash -resetPasswordToken -resetPasswordExpires -passwordSetupToken -passwordSetupExpires',
+      )
+      .exec();
+  }
+
+  /**
+   * Bind a one-time "Access Now" password-setup token to an Admin-created partner.
+   * Token is unique to this user document only.
+   */
+  async setPartnerPasswordSetupToken(
+    userId: string,
+    token: string,
+    expires: Date,
+  ): Promise<void> {
+    await this.userModel.findByIdAndUpdate(userId, {
+      $set: {
+        passwordSetupToken: token,
+        passwordSetupExpires: expires,
+        mustChangePassword: true,
+      },
+    });
+  }
+
+  async findByValidPasswordSetupToken(
+    token: string,
+  ): Promise<UserDocument | null> {
+    if (!token?.trim()) return null;
+    return this.userModel
+      .findOne({
+        passwordSetupToken: token.trim(),
+        passwordSetupExpires: { $gt: new Date() },
+        mustChangePassword: true,
+        role: { $in: [...PARTNER_NETWORK_ROLES] },
+      })
       .exec();
   }
 
@@ -2667,20 +2707,25 @@ export class UsersService implements OnModuleInit {
       }
     }
 
-    // Ensure compound unique exists for *active* users only (deletedAt: null),
-    // so soft-deleted emails can be reused when recreating a testing user.
+    // Ensure compound unique exists for *active* users with an email only.
+    // MongoDB forbids mixing sparse + partialFilterExpression — use partial only.
     try {
       const existing = indexes.find((idx) => idx.name === 'email_1_role_1');
       const partial = (existing as any)?.partialFilterExpression;
+      const isSparse = !!(existing as any)?.sparse;
+      const hasEmailTypePartial =
+        partial &&
+        partial.email &&
+        (partial.email.$type === 'string' || partial.email === 'string');
       const hasActiveOnlyPartial =
         partial &&
         Object.prototype.hasOwnProperty.call(partial, 'deletedAt') &&
         partial.deletedAt === null;
 
-      if (existing?.name && !hasActiveOnlyPartial) {
+      if (existing?.name && (isSparse || !hasActiveOnlyPartial || !hasEmailTypePartial)) {
         await collection.dropIndex('email_1_role_1');
         this.logger.log(
-          'Dropped email_1_role_1 so it can be rebuilt excluding soft-deleted users.',
+          'Dropped email_1_role_1 so it can be rebuilt (active users with email only).',
         );
       }
 
@@ -2688,13 +2733,15 @@ export class UsersService implements OnModuleInit {
         { email: 1, role: 1 },
         {
           unique: true,
-          sparse: true,
           name: 'email_1_role_1',
-          partialFilterExpression: { deletedAt: null },
+          partialFilterExpression: {
+            email: { $type: 'string' },
+            deletedAt: null,
+          },
         },
       );
       this.logger.log(
-        'Ensured compound unique index email_1_role_1 (active users only)',
+        'Ensured compound unique index email_1_role_1 (active users with email only)',
       );
     } catch (err: any) {
       // Already exists with same options — fine
@@ -3072,7 +3119,25 @@ export class UsersService implements OnModuleInit {
     }
 
     if (updatePayload.password) {
-      updatePayload.password = await bcrypt.hash(updatePayload.password, 10);
+      const newPlainPassword = String(updatePayload.password);
+      // When forced to change, reject reusing the Admin-set temporary password.
+      if (
+        targetUserForHierarchy.mustChangePassword &&
+        targetUserForHierarchy.password
+      ) {
+        const sameAsCurrent = await bcrypt.compare(
+          newPlainPassword,
+          targetUserForHierarchy.password,
+        );
+        if (sameAsCurrent) {
+          throw new BadRequestException(
+            'Please choose a new password that is different from your temporary password.',
+          );
+        }
+      }
+      updatePayload.password = await bcrypt.hash(newPlainPassword, 10);
+      // Personal password now replaces the Admin-set initial password.
+      updatePayload.mustChangePassword = false;
     }
     if (updatePayload.productGroup === '') {
       updatePayload.productGroup = null;

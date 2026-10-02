@@ -109,6 +109,16 @@ export class User {
   @Prop()
   resetPasswordExpires?: Date;
 
+  /**
+   * One-time token from Admin onboarding email ("Access Now").
+   * Bound to this user only — used to open Update Password before first login.
+   */
+  @Prop()
+  passwordSetupToken?: string;
+
+  @Prop()
+  passwordSetupExpires?: Date;
+
   @Prop()
   accessCode?: string;
 
@@ -352,6 +362,13 @@ export class User {
   @Prop({ default: false })
   hasSeenWelcomePopup: boolean;
 
+  /**
+   * When true, partner must set a new personal password after first login
+   * (Admin-created partners that received an onboarding credentials email).
+   */
+  @Prop({ default: false })
+  mustChangePassword: boolean;
+
   @Prop()
   profileImage?: string;
 
@@ -397,14 +414,17 @@ applySoftDeletePlugin(UserSchema);
 
 // One email may map to multiple portal accounts (shop vs partner), but not
 // two *active* users with the same email AND the same role.
-// Soft-deleted rows are excluded so admins can recreate the same email.
+// Soft-deleted rows / missing emails are excluded so admins can recreate.
+// NOTE: Do not set sparse:true with partialFilterExpression — MongoDB rejects that mix.
 UserSchema.index(
   { email: 1, role: 1 },
   {
     unique: true,
-    sparse: true,
     name: 'email_1_role_1',
-    partialFilterExpression: { deletedAt: null },
+    partialFilterExpression: {
+      email: { $type: 'string' },
+      deletedAt: null,
+    },
   },
 );
 

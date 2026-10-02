@@ -137,6 +137,7 @@ export class AuthService {
       certifiedAt: user.certifiedAt || null,
       partnerCode: user.partnerCode,
       hasSeenWelcomePopup: user.hasSeenWelcomePopup,
+      mustChangePassword: !!user.mustChangePassword,
       preferredLanguage: user.preferredLanguage,
       status: user.status,
     };
@@ -929,10 +930,83 @@ export class AuthService {
     user.password = hashedPassword;
     user.resetPasswordToken = undefined;
     user.resetPasswordExpires = undefined;
+    user.passwordSetupToken = undefined;
+    user.passwordSetupExpires = undefined;
     user.refreshTokenHash = undefined;
+    user.mustChangePassword = false;
     await user.save();
 
     return { message: 'Password has been reset successfully' };
+  }
+
+  /**
+   * Validate Admin onboarding "Access Now" token (no auth required).
+   * Returns only non-sensitive identity so the Update Password UI can confirm the account.
+   */
+  async getPasswordSetupInfo(token: string) {
+    const user = await this.usersService.findByValidPasswordSetupToken(token);
+    if (!user) {
+      throw new BadRequestException(
+        'This Access Now link is invalid or has expired. Ask your admin to resend the invite.',
+      );
+    }
+    return {
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      role: user.role,
+    };
+  }
+
+  /**
+   * Complete Admin onboarding password setup via the email Access Now token.
+   * Only the user document that owns this token can be updated.
+   */
+  async setupPasswordFromInvite(dto: {
+    token: string;
+    newPassword: string;
+  }) {
+    const user = await this.usersService.findByValidPasswordSetupToken(
+      dto.token,
+    );
+    if (!user) {
+      throw new BadRequestException(
+        'This Access Now link is invalid or has expired. Ask your admin to resend the invite.',
+      );
+    }
+
+    if (user.password) {
+      const sameAsCurrent = await bcrypt.compare(
+        dto.newPassword,
+        user.password,
+      );
+      if (sameAsCurrent) {
+        throw new BadRequestException(
+          'Please choose a new password that is different from your temporary password.',
+        );
+      }
+    }
+
+    const hashedPassword = await bcrypt.hash(dto.newPassword, 10);
+    // $unset guarantees the one-time token cannot be reused after success.
+    await (this.usersService as any).userModel.findByIdAndUpdate(user._id, {
+      $set: {
+        password: hashedPassword,
+        mustChangePassword: false,
+      },
+      $unset: {
+        passwordSetupToken: 1,
+        passwordSetupExpires: 1,
+        resetPasswordToken: 1,
+        resetPasswordExpires: 1,
+        refreshTokenHash: 1,
+      },
+    });
+
+    return {
+      message: 'Password updated successfully. You can now log in.',
+      email: user.email,
+    };
   }
 
   async verifyRegistrationPayment(userId: string) {
