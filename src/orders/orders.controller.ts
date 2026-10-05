@@ -222,7 +222,12 @@ export class OrdersController {
     @Body() dto: SetOrderRequestShippingDto,
     @GetUser() user: UserDocument,
   ) {
-    return this.ordersService.setOrderRequestShipping(id, dto.shippingFee, user);
+    return this.ordersService.setOrderRequestShipping(
+      id,
+      dto.shippingFee,
+      user,
+      dto.sendInvoice === true,
+    );
   }
 
   @Post(':id/fedex-rates')

@@ -113,6 +113,10 @@ export class Order {
   @Prop()
   invoiceSentAt?: Date;
 
+  /** Set when Hub/Admin changes invoice contents (items, shipping). */
+  @Prop()
+  invoiceUpdatedAt?: Date;
+
   /**
    * Amount already collected for this order (locked when items are added after payment).
    * Remaining due = totalAmount - amountPaid.

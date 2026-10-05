@@ -4269,6 +4269,7 @@ export class OrdersService implements OnModuleInit {
     orderId: string,
     shippingFeeInput: number,
     actor: UserDocument,
+    sendInvoice = false,
   ) {
     const order = await this.orderModel.findById(orderId).populate('user');
     if (!order) throw new NotFoundException('Order not found');
@@ -4307,9 +4308,12 @@ export class OrdersService implements OnModuleInit {
     order.vatAmount = vatAmount;
     order.vatRate = vatRate;
     order.shippingSetAt = new Date();
+    order.invoiceUpdatedAt = new Date();
 
     const updatedOrder = await order.save();
-    await this.tryAutoSendUpdatedInvoice(String(updatedOrder._id));
+    if (sendInvoice) {
+      await this.tryAutoSendUpdatedInvoice(String(updatedOrder._id));
+    }
     const latest = await this.orderModel.findById(updatedOrder._id).populate('user');
     return this.returnManagedOrder(latest as OrderDocument, actor);
   }
@@ -4614,6 +4618,7 @@ export class OrdersService implements OnModuleInit {
     Object.assign(order, this.buildAmountUpdateWithLockedRate(order, newTotal));
     order.vatAmount = vatAmount;
     order.vatRate = vatRate;
+    order.invoiceUpdatedAt = new Date();
 
     const remaining = getOrderRemainingAmount(order);
     if (remaining > 0.01 && wasPaid) {
@@ -4671,7 +4676,9 @@ export class OrdersService implements OnModuleInit {
       console.error('Failed to create notification for order append:', notifErr);
     }
 
-    await this.tryAutoSendUpdatedInvoice(String(updatedOrder._id));
+    if (dto.sendInvoice === true) {
+      await this.tryAutoSendUpdatedInvoice(String(updatedOrder._id));
+    }
     const latest = await this.orderModel.findById(updatedOrder._id).populate('user');
     return this.returnManagedOrder(latest as OrderDocument, actor);
   }

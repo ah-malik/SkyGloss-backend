@@ -91,7 +91,8 @@ export class StripeCouponSyncService {
       if (!stripe) continue;
       try {
         const productId = await this.getOrCreateRegistrationProduct(stripe);
-        await this.syncOneCoupon(stripe, account, coupon, 'usd', productId);
+        const currency = coupon.stripeSync?.[account]?.currency || 'usd';
+        await this.syncOneCoupon(stripe, account, coupon, currency, productId);
       } catch (err) {
         this.logger.warn(
           `Failed to sync coupon ${coupon.code} to Stripe ${account}: ${
@@ -211,22 +212,35 @@ export class StripeCouponSyncService {
     productId: string,
   ): Promise<void> {
     const shouldBeActive = isCouponCurrentlyValid(coupon);
-    const existingList = await stripe.promotionCodes.list({
+    const activeList = await stripe.promotionCodes.list({
       code: coupon.code,
-      limit: 1,
+      active: true,
+      limit: 20,
     });
-    const existingPromo = existingList.data[0];
+
+    // Stripe coupons are immutable: a promo created before the discount was
+    // edited keeps the old discount, so it must be replaced, not reused.
+    let existingPromo: Stripe.PromotionCode | undefined;
+    let stripeCouponId: string | undefined;
+    for (const promo of activeList.data) {
+      const linkedCouponId = this.getPromoCouponId(promo);
+      const matches =
+        shouldBeActive &&
+        !existingPromo &&
+        !!linkedCouponId &&
+        (await this.stripeCouponMatches(stripe, linkedCouponId, coupon, currency));
+      if (matches) {
+        existingPromo = promo;
+        stripeCouponId = linkedCouponId;
+        continue;
+      }
+      await stripe.promotionCodes.update(promo.id, { active: false });
+      this.logger.log(
+        `Deactivated outdated Stripe promo ${promo.id} for ${coupon.code} (${account})`,
+      );
+    }
 
     if (existingPromo) {
-      if (existingPromo.active !== shouldBeActive) {
-        await stripe.promotionCodes.update(existingPromo.id, {
-          active: shouldBeActive,
-        });
-      }
-      const stripeCouponId =
-        typeof existingPromo.promotion?.coupon === 'string'
-          ? existingPromo.promotion.coupon
-          : existingPromo.promotion?.coupon?.id;
       coupon.stripeSync = {
         ...(coupon.stripeSync || {}),
         [account]: {
@@ -287,6 +301,33 @@ export class StripeCouponSyncService {
       },
     };
     await coupon.save();
+  }
+
+  private getPromoCouponId(promo: Stripe.PromotionCode): string | undefined {
+    const legacy = (promo as unknown as { coupon?: string | { id?: string } })
+      .coupon;
+    const ref = promo.promotion?.coupon ?? legacy;
+    return typeof ref === 'string' ? ref : ref?.id;
+  }
+
+  private async stripeCouponMatches(
+    stripe: Stripe,
+    stripeCouponId: string,
+    coupon: CouponDocument,
+    currency: string,
+  ): Promise<boolean> {
+    const stripeCoupon = await stripe.coupons.retrieve(stripeCouponId);
+    if (!stripeCoupon?.valid) return false;
+    if (coupon.discountType === CouponDiscountType.PERCENTAGE) {
+      return (
+        Math.abs(Number(stripeCoupon.percent_off) - Number(coupon.discountValue)) <
+        0.0001
+      );
+    }
+    return (
+      stripeCoupon.amount_off === Math.round(Number(coupon.discountValue) * 100) &&
+      String(stripeCoupon.currency || '').toLowerCase() === currency.toLowerCase()
+    );
   }
 
   private buildStripeCouponParams(
