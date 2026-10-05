@@ -15,6 +15,7 @@ import { resolveStripeApiVersion } from '../payouts/stripe-wise-payouts.logic';
 export type StripeAccountKey = 'global' | 'usa' | 'europe';
 
 const REGISTRATION_PRODUCT_META = 'shop_registration_fee';
+const REGISTRATION_TAX_RATE_META = 'shop_registration_tax';
 
 @Injectable()
 export class StripeCouponSyncService {
@@ -164,6 +165,31 @@ export class StripeCouponSyncService {
     const created = await stripe.products.create({
       name: 'Shop Registration Fee',
       metadata: { skygloss_type: REGISTRATION_PRODUCT_META },
+    });
+    return created.id;
+  }
+
+  /** Exclusive tax rate so Stripe charges tax on the fee after any promotion code discount. */
+  async getOrCreateRegistrationTaxRate(
+    stripe: Stripe,
+    percentage: number,
+    displayName: string,
+  ): Promise<string> {
+    const rounded = Math.round(percentage * 10000) / 10000;
+    const listed = await stripe.taxRates.list({ limit: 100, active: true, inclusive: false });
+    const found = listed.data.find(
+      (rate) =>
+        rate.metadata?.skygloss_type === REGISTRATION_TAX_RATE_META &&
+        rate.display_name === displayName &&
+        Math.abs(Number(rate.percentage) - rounded) < 0.00005,
+    );
+    if (found) return found.id;
+
+    const created = await stripe.taxRates.create({
+      display_name: displayName,
+      percentage: rounded,
+      inclusive: false,
+      metadata: { skygloss_type: REGISTRATION_TAX_RATE_META },
     });
     return created.id;
   }

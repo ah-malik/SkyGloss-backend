@@ -20,6 +20,7 @@ import { SetOrderRequestShippingDto } from './dto/set-order-request-shipping.dto
 import { CalculateFedexRatesDto } from './dto/calculate-fedex-rates.dto';
 import { CreateDuplicateInvoiceDto } from './dto/create-duplicate-invoice.dto';
 import { ValidateVatDto } from './dto/validate-vat.dto';
+import { ActivationFeeDto } from './dto/activation-fee.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -74,9 +75,18 @@ export class OrdersController {
     );
   }
 
+  @Get('activation-fee/quote')
+  @UseGuards(JwtAuthGuard)
+  getActivationFeeQuote(@GetUser('_id') userId: string) {
+    return this.ordersService.getShopRegistrationFeeQuote(String(userId));
+  }
+
   @Post('activation-fee')
   @UseGuards(JwtAuthGuard)
-  async createActivationFeeSession(@GetUser() user: any) {
+  async createActivationFeeSession(
+    @GetUser() user: any,
+    @Body() dto: ActivationFeeDto,
+  ) {
     const session = await this.ordersService.createDistributorFeeCheckoutSession(
       user._id.toString(),
       user.email,
@@ -86,7 +96,8 @@ export class OrdersController {
         country: user.country,
         successPath: '/dashboard/shop?payment_success=true',
         cancelPath: '/dashboard/shop?payment_canceled=true',
-      }
+      },
+      { taxId: dto?.taxId, noVatId: dto?.noVatId },
     );
     return 'url' in session && session.url ? { url: session.url } : session;
   }

@@ -50,6 +50,15 @@ import {
   getOrderVatTaxableBase,
 } from '../common/europe-vat';
 import {
+  applyRegistrationVatChoice,
+  buildRegistrationFeeQuote,
+  calculateRegistrationTotals,
+  getRegistrationTaxPercent,
+  RegistrationVatChoice,
+  registrationRequiresVatChoice,
+  splitPaidRegistrationAmount,
+} from '../common/registration-pricing';
+import {
   isOrderModifiable,
   getOrderAmountPaid,
   getOrderRemainingAmount,
@@ -442,6 +451,7 @@ export class OrdersService implements OnModuleInit {
     userId: string,
     email: string,
     additionalMetadata: any = {},
+    vatOptions?: RegistrationVatChoice,
   ): Promise<{ url: string | null; id: string } | { paid: true; user: any }> {
     const user = await this.usersService.findOne(userId);
     const type = additionalMetadata.type || 'partner_registration';
@@ -466,24 +476,14 @@ export class OrdersService implements OnModuleInit {
       additionalMetadata.cancelPath ||
       (type === 'shop_registration' ? '/register/shop?payment_canceled=true' : '/register/partner?payment_canceled=true');
 
-    // PRICING LOGIC
-    let currency = 'usd';
-    let unit_amount = 25000; // Default $250.00 USD
-    let tax_amount = 0;
-
+    // PRICING LOGIC — coupon discounts apply to the fee only; tax/VAT is charged on the discounted fee.
     const feeGroup = await this.registrationFeesService.findByCountry(country);
+    const feeQuote = buildRegistrationFeeQuote(feeGroup, country);
+    const currency = feeQuote.currency.toLowerCase();
+    const undiscountedTotals = calculateRegistrationTotals(feeQuote);
+    let unit_amount = Math.round(undiscountedTotals.feeAmount * 100);
+    let tax_amount = Math.round(undiscountedTotals.taxAmount * 100);
     if (feeGroup) {
-      currency = feeGroup.currency.toLowerCase();
-      unit_amount = Math.round(feeGroup.feeAmount * 100);
-      const vatRate = getEuropeVatRatePercent(country);
-      if (vatRate != null) {
-        // Europe VAT table wins for registration tax (rate × fee, no shipping).
-        tax_amount = Math.round(
-          roundMoney((feeGroup.feeAmount * vatRate) / 100) * 100,
-        );
-      } else {
-        tax_amount = Math.round((feeGroup.taxAmount || 0) * 100);
-      }
       console.log(
         `[Stripe Registration] Fee group="${feeGroup.name}" currency=${currency} amount=${unit_amount} tax=${tax_amount} country="${country}" default=${!!feeGroup.isDefault}`,
       );
@@ -491,13 +491,8 @@ export class OrdersService implements OnModuleInit {
       console.log(
         `[Stripe Registration] No fee group matched country="${country}"; using hardcoded USD $250 fallback`,
       );
-      const vatRate = getEuropeVatRatePercent(country);
-      if (vatRate != null && vatRate > 0) {
-        tax_amount = Math.round(roundMoney((250 * vatRate) / 100) * 100);
-      }
     }
 
-    const totalBeforeDiscount = unit_amount + tax_amount;
     let appliedShopCoupon: ShopRegistrationCouponResult | null = null;
     let allowPromotionCodes = true;
     let registrationProductId: string | undefined;
@@ -509,7 +504,7 @@ export class OrdersService implements OnModuleInit {
       if (requestedCode) {
         appliedShopCoupon = await this.couponsService.validateForShopRegistration(
           requestedCode,
-          totalBeforeDiscount / 100,
+          feeQuote,
           user?.couponCode,
         );
         allowPromotionCodes = false;
@@ -533,21 +528,32 @@ export class OrdersService implements OnModuleInit {
       }
     }
 
-    const registrationDiscountCents = additionalMetadata.registrationDiscount
-      ? Math.round(Number(additionalMetadata.registrationDiscount) * 100)
-      : 0;
-    const finalAmountCents =
-      additionalMetadata.finalAmount != null
-        ? Math.round(Number(additionalMetadata.finalAmount) * 100)
-        : Math.max(0, totalBeforeDiscount - registrationDiscountCents);
-
-    if (finalAmountCents < totalBeforeDiscount && finalAmountCents >= 0) {
-      unit_amount = finalAmountCents;
-      tax_amount = 0;
-    }
-
     if (isShopRegistration && appliedShopCoupon?.isFullyCovered) {
       return this.completeShopRegistrationWithCoupon(userId, appliedShopCoupon);
+    }
+
+    // Shop registration VAT follows the shop order rule:
+    // verified VAT ID → no VAT; "I don't have a VAT ID" → country VAT.
+    let chargeQuote = feeQuote;
+    if (isShopRegistration && registrationRequiresVatChoice(country)) {
+      const vatChoice = await this.resolveRegistrationVatChoice(country, vatOptions);
+      chargeQuote = applyRegistrationVatChoice(feeQuote, country, vatChoice);
+      additionalMetadata.registrationTaxId = vatChoice.taxId;
+      additionalMetadata.registrationNoVatId = vatChoice.noVatId ? 'true' : 'false';
+      additionalMetadata.registrationVatExempt = chargeQuote.vatExempt ? 'true' : 'false';
+    }
+
+    const chargeTotals = calculateRegistrationTotals(
+      chargeQuote,
+      appliedShopCoupon?.discountAmount ?? 0,
+    );
+    unit_amount = Math.round(chargeTotals.taxableBase * 100);
+    tax_amount = Math.round(chargeTotals.taxAmount * 100);
+    const totalBeforeDiscount = Math.round(
+      calculateRegistrationTotals(chargeQuote).total * 100,
+    );
+    if (appliedShopCoupon) {
+      additionalMetadata.finalAmount = chargeTotals.total;
     }
 
     const feeName = user
@@ -574,11 +580,27 @@ export class OrdersService implements OnModuleInit {
           }),
     };
 
-    if (
-      isShopRegistration &&
-      allowPromotionCodes &&
-      registrationProductId
-    ) {
+    const usesStripePromoProduct =
+      isShopRegistration && allowPromotionCodes && !!registrationProductId;
+    let feeTaxRateId: string | undefined;
+
+    if (usesStripePromoProduct && tax_amount > 0) {
+      try {
+        feeTaxRateId = await this.stripeCouponSync.getOrCreateRegistrationTaxRate(
+          stripeInstance,
+          getRegistrationTaxPercent(chargeQuote),
+          feeQuote.vatRate != null ? 'VAT' : 'Tax',
+        );
+      } catch (taxRateErr) {
+        this.logger.warn(
+          `Failed to resolve Stripe registration tax rate; charging tax-inclusive fee: ${
+            (taxRateErr as Error)?.message || taxRateErr
+          }`,
+        );
+      }
+    }
+
+    if (usesStripePromoProduct && !feeTaxRateId) {
       feePriceData.unit_amount = totalBeforeDiscount;
     }
 
@@ -586,18 +608,16 @@ export class OrdersService implements OnModuleInit {
       {
         price_data: feePriceData,
         quantity: 1,
+        ...(feeTaxRateId ? { tax_rates: [feeTaxRateId] } : {}),
       },
     ];
 
-    if (
-      tax_amount > 0 &&
-      !(isShopRegistration && allowPromotionCodes && registrationProductId)
-    ) {
+    if (tax_amount > 0 && !usesStripePromoProduct) {
       line_items.push({
         price_data: {
           currency,
           product_data: {
-            name: 'Tax',
+            name: feeQuote.vatRate != null ? `VAT (${feeQuote.vatRate}%)` : 'Tax',
           },
           unit_amount: tax_amount,
         },
@@ -635,6 +655,74 @@ export class OrdersService implements OnModuleInit {
         `Stripe session creation failed: ${error.message}`,
       );
     }
+  }
+
+  /** VAT ID must be verified via VIES (same as shop orders) unless the shop declares it has none. */
+  private async resolveRegistrationVatChoice(
+    country: string,
+    vatOptions?: RegistrationVatChoice,
+  ): Promise<{ taxId: string; noVatId: boolean }> {
+    if (vatOptions?.noVatId === true) {
+      return { taxId: '', noVatId: true };
+    }
+    if (!String(vatOptions?.taxId || '').trim()) {
+      throw new BadRequestException(
+        'Please enter your VAT ID, or select that you do not have a VAT ID, before paying the registration fee.',
+      );
+    }
+    const result = await validateEuropeanVatNumber({
+      country,
+      taxId: vatOptions?.taxId,
+    });
+    if (!result.ok) {
+      throw new BadRequestException(result.message);
+    }
+    return { taxId: result.normalizedVat, noVatId: false };
+  }
+
+  /** Amounts shown before the shop chooses whether it has a VAT ID. */
+  async getShopRegistrationFeeQuote(userId: string) {
+    const user = await this.usersService.findOne(userId);
+    const country = user?.country || '';
+    const feeGroup = await this.registrationFeesService.findByCountry(country);
+    const feeQuote = buildRegistrationFeeQuote(feeGroup, country);
+
+    let discount = 0;
+    let couponCode: string | undefined;
+    if (user?.couponCode) {
+      try {
+        const coupon = await this.couponsService.validateForShopRegistration(
+          user.couponCode,
+          feeQuote,
+          user.couponCode,
+        );
+        discount = coupon.discountAmount;
+        couponCode = coupon.code;
+      } catch {
+        discount = 0;
+      }
+    }
+
+    const vatRequired = registrationRequiresVatChoice(country);
+    const withTax = calculateRegistrationTotals(feeQuote, discount);
+    const withValidVatId = vatRequired
+      ? calculateRegistrationTotals({ ...feeQuote, vatExempt: true }, discount)
+      : withTax;
+
+    return {
+      country,
+      currency: feeQuote.currency,
+      feeAmount: withTax.feeAmount,
+      couponCode,
+      discount: withTax.discount,
+      vatRequired,
+      vatRate: feeQuote.vatRate,
+      taxAmount: withTax.taxAmount,
+      total: withTax.total,
+      totalWithValidVatId: withValidVatId.total,
+      isFullyCovered: withTax.total <= 0,
+      isPaid: !!user?.isPartnerPaid,
+    };
   }
 
   private async completeShopRegistrationWithCoupon(
@@ -773,10 +861,13 @@ export class OrdersService implements OnModuleInit {
     // DETERMINE CURRENCY
     const orderCurrency = await this.getCurrencyForUser(currentUser);
 
-    const items = rawItems.map((item) => ({
-      ...item,
-      orderType: normalizeOrderItemType(item.orderType),
-    }));
+    const items = await this.repriceOrderItemsForUser(
+      currentUser,
+      rawItems.map((item) => ({
+        ...item,
+        orderType: normalizeOrderItemType(item.orderType),
+      })),
+    );
 
     const kitResolved = await this.resolveCertificationKitOrderItems(
       currentUser as any,
@@ -1386,38 +1477,50 @@ export class OrdersService implements OnModuleInit {
     }
 
     // Determine the registration fee and tax for user's country
-    let currency = 'USD';
-    let feeAmount = 250;
-    let taxAmount = 0;
-
+    let feeQuote = buildRegistrationFeeQuote(null, user.country);
     try {
       const feeGroup = await this.registrationFeesService.findByCountry(user.country || '');
-      if (feeGroup) {
-        currency = (feeGroup.currency || 'USD').toUpperCase();
-        feeAmount = feeGroup.feeAmount;
-        const vatRate = getEuropeVatRatePercent(user.country);
-        if (vatRate != null) {
-          taxAmount = roundMoney((feeAmount * vatRate) / 100);
-        } else {
-          taxAmount = feeGroup.taxAmount || 0;
-        }
-      } else {
-        const vatRate = getEuropeVatRatePercent(user.country);
-        if (vatRate != null && vatRate > 0) {
-          taxAmount = roundMoney((feeAmount * vatRate) / 100);
-        }
-      }
+      feeQuote = buildRegistrationFeeQuote(feeGroup, user.country);
     } catch (err) {
       console.error('[Registration Order] Failed to fetch fee group:', err);
     }
 
-    const subtotal = feeAmount + taxAmount;
-    const couponDiscount = couponOptions?.discount ?? 0;
-    const isCouponBypass = couponDiscount >= subtotal && subtotal > 0;
-    let discount = isCouponBypass ? subtotal : Math.min(couponDiscount, subtotal);
-    let totalAmount = Math.max(0, subtotal - discount);
+    const currency = feeQuote.currency;
+    // Coupon discount applies to the fee only; tax/VAT is charged on the discounted fee.
+    let totals = calculateRegistrationTotals(feeQuote, couponOptions?.discount ?? 0);
     let couponCode = couponOptions?.couponCode;
     let stripeSessionId: string | undefined = undefined;
+    let registrationTaxId = '';
+    let registrationNoVatId: boolean | undefined;
+
+    const applyPaidSession = (session: Stripe.Checkout.Session, resolvedPromo?: string) => {
+      const metadata = session.metadata || {};
+      if (metadata.registrationVatExempt != null) {
+        registrationTaxId = String(metadata.registrationTaxId || '');
+        registrationNoVatId = metadata.registrationNoVatId === 'true';
+        feeQuote = applyRegistrationVatChoice(feeQuote, user.country, {
+          taxId: registrationTaxId,
+          noVatId: registrationNoVatId,
+        });
+      }
+      const totalPaid = (session.amount_total || 0) / 100;
+      const stripeDiscount = (session.total_details?.amount_discount || 0) / 100;
+      const stripeTax = (session.total_details?.amount_tax || 0) / 100;
+      const metadataDiscount = Number(session.metadata?.registrationDiscount);
+      const fromMetadata = Number.isFinite(metadataDiscount)
+        ? calculateRegistrationTotals(feeQuote, metadataDiscount)
+        : null;
+      totals =
+        fromMetadata && Math.abs(fromMetadata.total - totalPaid) < 0.01
+          ? fromMetadata
+          : splitPaidRegistrationAmount(feeQuote, totalPaid, stripeTax);
+      if (stripeDiscount > 0.01) {
+        couponCode =
+          couponOptions?.couponCode || resolvedPromo || couponCode || 'STRIPECOUPON';
+      } else if (couponOptions?.couponCode) {
+        couponCode = couponOptions.couponCode;
+      }
+    };
 
     if (stripeSessionOrId) {
       if (typeof stripeSessionOrId === 'string') {
@@ -1430,19 +1533,10 @@ export class OrdersService implements OnModuleInit {
               ) || this.stripe;
             const session = await stripeInstance.checkout.sessions.retrieve(stripeSessionId);
             if (session) {
-              totalAmount = (session.amount_total || 0) / 100;
-              const stripeDiscount = (session.total_details?.amount_discount || 0) / 100;
               const resolvedPromo = await this.stripeCouponSync
                 .resolveCodeFromCheckoutSession(stripeInstance, session)
                 .catch(() => undefined);
-              if (stripeDiscount > 0.01) {
-                discount = stripeDiscount;
-                couponCode =
-                  couponOptions?.couponCode || resolvedPromo || couponCode || 'STRIPECOUPON';
-              } else if (couponOptions?.couponCode) {
-                couponCode = couponOptions.couponCode;
-                discount = Math.max(0, roundMoney(subtotal - totalAmount));
-              }
+              applyPaidSession(session, resolvedPromo);
             }
           } catch (stripeErr) {
             console.error('[Registration Order] Failed to retrieve stripe session details:', stripeErr);
@@ -1450,18 +1544,12 @@ export class OrdersService implements OnModuleInit {
         }
       } else {
         stripeSessionId = stripeSessionOrId.id;
-        totalAmount = (stripeSessionOrId.amount_total || 0) / 100;
-        const stripeDiscount = (stripeSessionOrId.total_details?.amount_discount || 0) / 100;
-        if (stripeDiscount > 0.01) {
-          discount = stripeDiscount;
-          couponCode =
-            couponOptions?.couponCode || couponCode || 'STRIPECOUPON';
-        } else if (couponOptions?.couponCode) {
-          couponCode = couponOptions.couponCode;
-          discount = Math.max(0, roundMoney(subtotal - totalAmount));
-        }
+        applyPaidSession(stripeSessionOrId);
       }
     }
+
+    const { feeAmount, discount, taxAmount, total: totalAmount } = totals;
+    const vatRate = taxAmount > 0 && feeQuote.vatRate != null ? feeQuote.vatRate : 0;
 
     // Prefill shippingAddress using user's details
     const shippingAddress = {
@@ -1476,6 +1564,8 @@ export class OrdersService implements OnModuleInit {
       zipCode: user.zipCode || 'N/A',
       country: user.country || 'N/A',
       phoneNumber: user.phoneNumber || 'N/A',
+      ...(registrationTaxId ? { taxId: registrationTaxId } : {}),
+      ...(registrationNoVatId != null ? { noVatId: registrationNoVatId } : {}),
     };
 
     const orderNumber = await this.generateRegistrationOrderNumber();
@@ -1489,10 +1579,12 @@ export class OrdersService implements OnModuleInit {
           name: getRegistrationFeeName(user.role),
           size: 'N/A',
           quantity: 1,
-          price: subtotal,
+          price: feeAmount,
         }
       ],
       discount,
+      vatAmount: taxAmount,
+      vatRate,
       couponCode,
       shippingAddress,
       status: OrderStatus.PAID,
@@ -4598,14 +4690,17 @@ export class OrdersService implements OnModuleInit {
         shippingAddress,
         currentUser?.country,
       );
-      const items = rawItems.map((item) => ({
-        ...item,
-        orderType: normalizeOrderItemType(item.orderType),
-      }));
-      
-      if (!items || !Array.isArray(items) || items.length === 0) {
+      if (!rawItems || !Array.isArray(rawItems) || rawItems.length === 0) {
         throw new BadRequestException('Order items are required');
       }
+
+      const items = await this.repriceOrderItemsForUser(
+        currentUser,
+        rawItems.map((item) => ({
+          ...item,
+          orderType: normalizeOrderItemType(item.orderType),
+        })),
+      );
 
       const kitResolved = await this.resolveCertificationKitOrderItems(
         currentUser as any,
@@ -5725,6 +5820,63 @@ export class OrdersService implements OnModuleInit {
    * Expand Certification Kit cart line into real component order items,
    * enforce one-time / qty=1 rules, and return the kit discount amount.
    */
+  /**
+   * Replace client-sent line prices with the buyer's Pricing Group price so a
+   * stale cart (e.g. saved before a group/country change) can never charge the
+   * wrong region's price. Certification Kit lines are priced separately.
+   */
+  private async repriceOrderItemsForUser<
+    T extends {
+      product: string;
+      name: string;
+      size: string;
+      orderType?: 'unit' | 'case';
+      price: number;
+    },
+  >(user: UserDocument | null | undefined, items: T[]): Promise<T[]> {
+    if (!user || String(user.role) === UserRole.ADMIN) return items;
+
+    const repriced: T[] = [];
+    for (const item of items) {
+      if (isCertificationKitCartItem(item as any)) {
+        repriced.push(item);
+        continue;
+      }
+      try {
+        const pricedProduct = await this.productsService.findOne(
+          String(item.product),
+          user as any,
+        );
+        const sizeEntry = (pricedProduct?.sizes || []).find(
+          (s: { size: string; price: number }) =>
+            String(s.size) === String(item.size),
+        );
+        if (sizeEntry?.price == null) {
+          repriced.push(item);
+          continue;
+        }
+        const price = resolveOrderLinePrice(
+          Number(sizeEntry.price) || 0,
+          item.orderType,
+          pricedProduct?.name || item.name,
+        );
+        if (Math.abs(price - (Number(item.price) || 0)) > 0.009) {
+          this.logger.warn(
+            `[Pricing] Corrected ${item.name} (${item.size}) for user ${user._id}: client=${item.price} group=${price} (${pricedProduct?.groupName || 'catalog'})`,
+          );
+        }
+        repriced.push({ ...item, price });
+      } catch (err) {
+        this.logger.warn(
+          `Could not resolve Pricing Group price for product ${item.product}; using client price`,
+          (err as Error)?.message || err,
+        );
+        repriced.push(item);
+      }
+    }
+    return repriced;
+  }
+
   private async resolveCertificationKitOrderItems(
     user: UserDocument,
     items: Array<{

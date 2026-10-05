@@ -24,6 +24,10 @@ import {
 import { StripeCouponSyncService } from './stripe-coupon-sync.service';
 import { roundMoney } from '../common/order-monetary';
 import {
+  calculateRegistrationTotals,
+  RegistrationFeeQuote,
+} from '../common/registration-pricing';
+import {
   CouponAnalyticsOverview,
   CouponReport,
   CouponTransactionLogEntry,
@@ -42,7 +46,10 @@ export interface CouponValidationResult {
 }
 
 export interface ShopRegistrationCouponResult extends CouponValidationResult {
+  /** Registration fee before discount (excludes tax/VAT). */
   subtotal: number;
+  taxAmount: number;
+  vatRate: number | null;
   totalAfterDiscount: number;
   isFullyCovered: boolean;
 }
@@ -220,7 +227,7 @@ export class CouponsService implements OnModuleInit {
 
   async validateForShopRegistration(
     code: string,
-    subtotal: number,
+    feeQuote: RegistrationFeeQuote,
     existingUserCouponCode?: string,
   ): Promise<ShopRegistrationCouponResult> {
     if (
@@ -239,19 +246,23 @@ export class CouponsService implements OnModuleInit {
       ? await this.findShopRegistrationCoupon(code)
       : await this.findValidCoupon(code, CouponUsageType.SHOP_REGISTRATION);
 
-    const discountAmount = calculateCouponDiscountAmount(coupon, subtotal);
-    const totalAfterDiscount = Math.max(0, roundMoney(subtotal - discountAmount));
+    const totals = calculateRegistrationTotals(
+      feeQuote,
+      calculateCouponDiscountAmount(coupon, feeQuote.feeAmount),
+    );
 
     return {
       valid: true,
       code: coupon.code,
       discountType: coupon.discountType,
       discountValue: coupon.discountValue,
-      discountAmount,
+      discountAmount: totals.discount,
       description: coupon.description,
-      subtotal: roundMoney(subtotal),
-      totalAfterDiscount,
-      isFullyCovered: totalAfterDiscount <= 0,
+      subtotal: totals.feeAmount,
+      taxAmount: totals.taxAmount,
+      vatRate: feeQuote.vatRate,
+      totalAfterDiscount: totals.total,
+      isFullyCovered: totals.total <= 0,
     };
   }
 

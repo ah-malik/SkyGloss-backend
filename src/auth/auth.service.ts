@@ -48,8 +48,7 @@ import {
 import { UserActivityService } from '../user-activity/user-activity.service';
 import { UserActivityAction } from '../user-activity/entities/user-activity-log.entity';
 import { parseDurationToMs } from './auth-cookies';
-import { getEuropeVatRatePercent } from '../common/europe-vat';
-import { roundMoney } from '../common/order-monetary';
+import { buildRegistrationFeeQuote } from '../common/registration-pricing';
 
 export interface IssuedAuthTokens {
   access_token: string;
@@ -604,29 +603,17 @@ export class AuthService {
     country?: string,
     existingUserCouponCode?: string,
   ): Promise<ShopRegistrationCouponResult> {
-    let subtotal = 250;
+    let feeQuote = buildRegistrationFeeQuote(null, country);
     try {
       const feeGroup = await this.registrationFeesService.findByCountry(country || '');
-      if (feeGroup) {
-        const vatRate = getEuropeVatRatePercent(country);
-        const tax =
-          vatRate != null
-            ? roundMoney((feeGroup.feeAmount * vatRate) / 100)
-            : feeGroup.taxAmount || 0;
-        subtotal = feeGroup.feeAmount + tax;
-      } else {
-        const vatRate = getEuropeVatRatePercent(country);
-        if (vatRate != null && vatRate > 0) {
-          subtotal = roundMoney(250 + (250 * vatRate) / 100);
-        }
-      }
+      feeQuote = buildRegistrationFeeQuote(feeGroup, country);
     } catch (err) {
       console.error('[AuthService] Failed to resolve registration fee for coupon:', err);
     }
 
     return this.couponsService.validateForShopRegistration(
       code,
-      subtotal,
+      feeQuote,
       existingUserCouponCode,
     );
   }
