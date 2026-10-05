@@ -77,8 +77,14 @@ export class OrdersController {
 
   @Get('activation-fee/quote')
   @UseGuards(JwtAuthGuard)
-  getActivationFeeQuote(@GetUser('_id') userId: string) {
-    return this.ordersService.getShopRegistrationFeeQuote(String(userId));
+  getActivationFeeQuote(
+    @GetUser('_id') userId: string,
+    @Query('couponCode') couponCode?: string,
+  ) {
+    return this.ordersService.getShopRegistrationFeeQuote(
+      String(userId),
+      couponCode,
+    );
   }
 
   @Post('activation-fee')
@@ -98,6 +104,7 @@ export class OrdersController {
         cancelPath: '/dashboard/shop?payment_canceled=true',
       },
       { taxId: dto?.taxId, noVatId: dto?.noVatId },
+      dto?.couponCode,
     );
     return 'url' in session && session.url ? { url: session.url } : session;
   }
@@ -196,6 +203,23 @@ export class OrdersController {
     return this.ordersService.getOrderById(id, user);
   }
 
+  @Post(':id/cancellation-request')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    UserRole.CERTIFIED_SHOP,
+    UserRole.PARTNER,
+    UserRole.REGIONAL_PARTNER,
+    UserRole.MASTER_PARTNER,
+    UserRole.DISTRIBUTOR,
+  )
+  requestOrderCancellation(
+    @Param('id') id: string,
+    @GetUser('_id') userId: string,
+    @Body('reason') reason?: string,
+  ) {
+    return this.ordersService.requestOrderCancellation(id, userId, reason);
+  }
+
   @Post(':id/pay')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -222,12 +246,7 @@ export class OrdersController {
     @Body() dto: SetOrderRequestShippingDto,
     @GetUser() user: UserDocument,
   ) {
-    return this.ordersService.setOrderRequestShipping(
-      id,
-      dto.shippingFee,
-      user,
-      dto.sendInvoice === true,
-    );
+    return this.ordersService.setOrderRequestShipping(id, dto.shippingFee, user);
   }
 
   @Post(':id/fedex-rates')
@@ -326,6 +345,38 @@ export class OrdersController {
       trackingId,
       shippingCompany,
       user,
+    );
+  }
+
+  @Post('admin/:id/cancel')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  cancelOrder(@Param('id') id: string, @GetUser() user: UserDocument) {
+    return this.ordersService.cancelOrder(id, user);
+  }
+
+  @Post('admin/:id/cancellation-request/approve')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  approveCancellationRequest(
+    @Param('id') id: string,
+    @GetUser() user: UserDocument,
+  ) {
+    return this.ordersService.approveCancellationRequest(id, user);
+  }
+
+  @Post('admin/:id/cancellation-request/reject')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  rejectCancellationRequest(
+    @Param('id') id: string,
+    @GetUser() user: UserDocument,
+    @Body('rejectionReason') rejectionReason?: string,
+  ) {
+    return this.ordersService.rejectCancellationRequest(
+      id,
+      user,
+      rejectionReason,
     );
   }
 

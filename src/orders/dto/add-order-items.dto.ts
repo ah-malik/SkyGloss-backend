@@ -1,6 +1,5 @@
 import {
   IsArray,
-  IsBoolean,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -48,8 +47,4 @@ export class AddOrderItemsDto {
   @IsString()
   @IsOptional()
   couponCode?: string;
-
-  @IsBoolean()
-  @IsOptional()
-  sendInvoice?: boolean;
 }

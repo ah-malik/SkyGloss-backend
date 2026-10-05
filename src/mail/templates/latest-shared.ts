@@ -81,10 +81,20 @@ export function resolveShopFooterContact(
   return { ...DEFAULT_FOOTER_CONTACT };
 }
 
+function escapeEmailText(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 export function buildRepresentativeFooterBlock(
   contact?: FooterContact | null,
 ): string {
   const footer = contact || DEFAULT_FOOTER_CONTACT;
+  const phoneText = escapeEmailText(footer.phone);
+  const phoneHref = footer.phone.replace(/[^\d+]/g, '');
 
   return `
           <tr>
@@ -98,8 +108,8 @@ export function buildRepresentativeFooterBlock(
                     <p style="margin:0 0 10px 0; font-family: Arial, Helvetica, sans-serif; font-size:12px; font-weight:bold; color:${BRAND_BLUE}; letter-spacing:0.5px;">
                       ${footer.title}
                     </p>
-                    <p style="margin:0 0 4px 0; font-family: Arial, Helvetica, sans-serif; font-size:12px; color:#ffffff;">
-                      ${footer.phone}
+                    <p style="margin:0 0 4px 0; font-family: Arial, Helvetica, sans-serif; font-size:12px; color:#ffffff; text-decoration:none;">
+                      <a href="tel:${phoneHref}" style="color:#ffffff !important; text-decoration:none !important;"><span style="color:#ffffff !important; text-decoration:none !important;">${phoneText}</span></a>
                     </p>
                     <p style="margin:0; font-family: Arial, Helvetica, sans-serif; font-size:12px; color:#ffffff;">
                       <a href="mailto:${footer.email}" style="color:#ffffff; text-decoration:none;">${footer.email}</a>
@@ -173,7 +183,14 @@ export function wrapLatestEmail(title: string, bodyRows: string): string {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="format-detection" content="telephone=no">
   <title>${title}</title>
+  <style type="text/css">
+    a[href^="tel"], a[href^="tel"] span {
+      color: #ffffff !important;
+      text-decoration: none !important;
+    }
+  </style>
   <!--[if mso]>
   <style type="text/css">
     body, table, td { font-family: Arial, Helvetica, sans-serif !important; }

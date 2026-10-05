@@ -316,7 +316,12 @@ export class StripeCouponSyncService {
     coupon: CouponDocument,
     currency: string,
   ): Promise<boolean> {
-    const stripeCoupon = await stripe.coupons.retrieve(stripeCouponId);
+    let stripeCoupon: Stripe.Coupon;
+    try {
+      stripeCoupon = await stripe.coupons.retrieve(stripeCouponId);
+    } catch {
+      return false;
+    }
     if (!stripeCoupon?.valid) return false;
     if (coupon.discountType === CouponDiscountType.PERCENTAGE) {
       return (

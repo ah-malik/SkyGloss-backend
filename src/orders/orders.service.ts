@@ -16,6 +16,7 @@ import {
   Order,
   OrderDocument,
   OrderStatus,
+  CancellationRequestStatus,
 } from './entities/order.entity';
 import {
   DuplicateInvoice,
@@ -452,6 +453,7 @@ export class OrdersService implements OnModuleInit {
     email: string,
     additionalMetadata: any = {},
     vatOptions?: RegistrationVatChoice,
+    couponCode?: string,
   ): Promise<{ url: string | null; id: string } | { paid: true; user: any }> {
     const user = await this.usersService.findOne(userId);
     const type = additionalMetadata.type || 'partner_registration';
@@ -494,37 +496,24 @@ export class OrdersService implements OnModuleInit {
     }
 
     let appliedShopCoupon: ShopRegistrationCouponResult | null = null;
-    let allowPromotionCodes = true;
+    // Shop registration coupons are entered in the payment modal. Stripe Checkout
+    // must not offer a second promotion-code field for this fee.
+    let allowPromotionCodes = !isShopRegistration;
     let registrationProductId: string | undefined;
 
     if (isShopRegistration) {
-      // Coupon may be redeemed on the shop registration form (stored on the user)
-      // or later on Stripe Checkout — never both, and never via this API body.
-      const requestedCode = user?.couponCode || '';
+      // Coupon may already be stored from the registration form, or entered now
+      // in the payment modal. One code per account; Stripe promos are not used.
+      const requestedCode = (couponCode || user?.couponCode || '').trim();
       if (requestedCode) {
         appliedShopCoupon = await this.couponsService.validateForShopRegistration(
           requestedCode,
           feeQuote,
           user?.couponCode,
         );
-        allowPromotionCodes = false;
         additionalMetadata.couponCode = appliedShopCoupon.code;
         additionalMetadata.registrationDiscount = appliedShopCoupon.discountAmount;
         additionalMetadata.finalAmount = appliedShopCoupon.totalAfterDiscount;
-      } else {
-        try {
-          registrationProductId = await this.stripeCouponSync.syncShopRegistrationPromos(
-            stripeInstance,
-            stripeAccountKey,
-            currency,
-          );
-        } catch (syncErr) {
-          this.logger.warn(
-            `Failed to sync shop registration coupons to Stripe: ${
-              (syncErr as Error)?.message || syncErr
-            }`,
-          );
-        }
       }
     }
 
@@ -681,7 +670,7 @@ export class OrdersService implements OnModuleInit {
   }
 
   /** Amounts shown before the shop chooses whether it has a VAT ID. */
-  async getShopRegistrationFeeQuote(userId: string) {
+  async getShopRegistrationFeeQuote(userId: string, requestedCouponCode?: string) {
     const user = await this.usersService.findOne(userId);
     const country = user?.country || '';
     const feeGroup = await this.registrationFeesService.findByCountry(country);
@@ -689,16 +678,19 @@ export class OrdersService implements OnModuleInit {
 
     let discount = 0;
     let couponCode: string | undefined;
-    if (user?.couponCode) {
+    const explicitCode = String(requestedCouponCode || '').trim();
+    const codeToPrice = explicitCode || user?.couponCode || '';
+    if (codeToPrice) {
       try {
         const coupon = await this.couponsService.validateForShopRegistration(
-          user.couponCode,
+          codeToPrice,
           feeQuote,
-          user.couponCode,
+          user?.couponCode,
         );
         discount = coupon.discountAmount;
         couponCode = coupon.code;
-      } catch {
+      } catch (err) {
+        if (explicitCode) throw err;
         discount = 0;
       }
     }
@@ -808,11 +800,14 @@ export class OrdersService implements OnModuleInit {
       .catch(() => undefined);
     const metadataCode = session.metadata?.couponCode;
     const couponCode = user?.couponCode || promoCode || metadataCode || undefined;
+    const codeToPersist = !user?.couponCode
+      ? promoCode || metadataCode
+      : undefined;
 
-    if (promoCode && !user?.couponCode) {
+    if (codeToPersist) {
       await this.usersService.update(
         String(user._id),
-        { couponCode: promoCode } as any,
+        { couponCode: codeToPersist } as any,
         { role: UserRole.ADMIN } as any,
       );
     }
@@ -1328,6 +1323,15 @@ export class OrdersService implements OnModuleInit {
         'Payment was not completed within 3 days. The order was automatically cancelled.';
       order.status = OrderStatus.CANCELLED;
       order.cancellationReason = reason;
+      if (order.cancellationRequest?.status === CancellationRequestStatus.PENDING) {
+        order.cancellationRequest = {
+          status: CancellationRequestStatus.APPROVED,
+          reason: order.cancellationRequest.reason,
+          requestedAt: order.cancellationRequest.requestedAt,
+          resolvedAt: new Date(),
+        };
+        order.markModified('cancellationRequest');
+      }
       await order.save();
 
       if (order.user) {
@@ -4269,7 +4273,6 @@ export class OrdersService implements OnModuleInit {
     orderId: string,
     shippingFeeInput: number,
     actor: UserDocument,
-    sendInvoice = false,
   ) {
     const order = await this.orderModel.findById(orderId).populate('user');
     if (!order) throw new NotFoundException('Order not found');
@@ -4311,68 +4314,7 @@ export class OrdersService implements OnModuleInit {
     order.invoiceUpdatedAt = new Date();
 
     const updatedOrder = await order.save();
-    if (sendInvoice) {
-      await this.tryAutoSendUpdatedInvoice(String(updatedOrder._id));
-    }
-    const latest = await this.orderModel.findById(updatedOrder._id).populate('user');
-    return this.returnManagedOrder(latest as OrderDocument, actor);
-  }
-
-  private async tryAutoSendUpdatedInvoice(orderId: string): Promise<boolean> {
-    try {
-      const order = await this.orderModel.findById(orderId).populate('user');
-      if (!order) return false;
-
-      if (isRegistrationOrder(order)) return false;
-
-      const status = String(order.status || '').toUpperCase();
-      if (
-        status === OrderStatus.SHIPPED ||
-        status === OrderStatus.DELIVERED ||
-        status === OrderStatus.CANCELLED ||
-        status === OrderStatus.FAILED
-      ) {
-        return false;
-      }
-
-      const userDoc =
-        typeof order.user === 'object' && order.user !== null
-          ? (order.user as any)
-          : await this.usersService.findOne(String(order.user));
-
-      const to = this.mailService.resolveCustomerEmail(order, userDoc);
-      if (!to) return false;
-
-      const amountPaid = getOrderAmountPaid(order);
-      const remaining = getOrderRemainingAmount(order);
-      const invoiceBuffer = await this.generateInvoicePdf(order);
-      const payUrl =
-        remaining > 0.01
-          ? this.getOrderDirectPayUrl(String(order._id))
-          : this.getOrderPayUrl(String(order._id), userDoc?.role);
-
-      await this.mailService.sendOrderInvoiceEmail(
-        to,
-        order,
-        userDoc,
-        invoiceBuffer,
-        {
-          payUrl,
-          amountPaid,
-          remainingAmount: remaining,
-        },
-      );
-
-      order.invoiceSentAt = new Date();
-      await order.save();
-      return true;
-    } catch (err) {
-      this.logger.error(
-        `Failed to auto-send updated invoice for order ${orderId}`,
-        (err as Error)?.stack || err,
-      );
-      return false;
-    }
+    return this.returnManagedOrder(updatedOrder, actor);
   }
 
   async sendOrderRequestInvoice(orderId: string, actor: UserDocument) {
@@ -4676,9 +4618,6 @@ export class OrdersService implements OnModuleInit {
       console.error('Failed to create notification for order append:', notifErr);
     }
 
-    if (dto.sendInvoice === true) {
-      await this.tryAutoSendUpdatedInvoice(String(updatedOrder._id));
-    }
     const latest = await this.orderModel.findById(updatedOrder._id).populate('user');
     return this.returnManagedOrder(latest as OrderDocument, actor);
   }
@@ -5106,40 +5045,13 @@ export class OrdersService implements OnModuleInit {
     purgeAt: Date;
     retentionDays: number;
   }> {
-    const order = await this.orderModel.findById(id).populate('user');
+    const order = await this.orderModel.findById(id);
     if (!order) throw new NotFoundException('Order not found');
     if ((order as any).deletedAt) {
       throw new BadRequestException('Order is already soft-deleted');
     }
 
-    if (order.status === OrderStatus.PAID && order.stripeSessionId) {
-      try {
-        const stripeInstance = this.getStripeForOrder(
-          order.shippingAddress?.country,
-          (order.user as any)?.country,
-        );
-
-        const session = await stripeInstance.checkout.sessions.retrieve(order.stripeSessionId);
-        if (session.payment_intent) {
-          await stripeInstance.refunds.create({
-            payment_intent: session.payment_intent as string,
-          });
-          console.log(`[Order Soft-Deleted] Refund issued for order ${order.orderNumber}`);
-        }
-      } catch (error) {
-        console.error(`[Order Soft-Deleted] Refund failed for order ${order.orderNumber}:`, error);
-      }
-    }
-
-    if (order.user) {
-      await this.mailService.sendOrderCancelledCustomerNotification(order, order.user).catch(err => {
-        console.error('Failed to send order cancelled email to customer', err);
-      });
-      await this.mailService.sendOrderCancelledAdminNotification(order, order.user).catch(err => {
-        console.error('Failed to send order cancelled email to admin', err);
-      });
-    }
-
+    // Delete only removes the order. Refunds and cancellation emails belong to cancelOrder.
     const payload = softDeleteSetPayload();
     await this.orderModel.findByIdAndUpdate(id, { $set: payload }).exec();
     return {
@@ -5147,6 +5059,271 @@ export class OrdersService implements OnModuleInit {
       purgeAt: payload.purgeAt,
       retentionDays: SOFT_DELETE_RETENTION_DAYS,
     };
+  }
+
+  /**
+   * Cancel keeps the order in history with CANCELLED status.
+   * Does not delete the record or send a cancellation-request notification.
+   */
+  async cancelOrder(id: string, actor?: UserDocument): Promise<Order> {
+    const order = await this.orderModel.findById(id).populate('user');
+    if (!order) throw new NotFoundException('Order not found');
+    if ((order as any).deletedAt) {
+      throw new BadRequestException('Order is already deleted');
+    }
+    if (order.status === OrderStatus.CANCELLED) {
+      if (order.cancellationRequest?.status === CancellationRequestStatus.PENDING) {
+        order.cancellationRequest = {
+          status: CancellationRequestStatus.APPROVED,
+          reason: order.cancellationRequest.reason,
+          requestedAt: order.cancellationRequest.requestedAt,
+          resolvedAt: new Date(),
+        };
+        order.markModified('cancellationRequest');
+        await order.save();
+      }
+      return this.getOrderById(id, actor);
+    }
+
+    const hadPendingRequest =
+      order.cancellationRequest?.status === CancellationRequestStatus.PENDING;
+    if (hadPendingRequest && order.cancellationRequest) {
+      order.cancellationRequest = {
+        status: CancellationRequestStatus.APPROVED,
+        reason: order.cancellationRequest.reason,
+        requestedAt: order.cancellationRequest.requestedAt,
+        resolvedAt: new Date(),
+        rejectionReason: order.cancellationRequest.rejectionReason,
+      };
+      order.markModified('cancellationRequest');
+    }
+    if (!order.cancellationReason) {
+      const requestReason = order.cancellationRequest?.reason?.trim();
+      order.cancellationReason =
+        requestReason || 'This order was cancelled by an administrator.';
+    }
+    await order.save();
+
+    await this.updateStatus(
+      id,
+      OrderStatus.CANCELLED,
+      undefined,
+      undefined,
+      actor,
+    );
+
+    if (hadPendingRequest) {
+      await this.notifyOrderCustomer(
+        order,
+        NotificationType.ORDER_CANCELLATION_APPROVED,
+        'Cancellation Approved',
+        `Your cancellation request for order ${order.orderNumber} was approved. The order is now cancelled.`,
+        actor?._id?.toString(),
+      );
+    }
+
+    return this.getOrderById(id, actor);
+  }
+
+  /**
+   * Customer asks to cancel. The order stays in its current status until an admin approves.
+   */
+  async requestOrderCancellation(
+    id: string,
+    userId: string,
+    reason?: string,
+  ): Promise<Order> {
+    const order = await this.orderModel.findById(id).populate('user');
+    if (!order) throw new NotFoundException('Order not found');
+
+    const orderUserId = this.resolveOrderUserId(order.user);
+    if (orderUserId !== String(userId)) {
+      throw new ForbiddenException('You can only request cancellation for your own orders');
+    }
+
+    this.assertCustomerCanRequestCancellation(order);
+
+    const trimmedReason = (reason || '').trim().slice(0, 500);
+    order.cancellationRequest = {
+      status: CancellationRequestStatus.PENDING,
+      reason: trimmedReason || undefined,
+      requestedAt: new Date(),
+    };
+    order.markModified('cancellationRequest');
+    await order.save();
+
+    await this.notifyAdminsOfCancellationRequest(order);
+
+    const requester = await this.usersService.findOne(userId);
+    return this.getOrderById(id, requester || undefined);
+  }
+
+  async approveCancellationRequest(
+    id: string,
+    actor: UserDocument,
+  ): Promise<Order> {
+    const order = await this.orderModel.findById(id);
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.cancellationRequest?.status !== CancellationRequestStatus.PENDING) {
+      throw new BadRequestException('There is no pending cancellation request for this order');
+    }
+    return this.cancelOrder(id, actor);
+  }
+
+  async rejectCancellationRequest(
+    id: string,
+    actor: UserDocument,
+    rejectionReason?: string,
+  ): Promise<Order> {
+    const order = await this.orderModel.findById(id).populate('user');
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.cancellationRequest?.status !== CancellationRequestStatus.PENDING) {
+      throw new BadRequestException('There is no pending cancellation request for this order');
+    }
+
+    const note = (rejectionReason || '').trim().slice(0, 500);
+    order.cancellationRequest = {
+      status: CancellationRequestStatus.REJECTED,
+      reason: order.cancellationRequest.reason,
+      requestedAt: order.cancellationRequest.requestedAt,
+      resolvedAt: new Date(),
+      rejectionReason: note || undefined,
+    };
+    order.markModified('cancellationRequest');
+    await order.save();
+
+    await this.notifyOrderCustomer(
+      order,
+      NotificationType.ORDER_CANCELLATION_REJECTED,
+      'Cancellation Request Declined',
+      note
+        ? `Your cancellation request for order ${order.orderNumber} was declined. ${note}`
+        : `Your cancellation request for order ${order.orderNumber} was declined. The order is unchanged.`,
+      actor?._id?.toString(),
+    );
+
+    return this.getOrderById(id, actor);
+  }
+
+  private assertCustomerCanRequestCancellation(order: OrderDocument): void {
+    if (isRegistrationOrder(order)) {
+      throw new BadRequestException('This order cannot be cancelled');
+    }
+    if (
+      order.status === OrderStatus.SHIPPED ||
+      order.status === OrderStatus.DELIVERED ||
+      order.shippedAt
+    ) {
+      throw new BadRequestException(
+        'This order can no longer be cancelled because it has already been shipped.',
+      );
+    }
+    if (order.status === OrderStatus.CANCELLED) {
+      throw new BadRequestException('This order is already cancelled');
+    }
+    if (order.status === OrderStatus.FAILED) {
+      throw new BadRequestException('This order cannot be cancelled');
+    }
+    if (
+      order.status !== OrderStatus.PENDING &&
+      order.status !== OrderStatus.PENDING_PAYMENT &&
+      order.status !== OrderStatus.PAID
+    ) {
+      throw new BadRequestException('This order cannot be cancelled');
+    }
+    if (order.cancellationRequest?.status === CancellationRequestStatus.PENDING) {
+      throw new BadRequestException(
+        'A cancellation request is already waiting for admin review',
+      );
+    }
+  }
+
+  private resolveOrderUserId(user: unknown): string {
+    if (user && typeof user === 'object' && '_id' in (user as object)) {
+      return String((user as { _id: unknown })._id);
+    }
+    return String(user || '');
+  }
+
+  private async notifyAdminsOfCancellationRequest(order: OrderDocument): Promise<void> {
+    const admins = await this.usersService.findAdminUsers();
+    const customer = order.user as { firstName?: string; lastName?: string; _id?: unknown };
+    const customerName = [customer?.firstName, customer?.lastName]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+    const requesterId = this.resolveOrderUserId(order.user);
+    const message = `${customerName || 'A customer'} requested cancellation for order ${order.orderNumber}.`;
+
+    if (!admins.length) {
+      this.logger.warn(
+        `No admin users found to notify about cancellation request ${order.orderNumber}`,
+      );
+      return;
+    }
+
+    for (const admin of admins) {
+      try {
+        const notification = await this.notificationsService.create({
+          type: NotificationType.ORDER_CANCELLATION_REQUESTED,
+          title: 'Order Cancellation Request',
+          message,
+          metadata: {
+            orderId: order._id,
+            orderNumber: order.orderNumber,
+          },
+          user: admin._id.toString(),
+          triggeredBy: requesterId,
+          link: `/orders/${order._id}`,
+        });
+        this.notificationsGateway.broadcastNotification(notification);
+      } catch (err) {
+        this.logger.error(
+          `Failed to notify admin ${admin._id} about cancellation request ${order.orderNumber}`,
+          err,
+        );
+      }
+    }
+  }
+
+  private async notifyOrderCustomer(
+    order: { _id: unknown; orderNumber?: string; user?: unknown },
+    type: NotificationType,
+    title: string,
+    message: string,
+    triggeredBy?: string,
+  ): Promise<void> {
+    const customer = order.user as { _id?: unknown; role?: string } | string | undefined;
+    const customerId = this.resolveOrderUserId(customer);
+    if (!customerId) return;
+
+    const role =
+      customer && typeof customer === 'object' ? customer.role : undefined;
+    const link =
+      role === UserRole.CERTIFIED_SHOP
+        ? `/dashboard/shop/receipt/${order._id}`
+        : `/dashboard/partner/receipt/${order._id}`;
+
+    try {
+      const notification = await this.notificationsService.create({
+        type,
+        title,
+        message,
+        metadata: {
+          orderId: order._id,
+          orderNumber: order.orderNumber,
+        },
+        user: customerId,
+        triggeredBy,
+        link,
+      });
+      this.notificationsGateway.broadcastNotification(notification);
+    } catch (err) {
+      this.logger.error(
+        `Failed to notify customer about ${type} for order ${order.orderNumber}`,
+        err,
+      );
+    }
   }
 
   async restoreOrder(id: string): Promise<{ success: boolean; order: OrderDocument }> {

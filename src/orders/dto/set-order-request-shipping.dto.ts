@@ -1,4 +1,4 @@
-import { IsBoolean, IsNumber, IsOptional, Max, Min } from 'class-validator';
+import { IsNumber, Max, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class SetOrderRequestShippingDto {
@@ -7,8 +7,4 @@ export class SetOrderRequestShippingDto {
   @Min(0)
   @Max(1_000_000)
   shippingFee: number;
-
-  @IsBoolean()
-  @IsOptional()
-  sendInvoice?: boolean;
 }

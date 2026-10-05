@@ -139,6 +139,7 @@ export const FRONTEND_APIS: ApiEndpointDef[] = [
   def('frontend', 'Orders', 'POST', '/orders/:id/add-items', 'Hub/Admin add items to existing order'),
   def('frontend', 'Orders', 'POST', '/orders/request', 'Create order request'),
   def('frontend', 'Orders', 'POST', '/orders/admin/:id/status', 'Update order status'),
+  def('frontend', 'Orders', 'POST', '/orders/:id/cancellation-request', 'Request order cancellation'),
 
   // Certifications
   def(
@@ -354,6 +355,21 @@ export const ADMIN_APIS: ApiEndpointDef[] = [
   def('admin', 'Orders', 'GET', '/orders/admin/stats', 'Order dashboard stats'),
   def('admin', 'Orders', 'POST', '/orders/admin/test-order', 'Create test order'),
   def('admin', 'Orders', 'POST', '/orders/admin/:id/status', 'Update order status'),
+  def('admin', 'Orders', 'POST', '/orders/admin/:id/cancel', 'Cancel order'),
+  def(
+    'admin',
+    'Orders',
+    'POST',
+    '/orders/admin/:id/cancellation-request/approve',
+    'Approve cancellation request',
+  ),
+  def(
+    'admin',
+    'Orders',
+    'POST',
+    '/orders/admin/:id/cancellation-request/reject',
+    'Reject cancellation request',
+  ),
   def('admin', 'Orders', 'DELETE', '/orders/admin/:id', 'Delete order'),
   def('admin', 'Orders', 'GET', '/orders/admin/exchange-rates', 'Get exchange rates'),
   def('admin', 'Orders', 'POST', '/orders/admin/exchange-rates', 'Update exchange rate'),

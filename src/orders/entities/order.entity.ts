@@ -15,6 +15,13 @@ export enum OrderStatus {
   FAILED = 'FAILED',
 }
 
+/** Customer cancellation request. Does not change Order.status until an admin approves it. */
+export enum CancellationRequestStatus {
+  PENDING = 'PENDING',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
+}
+
 @Schema()
 export class OrderItem {
   @Prop({ type: String, required: true })
@@ -209,6 +216,30 @@ export class Order {
 
   @Prop()
   cancellationReason?: string;
+
+  /**
+   * Customer cancellation request. Pending requests do not cancel or delete the order.
+   * Admin approval sets status to CANCELLED; rejection leaves the order status unchanged.
+   */
+  @Prop({
+    type: {
+      status: {
+        type: String,
+        enum: Object.values(CancellationRequestStatus),
+      },
+      reason: { type: String },
+      requestedAt: { type: Date },
+      resolvedAt: { type: Date },
+      rejectionReason: { type: String },
+    },
+  })
+  cancellationRequest?: {
+    status: CancellationRequestStatus;
+    reason?: string;
+    requestedAt?: Date;
+    resolvedAt?: Date;
+    rejectionReason?: string;
+  };
 
   @Prop({ default: 0 })
   paymentReminderCount?: number;
