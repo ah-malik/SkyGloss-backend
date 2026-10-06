@@ -19,18 +19,18 @@ describe('commission hold config', () => {
     else process.env.COMMISSION_HOLD_DAYS = originalDays;
   });
 
-  it('uses 30 days only for the portal URL', () => {
+  it('uses 15 days only for the portal URL', () => {
     process.env.FRONTEND_URL = 'https://portal.skygloss.com/';
     process.env.COMMISSION_HOLD_MINUTES = '1';
     expect(isPortalCommissionHold()).toBe(true);
-    expect(getCommissionHoldMs()).toBe(30 * 24 * 60 * 60 * 1000);
+    expect(getCommissionHoldMs()).toBe(15 * 24 * 60 * 60 * 1000);
     expect(useFrequentCommissionReleaseCron()).toBe(false);
   });
 
   it('accepts the portal URL without a trailing slash', () => {
     process.env.FRONTEND_URL = 'https://portal.skygloss.com';
     expect(isPortalCommissionHold()).toBe(true);
-    expect(getCommissionHoldMs()).toBe(30 * 24 * 60 * 60 * 1000);
+    expect(getCommissionHoldMs()).toBe(15 * 24 * 60 * 60 * 1000);
   });
 
   it('uses COMMISSION_HOLD_MINUTES for every non-portal URL', () => {

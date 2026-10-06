@@ -112,6 +112,7 @@ import {
   getNextShopOrderSequenceForFlow,
   getShopOrderNumberRegex,
   isOrderRequest,
+  ORDER_SEQUENCE_STEP,
   type ShopOrderFlow,
 } from '../common/order-number';
 import { normalizeCurrencyCode } from '../common/currency-codes';
@@ -2620,7 +2621,7 @@ export class OrdersService implements OnModuleInit {
     const orders = await this.orderModel
       .find()
       .select(
-        'orderNumber status totalAmount currency shippingFee discount couponCode items shippingAddress trackingId shippingCompany orderFlow createdAt updatedAt user commissions originalCurrency originalAmount baseCurrencyAmount actingParentPartnerCode',
+        'orderNumber status totalAmount currency shippingFee discount couponCode items shippingAddress trackingId shippingCompany orderFlow createdAt updatedAt user commissions originalCurrency originalAmount baseCurrencyAmount actingParentPartnerCode cancellationRequest',
       )
       .populate(
         'user',
@@ -5703,26 +5704,39 @@ export class OrdersService implements OnModuleInit {
     country: string,
     flow: ShopOrderFlow,
   ): Promise<string> {
-    const nextSequence = await this.getNextShopOrderSequence(flow);
-    return formatShopOrderNumber(flow, nextSequence, country);
+    let sequence = await this.getNextShopOrderSequence(flow);
+    for (let attempt = 0; attempt < 25; attempt++) {
+      const orderNumber = formatShopOrderNumber(flow, sequence, country);
+      const taken = await this.orderModel
+        .findOne({ orderNumber })
+        .select('_id')
+        .setOptions({ withDeleted: true })
+        .lean()
+        .exec();
+      if (!taken) return orderNumber;
+      sequence += ORDER_SEQUENCE_STEP;
+    }
+    throw new BadRequestException('Could not allocate a unique order number');
   }
 
   private async getNextShopOrderSequence(
     flow: ShopOrderFlow,
   ): Promise<number> {
+    // Include soft-deleted orders. Their orderNumber is still unique, so a
+    // deleted SGCHN0397 must not be issued again.
     const matchingOrders = await this.orderModel
       .find({
-        orderFlow: flow,
         orderNumber: { $regex: getShopOrderNumberRegex(flow) },
       })
-      .select('orderNumber orderFlow')
+      .select('orderNumber')
+      .setOptions({ withDeleted: true })
       .lean()
       .exec();
 
     return getNextShopOrderSequenceForFlow(
       matchingOrders.map((order) => ({
         orderNumber: (order as { orderNumber?: string }).orderNumber,
-        orderFlow: (order as { orderFlow?: ShopOrderFlow }).orderFlow,
+        orderFlow: flow,
       })),
       flow,
     );
@@ -5732,15 +5746,27 @@ export class OrdersService implements OnModuleInit {
     const matchingOrders = await this.orderModel
       .find({ orderNumber: { $regex: /^SGREG\d+$/i } })
       .select('orderNumber')
+      .setOptions({ withDeleted: true })
       .lean()
       .exec();
 
-    const nextNumber = getNextRegistrationOrderSequence(
+    let sequence = getNextRegistrationOrderSequence(
       matchingOrders.map(
         (order) => (order as { orderNumber?: string }).orderNumber,
       ),
     );
-    return formatRegistrationOrderNumber(nextNumber);
+    for (let attempt = 0; attempt < 25; attempt++) {
+      const orderNumber = formatRegistrationOrderNumber(sequence);
+      const taken = await this.orderModel
+        .findOne({ orderNumber })
+        .select('_id')
+        .setOptions({ withDeleted: true })
+        .lean()
+        .exec();
+      if (!taken) return orderNumber;
+      sequence += ORDER_SEQUENCE_STEP;
+    }
+    throw new BadRequestException('Could not allocate a unique order number');
   }
 
   private itemLineKey(item: {

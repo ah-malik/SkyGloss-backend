@@ -11,8 +11,8 @@ export enum CommissionLifecycleStatus {
   CANCELLED = 'cancelled',
 }
 
-/** @deprecated Use commission-hold.config.ts — portal hold is 30 days */
-export const COMMISSION_HOLD_DAYS = 30;
+/** @deprecated Use commission-hold.config.ts — portal hold is 15 days */
+export const COMMISSION_HOLD_DAYS = 15;
 
 @Schema({ timestamps: true })
 export class CommissionRecord {

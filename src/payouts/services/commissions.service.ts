@@ -6,7 +6,10 @@ import {
   CommissionRecord,
   CommissionRecordDocument,
 } from '../entities/commission-record.entity';
-import { computeCommissionAvailableAt } from '../commission-hold.config';
+import {
+  computeCommissionAvailableAt,
+  getCommissionHoldMs,
+} from '../commission-hold.config';
 import { Order, OrderDocument, OrderStatus } from '../../orders/entities/order.entity';
 import { ApprovalAction, AuditService } from './audit.service';
 import { NotificationsService } from '../../notifications/notifications.service';
@@ -213,7 +216,41 @@ export class CommissionsService {
     );
   }
 
+  /**
+   * Pending holds created under a longer window (previously 30 days) move to
+   * the current hold. Available, locked, withdrawn, and cancelled rows stay put.
+   * Minute holds are for new local shipments only and do not rewrite history.
+   */
+  private async alignPendingHoldToCurrentWindow(): Promise<void> {
+    const holdMs = getCommissionHoldMs();
+    if (holdMs < 24 * 60 * 60 * 1000) return;
+
+    const result = await this.commissionModel.updateMany(
+      {
+        status: CommissionLifecycleStatus.PENDING_HOLD,
+        shippedAt: { $type: 'date' },
+        $expr: {
+          $gt: ['$availableAt', { $add: ['$shippedAt', holdMs] }],
+        },
+      },
+      [
+        {
+          $set: {
+            availableAt: { $add: ['$shippedAt', holdMs] },
+          },
+        },
+      ],
+    );
+
+    if (result.modifiedCount > 0) {
+      this.logger.log(
+        `Aligned ${result.modifiedCount} pending commission hold(s) to the current window`,
+      );
+    }
+  }
+
   async releaseAvailableCommissions(): Promise<number> {
+    await this.alignPendingHoldToCurrentWindow();
     const now = new Date();
     const pending = await this.commissionModel.find({
       status: CommissionLifecycleStatus.PENDING_HOLD,

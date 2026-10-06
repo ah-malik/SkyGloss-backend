@@ -1,5 +1,5 @@
 /** Portal (https://portal.skygloss.com/) hold — days after shipment. */
-export const COMMISSION_HOLD_DAYS_PRODUCTION = 30;
+export const COMMISSION_HOLD_DAYS_PRODUCTION = 15;
 
 /** Non-portal default when COMMISSION_HOLD_MINUTES is unset. */
 export const COMMISSION_HOLD_MINUTES_DEV = 1;
@@ -60,7 +60,7 @@ export function getCommissionHoldDescription(): string {
   return `${minutes} minute(s) after shipment`;
 }
 
-/** Minute holds need a frequent release. The portal 30-day hold stays hourly. */
+/** Minute holds need a frequent release. The portal day hold stays hourly. */
 export function useFrequentCommissionReleaseCron(): boolean {
   return !isPortalCommissionHold();
 }

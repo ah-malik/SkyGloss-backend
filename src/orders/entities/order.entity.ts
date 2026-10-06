@@ -203,7 +203,7 @@ export class Order {
   @Prop()
   actingParentPartnerCode?: string;
 
-  /** Set when order is first marked SHIPPED (30-day commission hold starts). */
+  /** Set when order is first marked SHIPPED (commission hold starts). */
   @Prop()
   shippedAt?: Date;
 
