@@ -225,6 +225,7 @@ export class CommissionsService {
     const holdMs = getCommissionHoldMs();
     if (holdMs < 24 * 60 * 60 * 1000) return;
 
+    // Aggregation-pipeline updates need updatePipeline on Mongoose 8+/9.
     const result = await this.commissionModel.updateMany(
       {
         status: CommissionLifecycleStatus.PENDING_HOLD,
@@ -240,6 +241,7 @@ export class CommissionsService {
           },
         },
       ],
+      { updatePipeline: true },
     );
 
     if (result.modifiedCount > 0) {
