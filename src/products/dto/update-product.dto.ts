@@ -11,4 +11,12 @@ export class UpdateProductDto extends PartialType(CreateProductDto) {
   @IsString()
   @IsOptional()
   sdsAetherUrlDutch?: string;
+
+  @IsString()
+  @IsOptional()
+  sdsUrlSpanish?: string;
+
+  @IsString()
+  @IsOptional()
+  sdsAetherUrlSpanish?: string;
 }

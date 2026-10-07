@@ -56,10 +56,16 @@ export class Product {
   sdsUrlDutch?: string;
 
   @Prop()
+  sdsUrlSpanish?: string;
+
+  @Prop()
   sdsAetherUrl?: string;
 
   @Prop()
   sdsAetherUrlDutch?: string;
+
+  @Prop()
+  sdsAetherUrlSpanish?: string;
 
   @Prop()
   applicationGuideUrl?: string;
