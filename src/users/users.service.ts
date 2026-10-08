@@ -923,6 +923,7 @@ export class UsersService implements OnModuleInit {
 
     this.normalizeCustomCommissionRate(userData.role, userData);
     this.normalizePartnerIntroRatePercent(userData.role, userData);
+    this.normalizePartnerDiscountPercent(userData.role, userData);
 
     // Auto-geocode if coordinates are missing
     if (!userData.latitude || !userData.longitude) {
@@ -3184,6 +3185,23 @@ export class UsersService implements OnModuleInit {
       } else {
         this.normalizePartnerIntroRatePercent(roleAfterUpdate, updatePayload);
       }
+    }
+
+    // Account order discount is Admin-only and never applies to shops.
+    if (updatePayload.partnerDiscountPercent !== undefined) {
+      if (currentUser.role !== UserRole.ADMIN) {
+        delete updatePayload.partnerDiscountPercent;
+      } else if (!isPartnerNetworkRole(roleAfterUpdate)) {
+        updatePayload.partnerDiscountPercent = null;
+      } else {
+        this.normalizePartnerDiscountPercent(roleAfterUpdate, updatePayload);
+      }
+    } else if (
+      currentUser.role === UserRole.ADMIN &&
+      updatePayload.role &&
+      !isPartnerNetworkRole(roleAfterUpdate)
+    ) {
+      updatePayload.partnerDiscountPercent = null;
     }
 
     // Shop-only commission rate overrides (Admin + Hub for managed shops).
@@ -5941,6 +5959,35 @@ export class UsersService implements OnModuleInit {
       );
     }
     payload.partnerIntroRatePercent = rate;
+  }
+
+  /**
+   * Partner-network accounts only. Shops and other roles cannot keep this rate.
+   * Blank / null clears it. Does not copy the rate onto any other user.
+   */
+  private normalizePartnerDiscountPercent(
+    role: UserRole,
+    payload: { partnerDiscountPercent?: number | null },
+  ): void {
+    if (!isPartnerNetworkRole(role)) {
+      delete payload.partnerDiscountPercent;
+      return;
+    }
+    if (payload.partnerDiscountPercent === undefined) return;
+    if (
+      payload.partnerDiscountPercent === null ||
+      (payload.partnerDiscountPercent as unknown) === ''
+    ) {
+      payload.partnerDiscountPercent = null;
+      return;
+    }
+    const rate = Number(payload.partnerDiscountPercent);
+    if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+      throw new BadRequestException(
+        'Discount must be a number between 0 and 100',
+      );
+    }
+    payload.partnerDiscountPercent = rate;
   }
 
   private normalizeShopCommissionRateField(

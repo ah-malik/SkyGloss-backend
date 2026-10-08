@@ -115,6 +115,7 @@ import {
   ORDER_SEQUENCE_STEP,
   type ShopOrderFlow,
 } from '../common/order-number';
+import { applyPartnerAccountDiscount } from '../common/partner-order-discount';
 import { normalizeCurrencyCode } from '../common/currency-codes';
 import { normalizeOrderItemType } from '../common/order-type';
 import { resolveOrderLinePrice } from '../common/units-per-case';
@@ -899,6 +900,12 @@ export class OrdersService implements OnModuleInit {
     if (includesCertificationKit) {
       discount = Math.max(discount, kitResolved.kitDiscount);
     }
+    const accountDiscount = applyPartnerAccountDiscount(
+      currentUser,
+      itemsSubtotal,
+      discount,
+    );
+    discount = accountDiscount.discount;
 
     const { rate: vatRate, amount: vatAmount } = calculateEuropeOrderVatAmount(
       getOrderVatTaxableBase(itemsSubtotal, discount),
@@ -944,6 +951,9 @@ export class OrdersService implements OnModuleInit {
           orderFlow: 'purchase',
           paymentReminderCount: 0,
           discount,
+          ...(accountDiscount.partnerDiscountPercent
+            ? { partnerDiscountPercent: accountDiscount.partnerDiscountPercent }
+            : {}),
           couponCode: appliedCouponCode,
           includesCertificationKit: includesCertificationKit || undefined,
           ...(await this.actingParentStampForUser(userId)),
@@ -2621,7 +2631,7 @@ export class OrdersService implements OnModuleInit {
     const orders = await this.orderModel
       .find()
       .select(
-        'orderNumber status totalAmount currency shippingFee discount couponCode items shippingAddress trackingId shippingCompany orderFlow createdAt updatedAt user commissions originalCurrency originalAmount baseCurrencyAmount actingParentPartnerCode cancellationRequest',
+        'orderNumber status totalAmount currency shippingFee discount partnerDiscountPercent couponCode items shippingAddress trackingId shippingCompany orderFlow createdAt updatedAt user commissions originalCurrency originalAmount baseCurrencyAmount actingParentPartnerCode cancellationRequest',
       )
       .populate(
         'user',
@@ -4699,6 +4709,12 @@ export class OrdersService implements OnModuleInit {
       if (includesCertificationKit) {
         discount = Math.max(discount, kitResolved.kitDiscount);
       }
+      const accountDiscount = applyPartnerAccountDiscount(
+        currentUser,
+        itemsSubtotal,
+        discount,
+      );
+      discount = accountDiscount.discount;
 
       const { rate: vatRate, amount: vatAmount } = calculateEuropeOrderVatAmount(
         getOrderVatTaxableBase(itemsSubtotal, discount),
@@ -4733,6 +4749,9 @@ export class OrdersService implements OnModuleInit {
             orderNumber,
             orderFlow: 'request',
             discount,
+            ...(accountDiscount.partnerDiscountPercent
+              ? { partnerDiscountPercent: accountDiscount.partnerDiscountPercent }
+              : {}),
             couponCode: appliedCouponCode,
             includesCertificationKit: includesCertificationKit || undefined,
             ...(await this.actingParentStampForUser(userId)),

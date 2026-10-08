@@ -74,6 +74,7 @@ export function shouldHideShopRegistrationFromViewer(
 }
 export function getDiscountDisplayLabel(order: {
   couponCode?: string;
+  partnerDiscountPercent?: number | null;
   items?: { product?: string }[];
   orderNumber?: string;
 }): string {
@@ -83,8 +84,17 @@ export function getDiscountDisplayLabel(order: {
     }
     return 'Discount';
   }
+  const percent = Number(order.partnerDiscountPercent);
+  const partnerLabel =
+    Number.isFinite(percent) && percent > 0 ? `${percent}%` : '';
+  if (order.couponCode && partnerLabel) {
+    return `Discount (${order.couponCode} + ${partnerLabel})`;
+  }
   if (order.couponCode) {
     return `Discount (${order.couponCode})`;
+  }
+  if (partnerLabel) {
+    return `Discount (${partnerLabel})`;
   }
   return 'Discount';
 }

@@ -399,6 +399,14 @@ export class User {
   @Prop({ min: 0, max: 100 })
   partnerIntroRatePercent?: number;
 
+  /**
+   * Order discount % for this account only.
+   * Applied when this user places an order. Not inherited by parent or child accounts.
+   * Omit / null / 0 → no account discount.
+   */
+  @Prop({ type: Number, min: 0, max: 100 })
+  partnerDiscountPercent?: number | null;
+
   /** Soft-delete timestamp. Null / missing = active. */
   @Prop({ type: Date, default: null, index: true })
   deletedAt?: Date | null;

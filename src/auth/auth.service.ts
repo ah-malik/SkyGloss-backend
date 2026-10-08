@@ -135,6 +135,10 @@ export class AuthService {
       enrolledAt: user.enrolledAt || null,
       certifiedAt: user.certifiedAt || null,
       partnerCode: user.partnerCode,
+      partnerDiscountPercent:
+        user.partnerDiscountPercent != null
+          ? Number(user.partnerDiscountPercent)
+          : null,
       hasSeenWelcomePopup: user.hasSeenWelcomePopup,
       mustChangePassword: !!user.mustChangePassword,
       preferredLanguage: user.preferredLanguage,

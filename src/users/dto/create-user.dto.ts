@@ -221,6 +221,16 @@ export class CreateUserDto {
   partnerIntroRatePercent?: number | null;
 
   /**
+   * Account-only order discount %. Applies only when this user places an order.
+   * Null clears it. Not used for shops.
+   */
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  @IsOptional()
+  partnerDiscountPercent?: number | null;
+
+  /**
    * Legacy FO rate field aliases (still accepted).
    * Prefer customCommissionRate / partnerIntroRatePercent.
    */

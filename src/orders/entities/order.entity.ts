@@ -177,6 +177,13 @@ export class Order {
   @Prop({ default: 0 })
   discount?: number;
 
+  /**
+   * Snapshot of the ordering account's own discount % at placement.
+   * Included in `discount`. Not copied from parent or child accounts.
+   */
+  @Prop({ min: 0, max: 100 })
+  partnerDiscountPercent?: number;
+
   @Prop()
   couponCode?: string;
 
