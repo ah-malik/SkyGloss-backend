@@ -78,6 +78,10 @@ Duplicate protection: one transfer record per order (`orderId` unique) and stabl
 # Enable/disable automatic processing (default: enabled)
 AUTO_COMMISSION_STRIPE_TO_WISE=true
 
+# Pause Europe Stripe → Wise only (default: enabled). Global/USA are unaffected.
+# Pending Europe records stay queued and can still be retried manually from admin.
+AUTO_COMMISSION_EUROPE_STRIPE_TO_WISE=false
+
 # Source for Global/USA automated transfers: financial_account | payments_balance
 # Europe always uses payments_balance regardless of this setting.
 AUTO_COMMISSION_SOURCE_TYPE=financial_account

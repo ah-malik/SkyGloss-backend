@@ -115,9 +115,26 @@ export class OrderCommissionTransferService implements OnModuleInit {
   }
 
   isAutoTransferEnabled(): boolean {
-    const raw = this.config.get<string>('AUTO_COMMISSION_STRIPE_TO_WISE');
-    if (raw == null || raw === '') return true;
+    return this.isEnvFlagEnabled('AUTO_COMMISSION_STRIPE_TO_WISE', true);
+  }
+
+  /** Temporary pause for Europe Stripe → Wise only. Global/USA keep sending. */
+  isEuropeAutoTransferEnabled(): boolean {
+    return this.isEnvFlagEnabled('AUTO_COMMISSION_EUROPE_STRIPE_TO_WISE', true);
+  }
+
+  private isEnvFlagEnabled(key: string, defaultValue: boolean): boolean {
+    const raw = this.config.get<string>(key);
+    if (raw == null || String(raw).trim() === '') return defaultValue;
     return !['0', 'false', 'no', 'off'].includes(String(raw).trim().toLowerCase());
+  }
+
+  private shouldAutoSend(stripeAccountKey?: string | null): boolean {
+    if (!this.isAutoTransferEnabled()) return false;
+    if (String(stripeAccountKey || '').toLowerCase() === 'europe') {
+      return this.isEuropeAutoTransferEnabled();
+    }
+    return true;
   }
 
   async enqueueFromPaidOrder(
@@ -199,7 +216,7 @@ export class OrderCommissionTransferService implements OnModuleInit {
       this.logger.log(
         `Queued commission transfer for order ${order.orderNumber}: ${commissionAmount} ${created.currency}`,
       );
-      if (this.isAutoTransferEnabled()) {
+      if (this.shouldAutoSend(created.stripeAccountKey)) {
         void this.processTransfer(created).catch((err) =>
           this.logger.warn(
             `Immediate commission transfer attempt failed for ${order.orderNumber}: ${
@@ -246,6 +263,7 @@ export class OrderCommissionTransferService implements OnModuleInit {
       limit,
       totalPages: Math.max(1, Math.ceil(total / limit)),
       autoTransferEnabled: this.isAutoTransferEnabled(),
+      europeAutoTransferEnabled: this.isEuropeAutoTransferEnabled(),
     };
   }
 
@@ -276,7 +294,7 @@ export class OrderCommissionTransferService implements OnModuleInit {
     item.status = 'pending';
     item.errorReason = undefined;
     await item.save();
-    await this.processTransfer(item);
+    await this.processTransfer(item, { manual: true });
     return this.toPublicTransfer(item);
   }
 
@@ -291,7 +309,14 @@ export class OrderCommissionTransferService implements OnModuleInit {
         .sort({ createdAt: 1 })
         .limit(25)
         .exec();
+      let skippedEurope = 0;
       for (const item of pending) {
+        if (!this.shouldAutoSend(item.stripeAccountKey)) {
+          if (String(item.stripeAccountKey || '').toLowerCase() === 'europe') {
+            skippedEurope += 1;
+          }
+          continue;
+        }
         try {
           await this.processTransfer(item);
         } catch (err) {
@@ -301,6 +326,11 @@ export class OrderCommissionTransferService implements OnModuleInit {
             }`,
           );
         }
+      }
+      if (skippedEurope > 0) {
+        this.logger.debug(
+          `Skipped ${skippedEurope} Europe commission transfer(s); Europe auto-send is paused.`,
+        );
       }
     } finally {
       this.processing = false;
@@ -335,8 +365,9 @@ export class OrderCommissionTransferService implements OnModuleInit {
 
   private async processTransfer(
     transfer: OrderCommissionTransferDocument,
+    options?: { manual?: boolean },
   ): Promise<void> {
-    if (!this.isAutoTransferEnabled()) return;
+    if (!options?.manual && !this.shouldAutoSend(transfer.stripeAccountKey)) return;
     if (!['pending', 'failed'].includes(transfer.status)) return;
 
     if (!this.systemAdminId) {
