@@ -2640,7 +2640,7 @@ export class OrdersService implements OnModuleInit {
     const orders = await this.orderModel
       .find()
       .select(
-        'orderNumber status totalAmount currency shippingFee discount partnerDiscountPercent couponCode items shippingAddress trackingId shippingCompany orderFlow createdAt updatedAt user commissions originalCurrency originalAmount baseCurrencyAmount actingParentPartnerCode cancellationRequest',
+        'orderNumber status totalAmount amountPaid paidConfirmationEmailSentAt inventoryDeductedAt currency shippingFee discount partnerDiscountPercent couponCode items shippingAddress trackingId shippingCompany orderFlow createdAt updatedAt user commissions originalCurrency originalAmount baseCurrencyAmount actingParentPartnerCode cancellationRequest',
       )
       .populate(
         'user',
