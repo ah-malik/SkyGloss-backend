@@ -11,6 +11,7 @@ export enum UserActivityAction {
   USER_UNBLOCKED = 'user_unblocked',
   STATUS_CHANGE = 'status_change',
   REGISTER = 'register',
+  ORDER_UPDATE = 'order_update',
 }
 
 @Schema({ timestamps: true, collection: 'user_activity_logs' })

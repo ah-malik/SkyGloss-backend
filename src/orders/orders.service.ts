@@ -22,6 +22,10 @@ import {
   DuplicateInvoice,
   DuplicateInvoiceDocument,
 } from './entities/duplicate-invoice.entity';
+import {
+  OrderActivityLog,
+  OrderActivityLogDocument,
+} from './entities/order-activity-log.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { AddOrderItemsDto } from './dto/add-order-items.dto';
 import { CreateDuplicateInvoiceDto } from './dto/create-duplicate-invoice.dto';
@@ -33,6 +37,8 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
 import { NotificationType } from '../notifications/entities/notification.entity';
 import { UsersService } from '../users/users.service';
+import { UserActivityService } from '../user-activity/user-activity.service';
+import { UserActivityAction } from '../user-activity/entities/user-activity-log.entity';
 import { MailService } from '../mail/mail.service';
 import { UserDocument, UserRole, UserStatus } from '../users/entities/user.entity';
 import { normalizePartnerCode } from '../common/partner-code';
@@ -169,6 +175,8 @@ export class OrdersService implements OnModuleInit {
     @InjectModel(Order.name) private orderModel: Model<OrderDocument>,
     @InjectModel(DuplicateInvoice.name)
     private duplicateInvoiceModel: Model<DuplicateInvoiceDocument>,
+    @InjectModel(OrderActivityLog.name)
+    private orderActivityModel: Model<OrderActivityLogDocument>,
     @InjectModel(ProductGroup.name) private productGroupModel: Model<ProductGroupDocument>,
     private configService: ConfigService,
     private notificationsService: NotificationsService,
@@ -187,6 +195,7 @@ export class OrdersService implements OnModuleInit {
     private productInventoryService: ProductInventoryService,
     private readonly cache: RedisCacheService,
     private fedexService: FedexService,
+    private userActivityService: UserActivityService,
   ) {
     const stripeSecretKey = this.configService.get<string>('STRIPE_SECRET_KEY');
     const usaStripeSecretKey = this.configService.get<string>('USA_STRIPE_SECRET_KEY');
@@ -3856,6 +3865,88 @@ export class OrdersService implements OnModuleInit {
     }
   }
 
+  async getOrderActivity(orderId: string) {
+    if (!Types.ObjectId.isValid(orderId)) {
+      throw new NotFoundException('Order not found');
+    }
+    const exists = await this.orderModel.exists({ _id: orderId });
+    if (!exists) throw new NotFoundException('Order not found');
+    return this.orderActivityModel
+      .find({ orderId: new Types.ObjectId(orderId) })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean()
+      .exec();
+  }
+
+  /**
+   * Records who changed an order. Logging failures must not affect the order.
+   */
+  private async recordOrderActorActivity(input: {
+    order: { _id: unknown; orderNumber?: string };
+    actor?: UserDocument;
+    action: 'status_change' | 'delete';
+    previousStatus?: string;
+    newStatus?: string;
+    trackingId?: string;
+    shippingCompany?: string;
+  }): Promise<void> {
+    try {
+      const actorId = input.actor?._id?.toString?.();
+      if (!actorId) return;
+
+      const actorName = [input.actor?.firstName, input.actor?.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      const orderId = String(input.order._id);
+      const portal =
+        input.actor?.role === UserRole.ADMIN
+          ? 'admin'
+          : input.actor?.role === UserRole.CERTIFIED_SHOP
+            ? 'shop'
+            : 'partner';
+
+      await this.orderActivityModel.create({
+        orderId: new Types.ObjectId(orderId),
+        orderNumber: input.order.orderNumber,
+        action: input.action,
+        actorId: new Types.ObjectId(actorId),
+        actorName: actorName || undefined,
+        actorEmail: input.actor?.email,
+        actorRole: input.actor?.role,
+        previousStatus: input.previousStatus,
+        newStatus: input.newStatus,
+        trackingId: input.trackingId || undefined,
+        shippingCompany: input.shippingCompany || undefined,
+      });
+
+      await this.userActivityService.log({
+        userId: actorId,
+        actorId,
+        action: UserActivityAction.ORDER_UPDATE,
+        portal,
+        country: input.actor?.country,
+        metadata: {
+          method: input.action === 'delete' ? 'order_delete' : 'order_status',
+          orderId,
+          orderNumber: input.order.orderNumber,
+          previousStatus: input.previousStatus,
+          newStatus: input.newStatus,
+          trackingId: input.trackingId || undefined,
+          shippingCompany: input.shippingCompany || undefined,
+          actorEmail: input.actor?.email,
+          actorRole: input.actor?.role,
+          actorName: actorName || undefined,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Failed to write order activity log: ${(err as Error)?.message}`,
+      );
+    }
+  }
+
   async updateStatus(
     id: string,
     status: OrderStatus,
@@ -4053,6 +4144,18 @@ export class OrdersService implements OnModuleInit {
       if (updatedOrder.includesCertificationKit) {
         await this.applyCertificationKitPurchaseBenefits(updatedOrder);
       }
+    }
+
+    if (actor && oldStatus !== status) {
+      await this.recordOrderActorActivity({
+        order: updatedOrder,
+        actor,
+        action: 'status_change',
+        previousStatus: oldStatus,
+        newStatus: status,
+        trackingId: updatedOrder.trackingId,
+        shippingCompany: updatedOrder.shippingCompany,
+      });
     }
 
     return actor
@@ -5060,7 +5163,7 @@ export class OrdersService implements OnModuleInit {
     return this.exchangeRatesService.updateRate(currency, rateToBase);
   }
 
-  async deleteOrder(id: string): Promise<{
+  async deleteOrder(id: string, actor?: UserDocument): Promise<{
     success: boolean;
     purgeAt: Date;
     retentionDays: number;
@@ -5074,6 +5177,13 @@ export class OrdersService implements OnModuleInit {
     // Delete only removes the order. Refunds and cancellation emails belong to cancelOrder.
     const payload = softDeleteSetPayload();
     await this.orderModel.findByIdAndUpdate(id, { $set: payload }).exec();
+    await this.recordOrderActorActivity({
+      order,
+      actor,
+      action: 'delete',
+      previousStatus: order.status,
+      newStatus: 'DELETED',
+    });
     return {
       success: true,
       purgeAt: payload.purgeAt,

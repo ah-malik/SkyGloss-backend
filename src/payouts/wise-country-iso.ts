@@ -347,3 +347,143 @@ export function wiseSupportsLiveAccountCheck(currency?: string | null): boolean 
   const code = (currency || '').trim().toUpperCase();
   return (WISE_LIVE_ACCOUNT_CHECK_CURRENCIES as readonly string[]).includes(code);
 }
+
+/** Wise ABA recipients in the US require address.state, but requirements often omit the field. */
+const US_STATES: Array<{ key: string; name: string }> = [
+  { key: 'AL', name: 'Alabama' },
+  { key: 'AK', name: 'Alaska' },
+  { key: 'AZ', name: 'Arizona' },
+  { key: 'AR', name: 'Arkansas' },
+  { key: 'CA', name: 'California' },
+  { key: 'CO', name: 'Colorado' },
+  { key: 'CT', name: 'Connecticut' },
+  { key: 'DE', name: 'Delaware' },
+  { key: 'DC', name: 'District of Columbia' },
+  { key: 'FL', name: 'Florida' },
+  { key: 'GA', name: 'Georgia' },
+  { key: 'HI', name: 'Hawaii' },
+  { key: 'ID', name: 'Idaho' },
+  { key: 'IL', name: 'Illinois' },
+  { key: 'IN', name: 'Indiana' },
+  { key: 'IA', name: 'Iowa' },
+  { key: 'KS', name: 'Kansas' },
+  { key: 'KY', name: 'Kentucky' },
+  { key: 'LA', name: 'Louisiana' },
+  { key: 'ME', name: 'Maine' },
+  { key: 'MD', name: 'Maryland' },
+  { key: 'MA', name: 'Massachusetts' },
+  { key: 'MI', name: 'Michigan' },
+  { key: 'MN', name: 'Minnesota' },
+  { key: 'MS', name: 'Mississippi' },
+  { key: 'MO', name: 'Missouri' },
+  { key: 'MT', name: 'Montana' },
+  { key: 'NE', name: 'Nebraska' },
+  { key: 'NV', name: 'Nevada' },
+  { key: 'NH', name: 'New Hampshire' },
+  { key: 'NJ', name: 'New Jersey' },
+  { key: 'NM', name: 'New Mexico' },
+  { key: 'NY', name: 'New York' },
+  { key: 'NC', name: 'North Carolina' },
+  { key: 'ND', name: 'North Dakota' },
+  { key: 'OH', name: 'Ohio' },
+  { key: 'OK', name: 'Oklahoma' },
+  { key: 'OR', name: 'Oregon' },
+  { key: 'PA', name: 'Pennsylvania' },
+  { key: 'RI', name: 'Rhode Island' },
+  { key: 'SC', name: 'South Carolina' },
+  { key: 'SD', name: 'South Dakota' },
+  { key: 'TN', name: 'Tennessee' },
+  { key: 'TX', name: 'Texas' },
+  { key: 'UT', name: 'Utah' },
+  { key: 'VT', name: 'Vermont' },
+  { key: 'VA', name: 'Virginia' },
+  { key: 'WA', name: 'Washington' },
+  { key: 'WV', name: 'West Virginia' },
+  { key: 'WI', name: 'Wisconsin' },
+  { key: 'WY', name: 'Wyoming' },
+];
+
+const US_STATE_BY_NAME: Record<string, string> = {};
+for (const state of US_STATES) {
+  US_STATE_BY_NAME[state.name.toLowerCase()] = state.key;
+  US_STATE_BY_NAME[state.key.toLowerCase()] = state.key;
+}
+
+export function normalizeUsStateCode(value?: string | null): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const compact = raw.replace(/\./g, '').replace(/\s+/g, ' ').trim();
+  if (/^[A-Za-z]{2}$/.test(compact)) {
+    return US_STATE_BY_NAME[compact.toLowerCase()] || compact.toUpperCase();
+  }
+  return US_STATE_BY_NAME[compact.toLowerCase()] || raw;
+}
+
+export function ensureUsAddressStateField<T extends { key: string }>(
+  fields: T[],
+  countryIso?: string | null,
+): T[] {
+  if ((countryIso || '').toUpperCase() !== 'US') return fields;
+  if (!fields.some((field) => field.key.startsWith('address.'))) return fields;
+  if (fields.some((field) => field.key === 'address.state' || /\.state$/i.test(field.key))) {
+    return fields;
+  }
+  const stateField = {
+    key: 'address.state',
+    name: 'State',
+    required: true,
+    type: 'select',
+    example: 'WA',
+    valuesAllowed: US_STATES.map((state) => ({ key: state.key, name: state.name })),
+  } as unknown as T;
+  const cityIdx = fields.findIndex(
+    (field) => field.key === 'address.city' || field.key.endsWith('.city'),
+  );
+  const next = fields.slice();
+  next.splice(cityIdx >= 0 ? cityIdx + 1 : fields.length, 0, stateField);
+  return next;
+}
+
+/** Move address.city / address.state style keys into the nested Wise address object. */
+export function applyFormAddressToWiseAddress<
+  T extends {
+    country?: string;
+    city?: string;
+    postCode?: string;
+    firstLine?: string;
+    state?: string;
+  },
+>(
+  address: T,
+  extra: Record<string, string>,
+): { address: T; extra: Record<string, string> } {
+  const rest: Record<string, string> = {};
+  const patch: Record<string, string> = {};
+  for (const [key, value] of Object.entries(extra || {})) {
+    const text = String(value || '').trim();
+    if (key.startsWith('address.')) {
+      const leaf = key.slice('address.'.length);
+      if (leaf && !leaf.includes('.') && text) patch[leaf] = text;
+      continue;
+    }
+    rest[key] = value;
+  }
+  const countryRaw = patch.country || address.country;
+  const country = toIsoCountryCode(countryRaw) || countryRaw;
+  const stateRaw = patch.state || address.state;
+  const state =
+    (country || '').toUpperCase() === 'US'
+      ? normalizeUsStateCode(stateRaw)
+      : String(stateRaw || '').trim();
+  return {
+    address: {
+      ...address,
+      ...(country ? { country } : {}),
+      ...(patch.city ? { city: patch.city } : {}),
+      ...(patch.postCode ? { postCode: patch.postCode } : {}),
+      ...(patch.firstLine ? { firstLine: patch.firstLine } : {}),
+      ...(state ? { state } : {}),
+    },
+    extra: rest,
+  };
+}

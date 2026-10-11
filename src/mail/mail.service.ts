@@ -352,7 +352,7 @@ export class MailService {
       subject: `Your SkyGloss ${roleLabel} Account is Ready`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-          <h2 style="color: #0EA0DC; text-align: center;">Welcome to SkyGloss</h2>
+          <h2 style="color: #0EA0DC; text-align: center;">Welcome to the SkyGloss Partner Network</h2>
           <p>Hello ${escapeHtml(displayName)},</p>
           <p>Your <strong>${escapeHtml(roleLabel)}</strong> account has been created. Use the login details below to access the Partner portal:</p>
           <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:16px; margin:20px 0;">
@@ -364,7 +364,7 @@ export class MailService {
           <p style="color:#64748b; font-size:14px;">Click <strong>Access Now</strong> to set your personal password. After updating, log in with your email and new password. This link is unique to your account and expires in 7 days.</p>
           <p style="word-break: break-all; color: #666; font-size:12px;">If the button doesn't work, open this link:<br/><a href="${escapeHtml(accessNowLink)}">${escapeHtml(accessNowLink)}</a></p>
           <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
-          <p style="font-size: 12px; color: #999; text-align: center;">&copy; 2026 SkyGloss. All rights reserved.</p>
+          <p style="font-size: 12px; color: #999; text-align: center;">&copy; 2026 SkyGloss, Inc. All rights reserved.</p>
         </div>
       `,
     };

@@ -1,5 +1,8 @@
 import {
+  applyFormAddressToWiseAddress,
+  ensureUsAddressStateField,
   guessWiseRecipientType,
+  normalizeUsStateCode,
   pickWiseAccountRequirement,
   sanitizePayoutCurrency,
   toIsoCountryCode,
@@ -43,5 +46,61 @@ describe('UAE / Wise currency helpers', () => {
         'PKR',
       )?.type,
     ).toBe('iban');
+  });
+
+  it('adds a US state field when Wise address requirements omit it', () => {
+    const fields = ensureUsAddressStateField(
+      [
+        { key: 'accountNumber', name: 'Account number' },
+        { key: 'address.city', name: 'City' },
+        { key: 'address.firstLine', name: 'Recipient address' },
+        { key: 'address.postCode', name: 'Post code' },
+      ],
+      'US',
+    );
+    expect(fields.map((field) => field.key)).toEqual([
+      'accountNumber',
+      'address.city',
+      'address.state',
+      'address.firstLine',
+      'address.postCode',
+    ]);
+    expect(fields.find((field) => field.key === 'address.state')).toMatchObject({
+      name: 'State',
+      required: true,
+    });
+    expect(
+      ensureUsAddressStateField(
+        [{ key: 'address.city', name: 'City' }],
+        'GB',
+      ).some((field) => field.key === 'address.state'),
+    ).toBe(false);
+  });
+
+  it('nests form address fields, including state, into the Wise address', () => {
+    expect(normalizeUsStateCode('Washington')).toBe('WA');
+    const merged = applyFormAddressToWiseAddress(
+      {
+        country: 'US',
+        city: 'Unknown',
+        postCode: '00000',
+        firstLine: 'Address on file',
+      },
+      {
+        'address.city': 'BELLEVUE',
+        'address.firstLine': '17305 NE 15TH ST',
+        'address.postCode': '98008',
+        'address.state': 'Washington',
+        accountType: 'CHECKING',
+      },
+    );
+    expect(merged.address).toEqual({
+      country: 'US',
+      city: 'BELLEVUE',
+      postCode: '98008',
+      firstLine: '17305 NE 15TH ST',
+      state: 'WA',
+    });
+    expect(merged.extra).toEqual({ accountType: 'CHECKING' });
   });
 });

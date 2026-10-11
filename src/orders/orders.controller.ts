@@ -380,11 +380,18 @@ export class OrdersController {
     );
   }
 
+  @Get('admin/:id/activity')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  getOrderActivity(@Param('id') id: string) {
+    return this.ordersService.getOrderActivity(id);
+  }
+
   @Delete('admin/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
-  deleteOrder(@Param('id') id: string) {
-    return this.ordersService.deleteOrder(id);
+  deleteOrder(@Param('id') id: string, @GetUser() user?: UserDocument) {
+    return this.ordersService.deleteOrder(id, user);
   }
 
   @Post('admin/:id/restore')

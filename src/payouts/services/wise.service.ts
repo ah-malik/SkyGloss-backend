@@ -9,8 +9,10 @@ import axios, { AxiosError, AxiosInstance } from 'axios';
 import { randomUUID } from 'crypto';
 import * as https from 'https';
 import {
+  applyFormAddressToWiseAddress,
   currencyFromIban,
   defaultCurrencyForCountry,
+  ensureUsAddressStateField,
   guessWiseRecipientType,
   pickWiseAccountRequirement,
   sanitizePayoutCurrency,
@@ -258,11 +260,14 @@ export class WiseService {
       sourceCurrency: this.sourceCurrency,
       type: selected.type,
       title: selected.title,
-      fields: selected.fields.filter(
-        (f) =>
-          !['accountHolderName', 'ownedByCustomer', 'currency', 'type', 'profile', 'bankName'].includes(
-            f.key,
-          ),
+      fields: ensureUsAddressStateField(
+        selected.fields.filter(
+          (f) =>
+            !['accountHolderName', 'ownedByCustomer', 'currency', 'type', 'profile', 'bankName'].includes(
+              f.key,
+            ),
+        ),
+        iso,
       ),
       alternatives: options.map((o) => ({ type: o.type, title: o.title })),
     };
@@ -1178,7 +1183,7 @@ export class WiseService {
     const routing = this.clean(bank.routingNumber);
     const sortCode = this.clean(bank.sortCode) || routing;
     const swift = this.clean(bank.swiftBic);
-    const extra = this.safeExtraDetails(bank.extraDetails);
+    const submittedExtra = this.safeExtraDetails(bank.extraDetails);
     const country =
       toIsoCountryCode(bank.country) ||
       toIsoCountryCode(user.country) ||
@@ -1197,19 +1202,23 @@ export class WiseService {
       if (ibanError) throw new BadRequestException(ibanError);
     }
 
-    if (!iban && !accountNumber && !Object.keys(extra).length) {
+    if (!iban && !accountNumber && !Object.keys(submittedExtra).length) {
       throw new BadRequestException(
         'Recipient bank details need an IBAN or account number for Wise payout.',
       );
     }
 
-    const address = {
-      country: country || 'US',
-      city: user.city || 'Unknown',
-      postCode: user.zipCode || '00000',
-      firstLine:
-        user.address || user.streetAddress || 'Address on file',
-    };
+    const mergedAddress = applyFormAddressToWiseAddress(
+      {
+        country: country || 'US',
+        city: user.city || 'Unknown',
+        postCode: user.zipCode || '00000',
+        firstLine: user.address || user.streetAddress || 'Address on file',
+      },
+      submittedExtra,
+    );
+    const address = mergedAddress.address;
+    const extra = mergedAddress.extra;
 
     const base = {
       profile: profileId,

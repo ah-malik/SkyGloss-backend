@@ -5,6 +5,10 @@ import { OrdersService } from './orders.service';
 import { OrdersSchedulerService } from './orders-scheduler.service';
 import { Order, OrderSchema } from './entities/order.entity';
 import {
+  OrderActivityLog,
+  OrderActivityLogSchema,
+} from './entities/order-activity-log.entity';
+import {
   DuplicateInvoice,
   DuplicateInvoiceSchema,
 } from './entities/duplicate-invoice.entity';
@@ -25,6 +29,7 @@ import { FedexModule } from '../fedex/fedex.module';
   imports: [
     MongooseModule.forFeature([
       { name: Order.name, schema: OrderSchema },
+      { name: OrderActivityLog.name, schema: OrderActivityLogSchema },
       { name: DuplicateInvoice.name, schema: DuplicateInvoiceSchema },
       { name: ProductGroup.name, schema: ProductGroupSchema }
     ]),

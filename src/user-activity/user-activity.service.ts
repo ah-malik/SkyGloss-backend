@@ -161,14 +161,15 @@ export class UserActivityService {
     const search = (query.search || '').trim();
     if (search) {
       const userIds = await this.findUserIdsBySearch(search);
-      if (userIds.length === 0) {
-        return { items: [], total: 0, page, limit, totalPages: 0 };
+      const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchOr: Record<string, unknown>[] = [
+        { 'metadata.orderNumber': { $regex: escaped, $options: 'i' } },
+      ];
+      if (userIds.length) {
+        searchOr.push({ user: { $in: userIds } });
+        searchOr.push({ actor: { $in: userIds } });
       }
-      const next = this.intersectIds(filter.user, userIds);
-      if (!next) {
-        return { items: [], total: 0, page, limit, totalPages: 0 };
-      }
-      filter.user = next;
+      filter.$and = [...(filter.$and || []), { $or: searchOr }];
     }
 
     const country = (query.country || '').trim();
