@@ -139,6 +139,19 @@ export class WithdrawalsService {
       throw new ForbiddenException('Hub accounts cannot request withdrawals. Manage network payout reviews instead.');
     }
 
+    // Rep / Promoter / Distributor must complete Account Activation (Hub approval)
+    // before withdrawing. Hub accounts cannot withdraw personally.
+    if (
+      (user.role === UserRole.MASTER_PARTNER ||
+        user.role === UserRole.REGIONAL_PARTNER ||
+        user.role === UserRole.DISTRIBUTOR) &&
+      !user.isAccountActivated
+    ) {
+      throw new ForbiddenException(
+        'Your account must be activated by your Hub before you can withdraw earnings.',
+      );
+    }
+
     const active = await this.withdrawalModel.findOne({
       userId: new Types.ObjectId(userId),
       status: { $in: ACTIVE_WITHDRAWAL_STATUSES },

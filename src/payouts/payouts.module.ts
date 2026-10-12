@@ -126,6 +126,11 @@ import { ExchangeRatesModule } from '../exchange-rates/exchange-rates.module';
     StripePaymentBreakdownService,
     OrderCommissionTransferService,
   ],
-  exports: [CommissionsService, WithdrawalsService, OrderCommissionTransferService],
+  exports: [
+    CommissionsService,
+    WithdrawalsService,
+    BankDetailsService,
+    OrderCommissionTransferService,
+  ],
 })
 export class PayoutsModule {}

@@ -22,6 +22,7 @@ import { RegistrationFeesModule } from './registration-fees/registration-fees.mo
 import { CouponsModule } from './coupons/coupons.module';
 import { EmailSettingsModule } from './email-settings/email-settings.module';
 import { PayoutsModule } from './payouts/payouts.module';
+import { AccountActivationModule } from './account-activation/account-activation.module';
 import { ApiControlModule } from './api-control/api-control.module';
 import { RedisModule } from './redis/redis.module';
 import { HealthModule } from './health/health.module';
@@ -61,6 +62,7 @@ import { CsrfMiddleware } from './auth/csrf.middleware';
     CouponsModule,
     EmailSettingsModule,
     PayoutsModule,
+    AccountActivationModule,
     ApiControlModule,
     UserActivityModule,
     InventoryModule,

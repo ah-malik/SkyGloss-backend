@@ -324,6 +324,14 @@ export class User {
   @Prop({ default: false })
   isTrainingComplete: boolean;
 
+  /**
+   * Representative / Promoter / Distributor — set true after assigned Hub
+   * approves their Account Activation request. Gates earnings withdrawals.
+   * Hub does not use this flag.
+   */
+  @Prop({ default: false })
+  isAccountActivated: boolean;
+
   @Prop({ default: false })
   isCertified: boolean;
 
