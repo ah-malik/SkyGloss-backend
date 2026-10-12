@@ -277,7 +277,7 @@ export class AccountActivationService implements OnModuleInit {
       message: `${requesterName} (${roleLabel}) submitted an Account Activation request.`,
       user: hub._id.toString(),
       triggeredBy: userId,
-      link: '/dashboard/partner/network?tab=activations',
+      link: '/dashboard/partner#activations',
     });
 
     return this.formatRequest(request);
