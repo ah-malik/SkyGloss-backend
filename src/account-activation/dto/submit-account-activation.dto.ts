@@ -11,6 +11,11 @@ export class SubmitAccountActivationDto {
   @IsBoolean()
   agreementAccepted: boolean;
 
+  /** Signed Representative Agreement form fields (from PDF page 1). */
+  @IsOptional()
+  @IsObject()
+  agreementDetails?: Record<string, string>;
+
   /** Required for Representative / Promoter. Optional for Distributor. */
   @IsOptional()
   @IsString()

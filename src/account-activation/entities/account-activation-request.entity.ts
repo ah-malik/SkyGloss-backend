@@ -62,6 +62,10 @@ export class AccountActivationRequest {
   @Prop()
   agreementAcceptedAt?: Date;
 
+  /** Snapshot of signed agreement form fields from the activation wizard. */
+  @Prop({ type: Object })
+  agreementDetails?: Record<string, string>;
+
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'BankDetails' })
   bankDetailsId?: Types.ObjectId;
 

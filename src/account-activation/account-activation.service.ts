@@ -256,6 +256,9 @@ export class AccountActivationService implements OnModuleInit {
       assignedHubName: hubName,
       agreementAccepted: true,
       agreementAcceptedAt: now,
+      ...(dto.agreementDetails
+        ? { agreementDetails: dto.agreementDetails }
+        : {}),
       ...(bankDetailsId ? { bankDetailsId } : {}),
       submittedAt: now,
     });
