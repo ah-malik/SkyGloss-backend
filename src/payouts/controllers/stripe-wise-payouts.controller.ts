@@ -9,8 +9,10 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { StripeWisePayoutsService } from '../services/stripe-wise-payouts.service';
+import { EuropeCommissionTrackingService } from '../services/europe-commission-tracking.service';
 import { CreateStripeWisePayoutDto } from '../dto/create-stripe-wise-payout.dto';
 import { CreatePaymentsToFaDto } from '../dto/create-payments-to-fa.dto';
+import { CreateEuropeCommissionWithdrawalDto } from '../dto/create-europe-commission-withdrawal.dto';
 import { UpdateStripeWiseDestinationDto } from '../dto/update-stripe-wise-destination.dto';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -22,7 +24,10 @@ import { UserRole } from '../../users/entities/user.entity';
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN)
 export class StripeWisePayoutsController {
-  constructor(private readonly payouts: StripeWisePayoutsService) {}
+  constructor(
+    private readonly payouts: StripeWisePayoutsService,
+    private readonly europeCommissionTracking: EuropeCommissionTrackingService,
+  ) {}
 
   @Get('overview')
   getOverview() {
@@ -72,6 +77,26 @@ export class StripeWisePayoutsController {
     @Body() dto: CreatePaymentsToFaDto,
   ) {
     return this.payouts.fundFinancialAccount(String(adminId), dto);
+  }
+
+  /** Stripe Europe only — total / received / remaining commission + date history. */
+  @Get('europe-commission-tracking')
+  getEuropeCommissionTracking(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.europeCommissionTracking.getTracking({
+      page: page ? parseInt(page, 10) : 1,
+      limit: limit ? parseInt(limit, 10) : 50,
+    });
+  }
+
+  @Post('europe-commission-tracking/withdrawals')
+  recordEuropeCommissionWithdrawal(
+    @GetUser('_id') adminId: string,
+    @Body() dto: CreateEuropeCommissionWithdrawalDto,
+  ) {
+    return this.europeCommissionTracking.recordWithdrawal(String(adminId), dto);
   }
 
   @Get(':id')

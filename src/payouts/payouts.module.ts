@@ -48,6 +48,10 @@ import {
   OrderCommissionTransfer,
   OrderCommissionTransferSchema,
 } from './entities/order-commission-transfer.entity';
+import {
+  StripeEuropeCommissionWithdrawal,
+  StripeEuropeCommissionWithdrawalSchema,
+} from './entities/stripe-europe-commission-withdrawal.entity';
 import { Order, OrderSchema } from '../orders/entities/order.entity';
 import { User, UserSchema } from '../users/entities/user.entity';
 import { CommissionsService } from './services/commissions.service';
@@ -72,6 +76,7 @@ import { StripeMoneyManagementService } from './services/stripe-money-management
 import { StripeWisePayoutsService } from './services/stripe-wise-payouts.service';
 import { StripePaymentBreakdownService } from './services/stripe-payment-breakdown.service';
 import { OrderCommissionTransferService } from './services/order-commission-transfer.service';
+import { EuropeCommissionTrackingService } from './services/europe-commission-tracking.service';
 import { UsersModule } from '../users/users.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { MailModule } from '../mail/mail.module';
@@ -92,6 +97,10 @@ import { ExchangeRatesModule } from '../exchange-rates/exchange-rates.module';
       { name: StripeWisePayout.name, schema: StripeWisePayoutSchema },
       { name: StripePaymentsToFa.name, schema: StripePaymentsToFaSchema },
       { name: OrderCommissionTransfer.name, schema: OrderCommissionTransferSchema },
+      {
+        name: StripeEuropeCommissionWithdrawal.name,
+        schema: StripeEuropeCommissionWithdrawalSchema,
+      },
       { name: Order.name, schema: OrderSchema },
       { name: User.name, schema: UserSchema },
     ]),
@@ -125,6 +134,7 @@ import { ExchangeRatesModule } from '../exchange-rates/exchange-rates.module';
     StripeWisePayoutsService,
     StripePaymentBreakdownService,
     OrderCommissionTransferService,
+    EuropeCommissionTrackingService,
   ],
   exports: [
     CommissionsService,
