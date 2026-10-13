@@ -7,12 +7,15 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
+import compression from 'compression';
 
 async function bootstrap() {
   // rawBody: true lets NestJS capture raw body for Stripe webhook verification
   // Do NOT add manual bodyParser middleware — it conflicts with rawBody
   const app = await NestFactory.create(AppModule, { rawBody: true });
 
+  // Gzip large JSON payloads (network orders, referred shops, admin lists)
+  app.use(compression());
   app.use(cookieParser());
 
   // Enable CORS — allow custom client header for API control

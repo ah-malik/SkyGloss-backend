@@ -82,7 +82,7 @@ export class ProductInventoryService {
   async listMine(userId: string): Promise<ProductInventoryListResponse> {
     const uid = this.toUserId(userId);
     const [catalog, rows] = await Promise.all([
-      this.productsService.findAll('published'),
+      this.productsService.findPublishedInventoryCatalog(),
       this.productInventoryModel.find({ userId: uid }).lean(),
     ]);
 

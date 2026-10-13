@@ -479,15 +479,11 @@ export class UsersService implements OnModuleInit {
     ];
     const map = new Map<string, string>();
     if (unique.length === 0) return map;
+    const codeVariants = [
+      ...new Set(unique.flatMap((code) => [code, code.toLowerCase()])),
+    ];
     const parents = await this.userModel
-      .find({
-        $or: unique.map((code) => ({
-          partnerCode: {
-            $regex: `^${code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
-            $options: 'i',
-          },
-        })),
-      })
+      .find({ partnerCode: { $in: codeVariants } })
       .select('partnerCode role')
       .lean()
       .exec();
@@ -995,6 +991,8 @@ export class UsersService implements OnModuleInit {
       }
       throw err;
     }
+
+    await this.invalidateNetworkAndOrderCaches();
 
     if (savedUser.role === UserRole.CERTIFIED_SHOP) {
       // Promoter Network FO first (identical stamp model to Rep FO).
@@ -2761,13 +2759,11 @@ export class UsersService implements OnModuleInit {
   async findByPartnerCode(partnerCode: string): Promise<UserDocument | null> {
     const normalized = normalizePartnerCode(partnerCode);
     if (!normalized) return null;
-    // Case-insensitive match for legacy rows that differ only by casing.
+    // Exact $in (upper + lower) uses the unique partnerCode index.
+    // Same coverage as the previous case-insensitive regex for normalized codes.
     return this.userModel
       .findOne({
-        partnerCode: {
-          $regex: `^${normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
-          $options: 'i',
-        },
+        partnerCode: { $in: [normalized, normalized.toLowerCase()] },
       })
       .exec();
   }
@@ -3570,6 +3566,7 @@ export class UsersService implements OnModuleInit {
       this.queueShopCommissionRecalculation(shopForRecalc._id.toString());
     }
 
+    await this.invalidateNetworkAndOrderCaches();
     return shopForRecalc ?? updatedUser;
   }
 
@@ -3600,8 +3597,7 @@ export class UsersService implements OnModuleInit {
       { $set: payload },
     );
 
-    await this.cache.delByPrefix('users:');
-    await this.cache.delByPrefix('orders:');
+    await this.invalidateNetworkAndOrderCaches();
 
     return {
       user: updated,
@@ -3646,8 +3642,7 @@ export class UsersService implements OnModuleInit {
       softDeleteUnsetPayload(),
     );
 
-    await this.cache.delByPrefix('users:');
-    await this.cache.delByPrefix('orders:');
+    await this.invalidateNetworkAndOrderCaches();
 
     return {
       user: updated,
@@ -4041,7 +4036,36 @@ export class UsersService implements OnModuleInit {
     };
   }
 
+  /** Clears network tree + order read caches after hierarchy / membership changes. */
+  async invalidateNetworkAndOrderCaches(): Promise<void> {
+    await this.cache.delByPrefix(CacheKeys.usersPrefix);
+    await this.cache.delByPrefix(CacheKeys.ordersPrefix);
+  }
+
   async findNetworkUsersForViewer(
+    viewer: UserDocument,
+  ): Promise<NetworkUsersResult> {
+    const viewerId = String(viewer?._id ?? '');
+    if (!viewerId) {
+      return {
+        shops: [],
+        promoters: [],
+        subPromoters: [],
+        representatives: [],
+        represented: [],
+        distributors: [],
+        partners: [],
+        viewerRole: viewer.role,
+      };
+    }
+    return this.cache.wrap(
+      CacheKeys.usersNetwork(viewerId),
+      CacheTtl.usersNetwork,
+      () => this.findNetworkUsersForViewerFresh(viewer),
+    );
+  }
+
+  private async findNetworkUsersForViewerFresh(
     viewer: UserDocument,
   ): Promise<NetworkUsersResult> {
     const empty: NetworkUsersResult = {
@@ -5343,6 +5367,7 @@ export class UsersService implements OnModuleInit {
           operationalRepresentativeLinks: { partnerCode: normalizedCode },
         },
       });
+      await this.invalidateNetworkAndOrderCaches();
       return {
         message: `Representative ${normalizedCode} removed from ${owner.firstName} ${owner.lastName}'s linked network.`,
       };
@@ -5387,6 +5412,7 @@ export class UsersService implements OnModuleInit {
       }
     }
 
+    await this.invalidateNetworkAndOrderCaches();
     return {
       message: `Promoter ${normalizedCode} removed from ${owner.firstName} ${owner.lastName}'s linked network.`,
     };
@@ -5508,6 +5534,7 @@ export class UsersService implements OnModuleInit {
       await this.backfillShopEarningAssignmentsForRepresentative(refreshedTarget);
     }
 
+    await this.invalidateNetworkAndOrderCaches();
     return {
       message: `${target.firstName} ${target.lastName} linked to ${owner.firstName} ${owner.lastName}'s network. Shops already under the linked Representative keep their current commission. New shops after this link: first order → child Rep ${rates.shopIntroductionRate}% Shop Introduction + parent ${rates.partnerDevelopmentRate}% Partner Development.`,
       linkType: 'operational',
@@ -5830,6 +5857,7 @@ export class UsersService implements OnModuleInit {
       }
     }
 
+    await this.invalidateNetworkAndOrderCaches();
     return {
       message: `${target.firstName} ${target.lastName} linked to ${owner.firstName} ${owner.lastName}'s network. Shops already under the linked Promoter keep their current commission. New shops after this link: first order → child Promoter ${rates.shopIntroductionRate}% Shop Introduction + parent ${rates.partnerDevelopmentRate}% Partner Development.`,
       linkType: 'operational',
@@ -5914,6 +5942,7 @@ export class UsersService implements OnModuleInit {
     }
 
     this.queueShopCommissionRecalculation(shop._id.toString());
+    await this.invalidateNetworkAndOrderCaches();
     return shop;
   }
 

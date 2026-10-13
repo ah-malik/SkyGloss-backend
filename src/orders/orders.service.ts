@@ -1035,9 +1035,21 @@ export class OrdersService implements OnModuleInit {
   }
 
   async getMyOrders(userId: string): Promise<Order[]> {
-    return this.orderModel
-      .find({ user: userId as any })
-      .sort({ createdAt: -1 });
+    return this.cache.wrap(
+      CacheKeys.ordersMy(userId),
+      CacheTtl.ordersMy,
+      async () =>
+        this.orderModel
+          .find({ user: userId as any })
+          .sort({ createdAt: -1 })
+          .lean()
+          .exec() as Promise<Order[]>,
+    );
+  }
+
+  /** Clears all order read caches (my / network / admin / dashboard). */
+  async invalidateOrderReadCaches(): Promise<void> {
+    await this.cache.delByPrefix(CacheKeys.ordersPrefix);
   }
 
   async getOrderById(id: string, viewer?: UserDocument): Promise<Order> {
@@ -2637,6 +2649,14 @@ export class OrdersService implements OnModuleInit {
 
 
   async getAllOrders(): Promise<Order[]> {
+    return this.cache.wrap(
+      CacheKeys.ordersAdminAll,
+      CacheTtl.ordersAdminAll,
+      () => this.getAllOrdersFresh(),
+    );
+  }
+
+  private async getAllOrdersFresh(): Promise<Order[]> {
     const orders = await this.orderModel
       .find()
       .select(
@@ -2682,6 +2702,14 @@ export class OrdersService implements OnModuleInit {
   }
 
   async getNetworkOrders(viewer: UserDocument): Promise<Order[]> {
+    return this.cache.wrap(
+      CacheKeys.ordersNetwork(String(viewer._id)),
+      CacheTtl.ordersNetwork,
+      () => this.getNetworkOrdersFresh(viewer),
+    );
+  }
+
+  private async getNetworkOrdersFresh(viewer: UserDocument): Promise<Order[]> {
     const userIds = await this.getNetworkOrderUserIds(viewer);
     if (userIds.length === 0) {
       return [];
@@ -2769,18 +2797,24 @@ export class OrdersService implements OnModuleInit {
   }
 
   async getNetworkSalesStats(viewer: UserDocument) {
-    const userIds = await this.getNetworkOrderUserIds(viewer);
-    if (userIds.length === 0) {
-      return {
-        totalRevenue: 0,
-        baseCurrency: SYSTEM_BASE_CURRENCY,
-        currencyBreakdown: [],
-      };
-    }
-    return this.computeSalesReport({
-      user: { $in: userIds },
-      ...registrationOrderExclusionFilter(),
-    });
+    return this.cache.wrap(
+      CacheKeys.ordersNetworkStats(String(viewer._id)),
+      CacheTtl.ordersNetworkStats,
+      async () => {
+        const userIds = await this.getNetworkOrderUserIds(viewer);
+        if (userIds.length === 0) {
+          return {
+            totalRevenue: 0,
+            baseCurrency: SYSTEM_BASE_CURRENCY,
+            currencyBreakdown: [],
+          };
+        }
+        return this.computeSalesReport({
+          user: { $in: userIds },
+          ...registrationOrderExclusionFilter(),
+        });
+      },
+    );
   }
 
   private async getNetworkOrderUserIds(
@@ -3162,6 +3196,7 @@ export class OrdersService implements OnModuleInit {
       status: commissionStatus,
     }));
     await order.save();
+    await this.invalidateOrderReadCaches();
 
     // Partner Intro is recurring — do not lock via partnerDevelopmentCommissionPaid.
 
@@ -3366,6 +3401,16 @@ export class OrdersService implements OnModuleInit {
 
   /** Orders where `viewer` (Representative or Promoter) is a commission recipient. */
   async getCommissionOrders(viewer: UserDocument): Promise<Order[]> {
+    return this.cache.wrap(
+      CacheKeys.ordersCommission(String(viewer._id)),
+      CacheTtl.ordersCommission,
+      () => this.getCommissionOrdersFresh(viewer),
+    );
+  }
+
+  private async getCommissionOrdersFresh(
+    viewer: UserDocument,
+  ): Promise<Order[]> {
     const partnerCode = viewer.partnerCode?.trim();
     if (
       !partnerCode ||
@@ -4158,6 +4203,8 @@ export class OrdersService implements OnModuleInit {
       });
     }
 
+    await this.invalidateOrderReadCaches();
+
     return actor
       ? this.withOrderManagementFlag(
           (updatedOrder as any).toObject
@@ -4883,6 +4930,7 @@ export class OrdersService implements OnModuleInit {
           OrderStatus.PENDING,
         );
         await this.deductProductInventoryForOrder(savedOrder._id);
+        await this.invalidateOrderReadCaches();
       }
 
       // Create notification for admin
@@ -5184,6 +5232,7 @@ export class OrdersService implements OnModuleInit {
       previousStatus: order.status,
       newStatus: 'DELETED',
     });
+    await this.invalidateOrderReadCaches();
     return {
       success: true,
       purgeAt: payload.purgeAt,
@@ -5473,6 +5522,7 @@ export class OrdersService implements OnModuleInit {
       })
       .exec();
     if (!restored) throw new NotFoundException('Order not found');
+    await this.invalidateOrderReadCaches();
     return { success: true, order: restored };
   }
 

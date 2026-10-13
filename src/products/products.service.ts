@@ -157,6 +157,18 @@ export class ProductsService {
     );
   }
 
+  /** Slim published catalog for inventory screens (id/name/images only). */
+  async findPublishedInventoryCatalog(): Promise<
+    Array<{ _id: any; name?: string; images?: string[]; shopImages?: string[] }>
+  > {
+    return this.productModel
+      .find({ status: 'published' })
+      .select('_id name images shopImages')
+      .sort({ displayOrder: 1, createdAt: -1 })
+      .lean()
+      .exec();
+  }
+
   async findOne(id: string, user?: User): Promise<any> {
     console.log(
       `[ProductsService] findOne called for ID: ${id}. User:`,

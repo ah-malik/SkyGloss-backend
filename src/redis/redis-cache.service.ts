@@ -22,7 +22,7 @@ type MemoryEntry = {
 export class RedisCacheService implements OnModuleDestroy {
   private readonly logger = new Logger(RedisCacheService.name);
   private readonly memory = new Map<string, MemoryEntry>();
-  private readonly maxMemoryEntries = 500;
+  private readonly maxMemoryEntries = 2000;
 
   constructor(
     @Optional()

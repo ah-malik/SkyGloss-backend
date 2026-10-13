@@ -6,13 +6,27 @@ import {
   NotificationDocument,
   NotificationType,
 } from './entities/notification.entity';
+import { RedisCacheService } from '../redis/redis-cache.service';
+import { CacheKeys, CacheTtl } from '../redis/redis.constants';
 
 @Injectable()
 export class NotificationsService {
   constructor(
     @InjectModel(Notification.name)
     private notificationModel: Model<NotificationDocument>,
+    private readonly cache: RedisCacheService,
   ) { }
+
+  private async invalidateNotificationCaches(userId?: string): Promise<void> {
+    await this.cache.del(CacheKeys.notificationsAdminList);
+    await this.cache.del(CacheKeys.notificationsAdminUnread);
+    if (userId) {
+      await this.cache.del(CacheKeys.notificationsUser(userId));
+      await this.cache.del(CacheKeys.notificationsUserUnread(userId));
+    } else {
+      await this.cache.delByPrefix(CacheKeys.notificationsPrefix);
+    }
+  }
 
   async create(data: {
     type: NotificationType;
@@ -31,6 +45,9 @@ export class NotificationsService {
       const notification = new this.notificationModel(data);
       const saved = await notification.save();
       console.log('[DEBUG] Notification saved successfully:', saved._id);
+      await this.invalidateNotificationCaches(
+        data.user ? String(data.user) : undefined,
+      );
       return saved;
     } catch (error) {
       console.error('[DEBUG] Error saving notification:', error);
@@ -71,6 +88,7 @@ export class NotificationsService {
       existingNotification.markModified('metadata');
 
       const saved = await existingNotification.save();
+      await this.invalidateNotificationCaches();
       return { notification: saved, isNew: false };
     } else {
       // Create a completely new notification
@@ -84,17 +102,24 @@ export class NotificationsService {
       };
       const notification = new this.notificationModel(newNotifData);
       const saved = await notification.save();
+      await this.invalidateNotificationCaches();
       return { notification: saved, isNew: true };
     }
   }
 
   async findAllAdmin(): Promise<NotificationDocument[]> {
-    return this.notificationModel
-      .find()
-      .populate('user', 'firstName lastName email role')
-      .sort({ createdAt: -1 })
-      .limit(100)
-      .exec();
+    return this.cache.wrap(
+      CacheKeys.notificationsAdminList,
+      CacheTtl.notificationsUser,
+      async () =>
+        this.notificationModel
+          .find()
+          .populate('user', 'firstName lastName email role')
+          .sort({ createdAt: -1 })
+          .limit(100)
+          .lean()
+          .exec() as Promise<NotificationDocument[]>,
+    );
   }
 
   async markAsRead(id: string): Promise<NotificationDocument> {
@@ -106,6 +131,9 @@ export class NotificationsService {
     if (!notification) {
       throw new NotFoundException('Notification not found.');
     }
+    await this.invalidateNotificationCaches(
+      notification.user ? String(notification.user) : undefined,
+    );
     return notification;
   }
 
@@ -113,20 +141,30 @@ export class NotificationsService {
     await this.notificationModel
       .updateMany({ isRead: false }, { isRead: true })
       .exec();
+    await this.invalidateNotificationCaches();
   }
 
   async getUnreadCount(): Promise<number> {
-    return this.notificationModel.countDocuments({ isRead: false }).exec();
+    return this.cache.wrap(
+      CacheKeys.notificationsAdminUnread,
+      CacheTtl.notificationsUnread,
+      () => this.notificationModel.countDocuments({ isRead: false }).exec(),
+    );
   }
 
   async getUnreadCountForUser(userId: string): Promise<number> {
-    return this.notificationModel
-      .countDocuments({
-        user: userId,
-        isRead: false,
-        triggeredBy: { $ne: userId as any },
-      } as any)
-      .exec();
+    return this.cache.wrap(
+      CacheKeys.notificationsUserUnread(userId),
+      CacheTtl.notificationsUnread,
+      () =>
+        this.notificationModel
+          .countDocuments({
+            user: userId,
+            isRead: false,
+            triggeredBy: { $ne: userId as any },
+          } as any)
+          .exec(),
+    );
   }
 
   async markChatNotificationsAsReadForUser(userId: string): Promise<void> {
@@ -140,6 +178,7 @@ export class NotificationsService {
         { isRead: true },
       )
       .exec();
+    await this.invalidateNotificationCaches(userId);
   }
 
   async markChatNotificationsAsReadByTriggeredBy(userId: string, triggeredById: string): Promise<void> {
@@ -154,6 +193,7 @@ export class NotificationsService {
         { isRead: true },
       )
       .exec();
+    await this.invalidateNotificationCaches(userId);
   }
 
   async markAllAsReadForUser(userId: string): Promise<void> {
@@ -166,10 +206,8 @@ export class NotificationsService {
         { isRead: true },
       )
       .exec();
+    await this.invalidateNotificationCaches(userId);
   }
-
-
-
 
   async deleteOldNotifications(days: number = 30): Promise<void> {
     const date = new Date();
@@ -177,17 +215,24 @@ export class NotificationsService {
     await this.notificationModel
       .deleteMany({ createdAt: { $lt: date } })
       .exec();
+    await this.invalidateNotificationCaches();
   }
 
   async findAllForUser(userId: string): Promise<NotificationDocument[]> {
-    return this.notificationModel
-      .find({
-        user: userId as any,
-        triggeredBy: { $ne: userId as any }, // Exclude self-triggered notifications
-      })
-      .sort({ createdAt: -1 })
-      .limit(20)
-      .exec();
+    return this.cache.wrap(
+      CacheKeys.notificationsUser(userId),
+      CacheTtl.notificationsUser,
+      async () =>
+        this.notificationModel
+          .find({
+            user: userId as any,
+            triggeredBy: { $ne: userId as any }, // Exclude self-triggered notifications
+          })
+          .sort({ createdAt: -1 })
+          .limit(20)
+          .lean()
+          .exec() as Promise<NotificationDocument[]>,
+    );
   }
 
   async existsWithdrawalNotification(

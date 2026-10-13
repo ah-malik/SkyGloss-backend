@@ -9,6 +9,8 @@ import {
   InventoryItemKey,
   clampInventoryQuantity,
 } from './inventory.constants';
+import { RedisCacheService } from '../redis/redis-cache.service';
+import { CacheKeys, CacheTtl } from '../redis/redis.constants';
 
 export type InventoryResponse = {
   bottlesAndPackaging: number;
@@ -24,11 +26,24 @@ export class InventoryService {
   constructor(
     @InjectModel(Inventory.name)
     private readonly inventoryModel: Model<InventoryDocument>,
+    private readonly cache: RedisCacheService,
   ) {}
 
   async getMine(userId: string): Promise<InventoryResponse> {
-    const doc = await this.inventoryModel.findOne({ userId: this.toUserId(userId) });
-    return doc ? this.toResponse(doc) : this.emptyResponse();
+    return this.cache.wrap(
+      CacheKeys.inventoryPackaging(userId),
+      CacheTtl.inventoryPackaging,
+      async () => {
+        const doc = await this.inventoryModel.findOne({
+          userId: this.toUserId(userId),
+        });
+        return doc ? this.toResponse(doc) : this.emptyResponse();
+      },
+    );
+  }
+
+  private async invalidatePackagingCache(userId: string): Promise<void> {
+    await this.cache.del(CacheKeys.inventoryPackaging(userId));
   }
 
   async updateMine(
@@ -55,6 +70,7 @@ export class InventoryService {
       if (!updated) {
         throw new BadRequestException('Unable to save inventory');
       }
+      await this.invalidatePackagingCache(userId);
       return this.toResponse(updated);
     } catch (err) {
       if (this.isDuplicateKey(err)) {
@@ -63,7 +79,10 @@ export class InventoryService {
           { $set: patch },
           { new: true },
         );
-        if (retry) return this.toResponse(retry);
+        if (retry) {
+          await this.invalidatePackagingCache(userId);
+          return this.toResponse(retry);
+        }
       }
       throw err;
     }
@@ -94,6 +113,7 @@ export class InventoryService {
           updated[field] = INVENTORY_MAX_QUANTITY;
           await updated.save();
         }
+        await this.invalidatePackagingCache(userId);
         return this.toResponse(updated);
       } catch (err) {
         if (this.isDuplicateKey(err)) {
@@ -102,7 +122,10 @@ export class InventoryService {
             { $inc: { [field]: dto.delta } },
             { new: true },
           );
-          if (retry) return this.toResponse(retry);
+          if (retry) {
+            await this.invalidatePackagingCache(userId);
+            return this.toResponse(retry);
+          }
         }
         throw err;
       }
@@ -115,6 +138,7 @@ export class InventoryService {
       { new: true },
     );
     if (updated) {
+      await this.invalidatePackagingCache(userId);
       return this.toResponse(updated);
     }
 
@@ -124,6 +148,7 @@ export class InventoryService {
     }
     current[field] = 0;
     await current.save();
+    await this.invalidatePackagingCache(userId);
     return this.toResponse(current);
   }
 
