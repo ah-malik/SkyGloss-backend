@@ -839,6 +839,30 @@ export class AuthService {
         console.error('Failed to create admin notification for new shop', err);
       }
 
+      // Let the introducing partner know right away (the GLOBALHUB fallback is not a real partner).
+      if (partner?._id && !isGlobalHubPartnerCode(partner.partnerCode)) {
+        try {
+          const partnerNotification = await this.notificationsService.create({
+            type: NotificationType.NEW_USER,
+            title: 'New Shop Registered',
+            message: `Shop "${user.firstName} ${user.lastName}" has registered with your ${NETWORK_REFERENCE_ID_LABEL}.`,
+            metadata: {
+              shopId: user._id.toString(),
+              shopName: `${user.firstName} ${user.lastName}`,
+              email: user.email,
+              role: user.role,
+              referredBy: partner.partnerCode,
+            },
+            user: partner._id.toString(),
+            triggeredBy: user._id.toString(),
+            link: '/dashboard/partner/network?tab=shops',
+          });
+          this.notificationsGateway.broadcastNotification(partnerNotification);
+        } catch (err) {
+          console.error('Failed to create partner notification for new shop', err);
+        }
+      }
+
       return {
         message: isFullyCovered
           ? 'Registration successful with coupon applied! You can now log in.'
