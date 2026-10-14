@@ -4448,7 +4448,17 @@ export class OrdersService implements OnModuleInit {
 
     await this.assertHubOrAdminCanManageOrderRequest(order, actor);
 
-    if (!isOrderRequest(order)) {
+    const shopUser =
+      typeof order.user === 'object' && order.user !== null
+        ? (order.user as any)
+        : null;
+    // Order requests already support admin shipping edits; USA purchase orders
+    // use fixed checkout shipping and need the same unpaid update path.
+    const isUsaOrder = this.isUsaDestinationOrder(
+      order.shippingAddress?.country,
+      shopUser?.country,
+    );
+    if (!isOrderRequest(order) && !isUsaOrder) {
       throw new BadRequestException(
         'Shipping can only be added on order requests',
       );
