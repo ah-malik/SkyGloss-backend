@@ -690,7 +690,10 @@ export class OrdersService implements OnModuleInit {
     let discount = 0;
     let couponCode: string | undefined;
     const explicitCode = String(requestedCouponCode || '').trim();
-    const codeToPrice = explicitCode || user?.couponCode || '';
+    const storedRegistrationCoupon = String(user?.couponCode || '').trim();
+    // Prefer an explicit code from the payment modal; otherwise reuse the
+    // coupon saved at Shop Registration (discount only — code is not re-shown).
+    const codeToPrice = explicitCode || storedRegistrationCoupon;
     if (codeToPrice) {
       try {
         const coupon = await this.couponsService.validateForShopRegistration(
@@ -699,7 +702,11 @@ export class OrdersService implements OnModuleInit {
           user?.couponCode,
         );
         discount = coupon.discountAmount;
-        couponCode = coupon.code;
+        // Do not echo a registration-form coupon back to the Fusion enroll modal.
+        // Checkout still applies it via user.couponCode on the activation-fee endpoint.
+        if (explicitCode) {
+          couponCode = coupon.code;
+        }
       } catch (err) {
         if (explicitCode) throw err;
         discount = 0;
@@ -725,6 +732,7 @@ export class OrdersService implements OnModuleInit {
       totalWithValidVatId: withValidVatId.total,
       isFullyCovered: withTax.total <= 0,
       isPaid: !!user?.isPartnerPaid,
+      registrationCouponAlreadyUsed: !!storedRegistrationCoupon,
     };
   }
 

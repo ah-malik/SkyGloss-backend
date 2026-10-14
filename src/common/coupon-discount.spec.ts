@@ -11,8 +11,9 @@ describe('coupon-discount', () => {
     expect(normalizeCouponCode(' save10 ')).toBe('SAVE10');
   });
 
-  it('allows a user to re-apply the same registration coupon but not a second code', () => {
+  it('allows finishing payment with the same registration coupon but rejects a second code', () => {
     expect(canUserRedeemShopRegistrationCoupon(undefined, 'SAVE10')).toBe(true);
+    // Same code may be re-used only to complete activation after Shop Registration.
     expect(canUserRedeemShopRegistrationCoupon('save10', 'SAVE10')).toBe(true);
     expect(canUserRedeemShopRegistrationCoupon('SAVE10', 'OTHER')).toBe(false);
   });

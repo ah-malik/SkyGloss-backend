@@ -15,7 +15,11 @@ export function normalizeCouponCode(code: string): string {
   return String(code || '').trim().toUpperCase();
 }
 
-/** One shop-registration coupon per account: same code may be re-applied, a different code may not. */
+/**
+ * Shop-registration coupons are one per account.
+ * The same code may be re-applied only to finish activation payment after
+ * it was saved on the user at Shop Registration; a different code may not.
+ */
 export function canUserRedeemShopRegistrationCoupon(
   existingUserCouponCode: string | undefined | null,
   incomingCode: string,
