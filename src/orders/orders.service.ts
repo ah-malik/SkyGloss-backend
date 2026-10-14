@@ -4452,8 +4452,7 @@ export class OrdersService implements OnModuleInit {
       typeof order.user === 'object' && order.user !== null
         ? (order.user as any)
         : null;
-    // Order requests already support admin shipping edits; USA purchase orders
-    // use fixed checkout shipping and need the same unpaid update path.
+    // Order requests + USA purchase orders: admin may edit shipping until shipped.
     const isUsaOrder = this.isUsaDestinationOrder(
       order.shippingAddress?.country,
       shopUser?.country,
@@ -4463,15 +4462,26 @@ export class OrdersService implements OnModuleInit {
         'Shipping can only be added on order requests',
       );
     }
-    if (!this.isUnpaidOrderRequestStatus(order.status)) {
+    if (!isOrderModifiable(order)) {
       throw new BadRequestException(
-        'Shipping can only be updated on unpaid order requests',
+        'Shipping cannot be updated after the order is marked as shipped',
       );
     }
 
     const shippingFee = roundMoney(Number(shippingFeeInput));
     if (!Number.isFinite(shippingFee) || shippingFee < 0) {
       throw new BadRequestException('Enter a valid shipping amount');
+    }
+
+    const previousTotal = Number(order.totalAmount) || 0;
+    const wasPaid = String(order.status).toUpperCase() === OrderStatus.PAID;
+    const existingPaid = getOrderAmountPaid(order);
+
+    // Lock already-collected amount when amending a paid order.
+    if (wasPaid && existingPaid <= 0) {
+      order.amountPaid = previousTotal;
+    } else if (existingPaid > 0) {
+      order.amountPaid = existingPaid;
     }
 
     const itemsSubtotal = getItemsSubtotal(order.items);
@@ -4491,6 +4501,17 @@ export class OrdersService implements OnModuleInit {
     order.vatRate = vatRate;
     order.shippingSetAt = new Date();
     order.invoiceUpdatedAt = new Date();
+
+    const remaining = getOrderRemainingAmount(order);
+    if (remaining > 0.01 && wasPaid) {
+      const requiresOnlinePayment = this.requiresOnlinePaymentDestinationOrder(
+        order.shippingAddress?.country,
+        shopUser?.country,
+      );
+      order.status = requiresOnlinePayment
+        ? OrderStatus.PENDING_PAYMENT
+        : OrderStatus.PENDING;
+    }
 
     const updatedOrder = await order.save();
     return this.returnManagedOrder(updatedOrder, actor);
