@@ -28,10 +28,14 @@ import {
   originalNameFromFileName,
   resolveContentType,
 } from './media-types';
+import { ASSET_FILE_LINKS } from './asset-links';
 
 // Signed URLs for thumbnails/previews inside the admin panel.
 const VIEW_TOKEN_TTL_SECONDS = 24 * 60 * 60;
 const VIEW_TOKEN_RENEW_BEFORE_MS = 60 * 60 * 1000;
+// Signed URLs handed to portal users for linked asset files.
+const ASSET_TOKEN_TTL_SECONDS = 24 * 60 * 60;
+const ASSET_TOKEN_RENEW_BEFORE_MS = 6 * 60 * 60 * 1000;
 // B2 bills in decimal GB; the free tier is 10 GB.
 const DEFAULT_STORAGE_LIMIT_GB = 10;
 const ABANDONED_UPLOAD_AGE_MS = 24 * 60 * 60 * 1000;
@@ -45,6 +49,7 @@ type MediaLean = MediaFile & {
 @Injectable()
 export class MediaService {
   private viewToken: { token: string; expiresAt: number } | null = null;
+  private assetTokens = new Map<string, { token: string; expiresAt: number }>();
 
   constructor(
     @InjectModel(MediaFile.name)
@@ -292,6 +297,98 @@ export class MediaService {
       url: await this.backblaze.buildFileUrl(doc.fileName, token),
       expiresAt: new Date(Date.now() + ttl * 1000).toISOString(),
     };
+  }
+
+  /** Signed URL for a linked asset file; tokens are cached so page loads don't hit B2. */
+  private async assetFileUrl(fileName: string, contentDisposition?: string) {
+    const bucket = await this.backblaze.getBucket();
+    if (bucket.isPublic) return this.backblaze.buildFileUrl(fileName);
+    const key = `${fileName}
+${contentDisposition ?? ''}`;
+    let cached = this.assetTokens.get(key);
+    if (
+      !cached ||
+      cached.expiresAt - Date.now() < ASSET_TOKEN_RENEW_BEFORE_MS
+    ) {
+      cached = {
+        token: await this.backblaze.getDownloadAuthorization(
+          fileName,
+          ASSET_TOKEN_TTL_SECONDS,
+          contentDisposition,
+        ),
+        expiresAt: Date.now() + ASSET_TOKEN_TTL_SECONDS * 1000,
+      };
+      this.assetTokens.set(key, cached);
+    }
+    return this.backblaze.buildFileUrl(
+      fileName,
+      cached.token,
+      contentDisposition,
+    );
+  }
+
+  /**
+   * Files linked to the portal Assets library (see asset-links.ts), keyed by
+   * asset id and download-row index. Only linked files are exposed.
+   */
+  async getAssetFiles() {
+    const names = [
+      ...new Set(
+        Object.values(ASSET_FILE_LINKS).flatMap((links) =>
+          Object.values(links),
+        ),
+      ),
+    ];
+    const docs = names.length
+      ? await this.mediaModel
+          .find({ originalName: { $in: names } })
+          .sort({ createdAt: -1 })
+          .lean<MediaLean[]>()
+      : [];
+    const newestByName = new Map<string, MediaLean>();
+    for (const doc of docs) {
+      if (!newestByName.has(doc.originalName)) {
+        newestByName.set(doc.originalName, doc);
+      }
+    }
+
+    const result: Record<
+      string,
+      {
+        previewUrl: string | null;
+        files: Record<
+          string,
+          { name: string; size: number; url: string; downloadUrl: string }
+        >;
+      }
+    > = {};
+    for (const [assetId, links] of Object.entries(ASSET_FILE_LINKS)) {
+      const files: (typeof result)[string]['files'] = {};
+      let previewUrl: string | null = null;
+      const ordered = Object.entries(links).sort(
+        ([a], [b]) => Number(a) - Number(b),
+      );
+      for (const [index, name] of ordered) {
+        const doc = newestByName.get(name);
+        if (!doc) continue;
+        const downloadName = name.replace(/^copy of\s+/i, '');
+        // B2 only accepts printable ASCII in the header value.
+        const safeName = downloadName.replace(/[^\x20-\x7e]|["\\]/g, '_');
+        const url = await this.assetFileUrl(doc.fileName);
+        files[index] = {
+          name: downloadName,
+          size: doc.size,
+          url,
+          downloadUrl: await this.assetFileUrl(
+            doc.fileName,
+            `attachment; filename="${safeName}"`,
+          ),
+        };
+        if (!previewUrl && doc.category === 'pdf') previewUrl = url;
+      }
+      if (Object.keys(files).length) result[assetId] = { previewUrl, files };
+    }
+    return result;
   }
 
   async remove(id: string) {

@@ -3,6 +3,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { BackblazeModule } from '../backblaze/backblaze.module';
 import { MediaFile, MediaFileSchema } from './entities/media-file.entity';
 import { MediaController } from './media.controller';
+import { AssetFilesController } from './asset-files.controller';
 import { MediaService } from './media.service';
 
 @Module({
@@ -12,7 +13,7 @@ import { MediaService } from './media.service';
       { name: MediaFile.name, schema: MediaFileSchema },
     ]),
   ],
-  controllers: [MediaController],
+  controllers: [MediaController, AssetFilesController],
   providers: [MediaService],
 })
 export class MediaModule {}

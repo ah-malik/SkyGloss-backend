@@ -290,6 +290,7 @@ export class BackblazeService {
   async getDownloadAuthorization(
     fileNamePrefix: string,
     validDurationInSeconds: number,
+    contentDisposition?: string,
   ): Promise<string> {
     const bucket = await this.getBucket();
     const res = await this.callApi<{ authorizationToken: string }>(
@@ -301,18 +302,28 @@ export class BackblazeService {
           Math.max(1, Math.floor(validDurationInSeconds)),
           MAX_DOWNLOAD_TTL_SECONDS,
         ),
+        // A token issued with a disposition only works on URLs that repeat it.
+        ...(contentDisposition
+          ? { b2ContentDisposition: contentDisposition }
+          : {}),
       },
     );
     return res.authorizationToken;
   }
 
-  async buildFileUrl(fileName: string, downloadToken?: string) {
+  async buildFileUrl(
+    fileName: string,
+    downloadToken?: string,
+    contentDisposition?: string,
+  ) {
     const bucket = await this.getBucket();
     const session = await this.authorize();
     const url = `${session.downloadUrl}/file/${encodeURIComponent(bucket.bucketName)}/${this.encodePath(fileName)}`;
-    return downloadToken
-      ? `${url}?Authorization=${encodeURIComponent(downloadToken)}`
-      : url;
+    if (!downloadToken) return url;
+    const disposition = contentDisposition
+      ? `&b2ContentDisposition=${encodeURIComponent(contentDisposition)}`
+      : '';
+    return `${url}?Authorization=${encodeURIComponent(downloadToken)}${disposition}`;
   }
 
   /** Total bytes stored in the bucket (all file versions). Cached for a few minutes. */
