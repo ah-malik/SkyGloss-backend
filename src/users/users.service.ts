@@ -3455,9 +3455,38 @@ export class UsersService implements OnModuleInit {
 
     const previousStatus = targetUserForHierarchy.status;
 
-    const updatedUser = await this.userModel
-      .findByIdAndUpdate(id, { $set: updatePayload }, { new: true })
-      .exec();
+    let updatedUser: UserDocument | null = null;
+    const assigningCertificateNumber =
+      updatePayload.isCertified === true &&
+      updatePayload.certificateNumber != null;
+    // Retry if another write (or a soft-deleted doc) already holds this number.
+    const maxCertRetries = assigningCertificateNumber ? 5 : 1;
+    for (let attempt = 0; attempt < maxCertRetries; attempt++) {
+      try {
+        updatedUser = await this.userModel
+          .findByIdAndUpdate(id, { $set: updatePayload }, { new: true })
+          .exec();
+        break;
+      } catch (err: any) {
+        const isDupCert =
+          err?.code === 11000 &&
+          (Object.keys(err.keyPattern || err.keyValue || {}).includes(
+            'certificateNumber',
+          ) ||
+            /certificateNumber/i.test(String(err.message || '')));
+        if (!isDupCert || attempt === maxCertRetries - 1) {
+          throw err;
+        }
+        // Always advance past the collided value — getNext alone can return the
+        // same number again if the failed write never persisted.
+        const bumped = Number(updatePayload.certificateNumber) + 1;
+        const fromDb = await this.getNextCertificateNumber();
+        updatePayload.certificateNumber = Math.max(bumped, fromDb);
+        this.logger.warn(
+          `Certificate number collision on user ${id}; retrying with ${updatePayload.certificateNumber}`,
+        );
+      }
+    }
 
     if (
       updatedUser &&
@@ -6173,11 +6202,15 @@ export class UsersService implements OnModuleInit {
   // }
 
   private async getNextCertificateNumber(): Promise<number> {
+    // Include soft-deleted users — certificateNumber is unique across the
+    // whole collection, so skipping deleted docs reuses a taken number and
+    // the certify write fails with E11000.
     const lastUser = await this.userModel
-      .findOne({ certificateNumber: { $exists: true } })
+      .findOne({ certificateNumber: { $exists: true, $ne: null } })
+      .setOptions({ withDeleted: true })
       .sort({ certificateNumber: -1 })
       .exec();
-    
+
     if (lastUser && lastUser.certificateNumber) {
       return lastUser.certificateNumber + 1;
     }

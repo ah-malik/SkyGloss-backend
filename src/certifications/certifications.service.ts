@@ -344,9 +344,10 @@ export class CertificationsService {
       (s) => s.isCertified === true && !s.certificateNumber,
     );
     if (certifiedWithoutNumber.length > 0) {
-      // Get the current highest certificate number
+      // Include soft-deleted users — certificateNumber unique index covers them.
       const lastUser = await this.userModel
         .findOne({ certificateNumber: { $exists: true, $ne: null } })
+        .setOptions({ withDeleted: true })
         .sort({ certificateNumber: -1 })
         .exec();
       let nextNumber = lastUser?.certificateNumber ? lastUser.certificateNumber + 1 : 14943212;
