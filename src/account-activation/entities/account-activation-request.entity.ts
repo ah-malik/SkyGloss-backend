@@ -9,6 +9,8 @@ export enum AccountActivationStatus {
   WAITING_HUB_APPROVAL = 'waiting_hub_approval',
   APPROVED_BY_HUB = 'approved_by_hub',
   REJECTED_BY_HUB = 'rejected_by_hub',
+  /** Activated directly by an Admin from the admin panel (bypasses Hub). */
+  APPROVED_BY_ADMIN = 'approved_by_admin',
   CANCELLED = 'cancelled',
 }
 
@@ -77,6 +79,15 @@ export class AccountActivationRequest {
 
   @Prop()
   hubReviewNote?: string;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
+  adminReviewerId?: Types.ObjectId;
+
+  @Prop()
+  adminReviewedAt?: Date;
+
+  @Prop()
+  adminReviewNote?: string;
 
   @Prop()
   submittedAt?: Date;

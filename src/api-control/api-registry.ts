@@ -497,6 +497,36 @@ export const ADMIN_APIS: ApiEndpointDef[] = [
     'List countries available for activity filter',
   ),
 
+  // Account Activation
+  def(
+    'admin',
+    'Account Activation',
+    'GET',
+    '/account-activation/admin/requests',
+    'List partner activation requests',
+  ),
+  def(
+    'admin',
+    'Account Activation',
+    'GET',
+    '/account-activation/admin/requests/:id',
+    'Activation request detail with agreement',
+  ),
+  def(
+    'admin',
+    'Account Activation',
+    'PATCH',
+    '/account-activation/admin/requests/:id/approve',
+    'Admin approve activation request',
+  ),
+  def(
+    'admin',
+    'Account Activation',
+    'PATCH',
+    '/account-activation/admin/users/:userId/activate',
+    'Admin activate partner directly',
+  ),
+
   // Withdrawals
   def('admin', 'Withdrawals', 'GET', '/withdrawals/admin/pending', 'Pending withdrawals'),
   def('admin', 'Withdrawals', 'GET', '/withdrawals/:id', 'Withdrawal detail'),

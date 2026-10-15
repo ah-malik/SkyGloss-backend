@@ -122,6 +122,45 @@ export class AccountActivationService implements OnModuleInit {
     };
   }
 
+  private roleLabel(role?: string | null): string {
+    return role === UserRole.MASTER_PARTNER
+      ? 'Representative'
+      : role === UserRole.REGIONAL_PARTNER
+        ? 'Promoter'
+        : 'Distributor';
+  }
+
+  private async markUserActivated(userId: Types.ObjectId | string) {
+    await this.userModel.findByIdAndUpdate(userId, {
+      $set: {
+        isAccountActivated: true,
+        isTrainingComplete: true,
+        status: UserStatus.ACTIVE,
+      },
+    });
+  }
+
+  /** Admin notifications must never block the partner's submission. */
+  private async notifyAllAdmins(data: {
+    type: NotificationType;
+    title: string;
+    message: string;
+    triggeredBy?: string;
+    link?: string;
+  }) {
+    try {
+      const admins = await this.usersService.findAdminUsers();
+      for (const admin of admins) {
+        await this.notificationsService.create({
+          ...data,
+          user: admin._id.toString(),
+        });
+      }
+    } catch (err) {
+      console.error('[AccountActivation] Admin notification failed', err);
+    }
+  }
+
   async getMyStatus(userId: string) {
     const user = await this.usersService.findOne(userId);
     if (!user) throw new NotFoundException('User not found');
@@ -267,12 +306,7 @@ export class AccountActivationService implements OnModuleInit {
       [user.firstName, user.lastName].filter(Boolean).join(' ').trim() ||
       user.email ||
       'A partner';
-    const roleLabel =
-      user.role === UserRole.MASTER_PARTNER
-        ? 'Representative'
-        : user.role === UserRole.REGIONAL_PARTNER
-          ? 'Promoter'
-          : 'Distributor';
+    const roleLabel = this.roleLabel(user.role);
 
     await this.notificationsService.create({
       type: NotificationType.ACCOUNT_ACTIVATION_SUBMITTED,
@@ -281,6 +315,14 @@ export class AccountActivationService implements OnModuleInit {
       user: hub._id.toString(),
       triggeredBy: userId,
       link: '/dashboard/partner#activations',
+    });
+
+    await this.notifyAllAdmins({
+      type: NotificationType.ACCOUNT_ACTIVATION_SUBMITTED,
+      title: 'Account Activation Request',
+      message: `${requesterName} (${roleLabel}) submitted an Account Activation request (Hub: ${hubName}).`,
+      triggeredBy: userId,
+      link: '/account-activations',
     });
 
     return this.formatRequest(request);
@@ -357,13 +399,7 @@ export class AccountActivationService implements OnModuleInit {
     request.status = AccountActivationStatus.APPROVED_BY_HUB;
     await request.save();
 
-    await this.userModel.findByIdAndUpdate(request.userId, {
-      $set: {
-        isAccountActivated: true,
-        isTrainingComplete: true,
-        status: UserStatus.ACTIVE,
-      },
-    });
+    await this.markUserActivated(request.userId);
 
     await this.notificationsService.create({
       type: NotificationType.ACCOUNT_ACTIVATION_APPROVED,
@@ -376,5 +412,155 @@ export class AccountActivationService implements OnModuleInit {
     });
 
     return this.formatRequest(request);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Admin
+  // ---------------------------------------------------------------------------
+
+  private static readonly ADMIN_USER_FIELDS =
+    'firstName lastName email phone partnerCode role city country companyName isAccountActivated';
+
+  async adminList(status?: string) {
+    const filter: Record<string, unknown> = {};
+    if (
+      status &&
+      (Object.values(AccountActivationStatus) as string[]).includes(status)
+    ) {
+      filter.status = status;
+    }
+
+    const items = await this.activationModel
+      .find(filter)
+      .sort({ submittedAt: -1, createdAt: -1 })
+      .populate('userId', AccountActivationService.ADMIN_USER_FIELDS)
+      .lean();
+
+    return items.map((item) => this.formatRequest(item));
+  }
+
+  async adminGetOne(requestId: string) {
+    if (!Types.ObjectId.isValid(requestId)) {
+      throw new NotFoundException('Activation request not found');
+    }
+    const request = await this.activationModel
+      .findById(requestId)
+      .populate('userId', AccountActivationService.ADMIN_USER_FIELDS)
+      .populate('hubReviewerId', 'firstName lastName email partnerCode')
+      .populate('adminReviewerId', 'firstName lastName email')
+      .lean();
+    if (!request) throw new NotFoundException('Activation request not found');
+    return this.formatRequest(request);
+  }
+
+  /** Admin approves a pending request; the Hub no longer needs to act on it. */
+  async adminApprove(requestId: string, adminUserId: string, note?: string) {
+    if (!Types.ObjectId.isValid(requestId)) {
+      throw new NotFoundException('Activation request not found');
+    }
+
+    // Atomic status transition so a simultaneous Hub review cannot double-apply.
+    const request = await this.activationModel.findOneAndUpdate(
+      {
+        _id: new Types.ObjectId(requestId),
+        status: AccountActivationStatus.WAITING_HUB_APPROVAL,
+      },
+      {
+        $set: {
+          status: AccountActivationStatus.APPROVED_BY_ADMIN,
+          adminReviewerId: new Types.ObjectId(adminUserId),
+          adminReviewedAt: new Date(),
+          adminReviewNote: note,
+        },
+      },
+      { new: true },
+    );
+    if (!request) {
+      const exists = await this.activationModel.exists({
+        _id: new Types.ObjectId(requestId),
+      });
+      if (!exists) throw new NotFoundException('Activation request not found');
+      throw new BadRequestException(
+        'This activation request is no longer pending.',
+      );
+    }
+
+    await this.markUserActivated(request.userId);
+    await this.notifyAdminActivation(
+      request.userId.toString(),
+      adminUserId,
+      request.assignedHubId?.toString(),
+    );
+
+    return this.adminGetOne(requestId);
+  }
+
+  /**
+   * Admin activates a partner directly from the admin panel. A pending request
+   * is approved if one exists; otherwise no request is required.
+   */
+  async adminActivateUser(userId: string, adminUserId: string, note?: string) {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new NotFoundException('User not found');
+    }
+    const user = await this.usersService.findOne(userId);
+    if (!user) throw new NotFoundException('User not found');
+    this.assertEligible(user);
+
+    if (user.isAccountActivated) {
+      throw new BadRequestException('This account is already activated.');
+    }
+
+    const pending = await this.activationModel.findOne({
+      userId: new Types.ObjectId(userId),
+      status: AccountActivationStatus.WAITING_HUB_APPROVAL,
+    });
+    if (pending) {
+      const request = await this.adminApprove(
+        pending._id.toString(),
+        adminUserId,
+        note,
+      );
+      return { userId, isAccountActivated: true, request };
+    }
+
+    await this.markUserActivated(userId);
+    await this.notifyAdminActivation(userId, adminUserId);
+
+    return { userId, isAccountActivated: true, request: null };
+  }
+
+  private async notifyAdminActivation(
+    partnerUserId: string,
+    adminUserId: string,
+    hubUserId?: string,
+  ) {
+    await this.notificationsService.create({
+      type: NotificationType.ACCOUNT_ACTIVATION_APPROVED,
+      title: 'Account Activated',
+      message:
+        'Your Account Activation was approved by SkyGloss Admin. You can now withdraw earnings.',
+      user: partnerUserId,
+      triggeredBy: adminUserId,
+      link: '/dashboard/partner/earnings',
+    });
+
+    if (!hubUserId) return;
+    const partner = await this.usersService.findOne(partnerUserId);
+    const partnerName =
+      [partner?.firstName, partner?.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim() ||
+      partner?.email ||
+      'A partner';
+    await this.notificationsService.create({
+      type: NotificationType.ACCOUNT_ACTIVATION_APPROVED,
+      title: 'Account Activation Approved by Admin',
+      message: `${partnerName} (${this.roleLabel(partner?.role)}) was activated by SkyGloss Admin. No Hub action is needed.`,
+      user: hubUserId,
+      triggeredBy: adminUserId,
+      link: '/dashboard/partner#activations',
+    });
   }
 }

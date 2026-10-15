@@ -5,11 +5,13 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { AccountActivationService } from './account-activation.service';
 import { SubmitAccountActivationDto } from './dto/submit-account-activation.dto';
 import { HubReviewActivationDto } from './dto/hub-review-activation.dto';
+import { AdminActivateDto } from './dto/admin-activate.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -56,6 +58,42 @@ export class AccountActivationController {
       id,
       userId,
       dto.action,
+      dto.note,
+    );
+  }
+
+  @Get('admin/requests')
+  @Roles(UserRole.ADMIN)
+  adminList(@Query('status') status?: string) {
+    return this.accountActivationService.adminList(status);
+  }
+
+  @Get('admin/requests/:id')
+  @Roles(UserRole.ADMIN)
+  adminGetOne(@Param('id') id: string) {
+    return this.accountActivationService.adminGetOne(id);
+  }
+
+  @Patch('admin/requests/:id/approve')
+  @Roles(UserRole.ADMIN)
+  adminApprove(
+    @Param('id') id: string,
+    @GetUser('_id') adminId: string,
+    @Body() dto: AdminActivateDto,
+  ) {
+    return this.accountActivationService.adminApprove(id, adminId, dto.note);
+  }
+
+  @Patch('admin/users/:userId/activate')
+  @Roles(UserRole.ADMIN)
+  adminActivateUser(
+    @Param('userId') userId: string,
+    @GetUser('_id') adminId: string,
+    @Body() dto: AdminActivateDto,
+  ) {
+    return this.accountActivationService.adminActivateUser(
+      userId,
+      adminId,
       dto.note,
     );
   }
