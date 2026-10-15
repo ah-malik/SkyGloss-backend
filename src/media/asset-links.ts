@@ -14,8 +14,8 @@ export const ASSET_FILE_LINKS: Record<string, Record<number, string>> = {
   'tesla-ff': {
     0: 'Copy of FACTORY FOREVER - Tesla Appearance Maintenance Program.pdf',
   },
-  // Get SkyGloss Certified booklet -> "For printing"
-  'getcert-book': {
-    1: 'Copy of Get SkyGloss Certified.pdf',
+  // SkyGloss presentation for shop owners -> "For presenting"
+  'owner-pres': {
+    0: 'Copy of Get SkyGloss Certified.pdf',
   },
 };
