@@ -4,6 +4,9 @@ export type MediaCategory = (typeof MEDIA_CATEGORIES)[number];
 /** Root "folder" in the bucket for everything the media library manages. */
 export const MEDIA_ROOT = 'media/';
 
+/** Folder used by the earlier standalone PDF uploader; synced into the library. */
+export const LEGACY_PREFIXES = ['pdfs/'];
+
 export const MEDIA_FOLDERS: Record<MediaCategory, string> = {
   image: 'images',
   video: 'videos',
@@ -91,4 +94,15 @@ export function buildMediaFileName(
   const yyyy = now.getUTCFullYear();
   const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
   return `${MEDIA_ROOT}${MEDIA_FOLDERS[category]}/${yyyy}/${mm}/${uniqueId}${base ? `-${base}` : ''}${ext ? `.${ext}` : ''}`;
+}
+
+/** "media/pdfs/2026/10/<uuid>-price-list.pdf" -> "price-list.pdf" */
+export function originalNameFromFileName(fileName: string): string {
+  const base = fileName.split('/').pop() || fileName;
+  return (
+    base.replace(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-?/i,
+      '',
+    ) || base
+  );
 }

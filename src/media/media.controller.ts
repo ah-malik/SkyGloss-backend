@@ -76,6 +76,13 @@ export class MediaController {
     );
   }
 
+  @Post('sync')
+  syncFromBucket(@GetUser('_id') userId: string) {
+    return this.mediaService.syncFromBucket(
+      userId ? String(userId) : undefined,
+    );
+  }
+
   @Get(':id/share-url')
   getShareUrl(@Param('id') id: string) {
     return this.mediaService.getShareUrl(id);

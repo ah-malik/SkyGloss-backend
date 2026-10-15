@@ -115,10 +115,16 @@ export class BackblazeService {
     }
   }
 
-  /** Calls a B2 native API endpoint, re-authorizing once if the token expired. */
+  /**
+   * Calls a B2 native API endpoint. Re-authorizes once if the token expired and
+   * backs off on "too busy" (503/429), as B2 asks clients to do.
+   */
   private async callApi<T>(endpoint: string, body: object): Promise<T> {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const session = await this.authorize(attempt > 0);
+    let reauthorized = false;
+    let forceAuth = false;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const session = await this.authorize(forceAuth);
+      forceAuth = false;
       try {
         const res = await axios.post<T>(
           `${session.apiUrl}/b2api/v3/${endpoint}`,
@@ -131,7 +137,15 @@ export class BackblazeService {
         return res.data;
       } catch (error) {
         const status = (error as AxiosError).response?.status;
-        if (attempt === 0 && status === 401) continue;
+        if (status === 401 && !reauthorized) {
+          reauthorized = true;
+          forceAuth = true;
+          continue;
+        }
+        if ((status === 503 || status === 429) && attempt < 3) {
+          await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
+          continue;
+        }
         console.error(
           `[BackblazeService] ${endpoint} failed:`,
           this.describe(error),
@@ -229,6 +243,39 @@ export class BackblazeService {
       startFileId = res.nextFileId;
     } while (startFileId);
     return files;
+  }
+
+  /** Current (latest) version of every file whose name starts with `prefix`. */
+  async listFileNames(prefix = ''): Promise<B2FileInfo[]> {
+    const bucket = await this.getBucket();
+    const files: B2FileInfo[] = [];
+    let startFileName: string | null = null;
+    do {
+      const res: { files: B2FileInfo[]; nextFileName: string | null } =
+        await this.callApi('b2_list_file_names', {
+          bucketId: bucket.bucketId,
+          prefix,
+          maxFileCount: 10000,
+          ...(startFileName ? { startFileName } : {}),
+        });
+      files.push(...res.files);
+      startFileName = res.nextFileName;
+    } while (startFileName);
+    return files;
+  }
+
+  /** Server-side copy within the bucket (files up to 5 GB). */
+  copyFile(sourceFileId: string, fileName: string): Promise<B2FileInfo> {
+    return this.callApi<B2FileInfo>('b2_copy_file', {
+      sourceFileId,
+      fileName,
+      metadataDirective: 'COPY',
+    });
+  }
+
+  /** Forces the next usage read to re-count the bucket. */
+  resetUsage() {
+    this.usage = null;
   }
 
   getFileInfo(fileId: string): Promise<B2FileInfo> {

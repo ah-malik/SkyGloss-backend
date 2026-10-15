@@ -2,6 +2,7 @@ import {
   buildMediaFileName,
   categoryForContentType,
   categoryForFileName,
+  originalNameFromFileName,
   resolveContentType,
 } from './media-types';
 
@@ -33,5 +34,18 @@ describe('media-types', () => {
     expect(name).toBe('media/images/2026/03/abc-123-summer-banner-final.png');
     expect(categoryForFileName(name)).toBe('image');
     expect(categoryForFileName('other/x.png')).toBeNull();
+  });
+});
+
+describe('originalNameFromFileName', () => {
+  it('strips the folder and the unique id prefix', () => {
+    expect(
+      originalNameFromFileName(
+        'pdfs/2026/10/bf0a4780-2463-4e63-ada1-231929a8c8ee-get-skygloss-certified.pdf',
+      ),
+    ).toBe('get-skygloss-certified.pdf');
+    expect(originalNameFromFileName('media/images/photo.png')).toBe(
+      'photo.png',
+    );
   });
 });

@@ -23,7 +23,9 @@ import {
   MediaCategory,
   buildMediaFileName,
   categoryForContentType,
+  LEGACY_PREFIXES,
   categoryForFileName,
+  originalNameFromFileName,
   resolveContentType,
 } from './media-types';
 
@@ -303,6 +305,64 @@ export class MediaService {
     }
     await this.mediaModel.deleteOne({ _id: doc._id });
     return { deleted: true };
+  }
+
+  /**
+   * Adds files that are in the bucket but missing from the library: uploads whose
+   * final step never reached the API, and files from the earlier PDF uploader
+   * (those are moved into the media folder so library links can reach them).
+   */
+  async syncFromBucket(userId?: string) {
+    const [bucketFiles, known] = await Promise.all([
+      this.backblaze.listFileNames(),
+      this.mediaModel.find({}, { fileId: 1 }).lean<{ fileId: string }[]>(),
+    ]);
+    const knownIds = new Set(known.map((d) => d.fileId));
+    const result = { imported: 0, moved: 0, skipped: 0 };
+
+    for (const file of bucketFiles) {
+      if (knownIds.has(file.fileId)) continue;
+      const contentType = resolveContentType(file.fileName, file.contentType);
+      const category = categoryForContentType(contentType);
+      const isMedia = file.fileName.startsWith(MEDIA_ROOT);
+      const isLegacy = LEGACY_PREFIXES.some((p) => file.fileName.startsWith(p));
+      if (!category || (!isMedia && !isLegacy)) {
+        result.skipped++;
+        continue;
+      }
+      if (isMedia && categoryForFileName(file.fileName) !== category) {
+        result.skipped++;
+        continue;
+      }
+
+      const originalName = originalNameFromFileName(file.fileName);
+      let stored = file;
+      if (isLegacy) {
+        stored = await this.backblaze.copyFile(
+          file.fileId,
+          buildMediaFileName(category, originalName, randomUUID()),
+        );
+        await this.backblaze.deleteFile(file.fileName, file.fileId);
+        result.moved++;
+      }
+
+      await this.mediaModel.create({
+        originalName,
+        fileName: stored.fileName,
+        fileId: stored.fileId,
+        category,
+        contentType,
+        size: stored.contentLength,
+        uploadedBy:
+          userId && Types.ObjectId.isValid(userId)
+            ? new Types.ObjectId(userId)
+            : undefined,
+      });
+      result.imported++;
+    }
+
+    this.backblaze.resetUsage();
+    return result;
   }
 
   /** Abandoned large uploads keep their parts (and storage cost) until cancelled. */
