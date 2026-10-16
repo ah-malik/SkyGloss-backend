@@ -5,6 +5,7 @@ import {
   IsBoolean,
   ValidateNested,
   IsNumber,
+  Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -98,4 +99,25 @@ export class AssignCountryDto {
   @IsOptional()
   @IsString()
   productGroupId?: string | null;
+}
+
+class DValuePriceDto {
+  @IsString()
+  productId: string;
+
+  @IsString()
+  size: string;
+
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  price: number;
+}
+
+/** Replace a group's D-Value prices. Omitted product sizes have no D-Value price. */
+export class UpdateDValuePricesDto {
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => DValuePriceDto)
+  prices: DValuePriceDto[];
 }

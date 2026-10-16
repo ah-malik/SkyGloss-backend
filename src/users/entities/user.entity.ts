@@ -346,6 +346,10 @@ export class User {
   @Prop({ default: false })
   isVisibleOnMap: boolean;
 
+  /** Hub-controlled: shop may generate D-Value invoices from Order History. */
+  @Prop({ default: false })
+  dValueInvoiceEnabled: boolean;
+
   @Prop()
   stripeSessionId?: string;
 

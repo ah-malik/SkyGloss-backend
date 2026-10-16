@@ -7,6 +7,7 @@ import {
 } from './entities/product-group.entity';
 import {
   CreateProductGroupDto,
+  UpdateDValuePricesDto,
   UpdateProductGroupDto,
 } from './dto/product-group.dto';
 import { User, UserDocument, UserRole } from '../users/entities/user.entity';
@@ -169,7 +170,71 @@ export class ProductGroupsService {
     if (!existingGroup) {
       throw new NotFoundException(`Product Group with ID ${id} not found`);
     }
+
+    // Drop D-Value prices for products / sizes no longer assigned to this group.
+    if (updateProductGroupDto.products && existingGroup.dValuePrices?.length) {
+      const assigned = this.assignedSizeKeys(existingGroup);
+      const kept = existingGroup.dValuePrices.filter((entry) =>
+        assigned.has(this.dValueKey(entry.productId, entry.size)),
+      );
+      if (kept.length !== existingGroup.dValuePrices.length) {
+        existingGroup.dValuePrices = kept;
+        await existingGroup.save();
+      }
+    }
     return existingGroup;
+  }
+
+  private dValueKey(productId: unknown, size: unknown): string {
+    const id =
+      productId && typeof productId === 'object' && '_id' in productId
+        ? (productId as { _id: unknown })._id
+        : productId;
+    return `${String(id)}|${String(size)}`;
+  }
+
+  private assignedSizeKeys(group: ProductGroup): Set<string> {
+    const keys = new Set<string>();
+    for (const item of group.products || []) {
+      for (const s of item.sizes || []) {
+        keys.add(this.dValueKey(item.productId, s.size));
+      }
+    }
+    return keys;
+  }
+
+  /**
+   * Replace the group's D-Value prices. Every entry must reference a product
+   * size assigned to this group.
+   */
+  async updateDValuePrices(
+    id: string,
+    prices: UpdateDValuePricesDto['prices'],
+  ): Promise<ProductGroup> {
+    const group = await this.productGroupModel.findById(id).exec();
+    if (!group) {
+      throw new NotFoundException(`Product Group with ID ${id} not found`);
+    }
+
+    const assigned = this.assignedSizeKeys(group);
+    const byKey = new Map<string, { productId: any; size: string; price: number }>();
+    for (const entry of prices || []) {
+      const key = this.dValueKey(entry.productId, entry.size);
+      if (!assigned.has(key)) {
+        throw new BadRequestException(
+          'D-Value prices can only be set for products assigned to this group',
+        );
+      }
+      const price = Math.round(Number(entry.price) * 100) / 100;
+      if (!Number.isFinite(price) || price < 0) {
+        throw new BadRequestException('Enter a valid D-Value price');
+      }
+      byKey.set(key, { productId: entry.productId, size: entry.size, price });
+    }
+
+    group.dValuePrices = Array.from(byKey.values());
+    await group.save();
+    return this.findOne(id);
   }
 
   /**

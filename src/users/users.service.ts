@@ -7,7 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import * as bcrypt from 'bcrypt';
 import { User, UserDocument, UserRole, UserStatus } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -4771,6 +4771,43 @@ export class UsersService implements OnModuleInit {
       updatePayload,
       { new: true },
     ).exec();
+  }
+
+  /**
+   * Hub (or Admin) enables / disables D-Value invoice generation for a shop.
+   * Hub may only change shops inside its own network.
+   */
+  async setShopDValueInvoiceEnabled(
+    shopId: string,
+    enabled: boolean,
+    viewer: UserDocument,
+  ): Promise<{ _id: string; dValueInvoiceEnabled: boolean }> {
+    if (viewer.role !== UserRole.ADMIN && viewer.role !== UserRole.PARTNER) {
+      throw new ForbiddenException(
+        'Only the Hub can manage D-Value invoices for shops.',
+      );
+    }
+    if (!Types.ObjectId.isValid(shopId)) {
+      throw new NotFoundException('Shop not found');
+    }
+    const shop = await this.userModel.findById(shopId).select('role').lean();
+    if (!shop || shop.role !== UserRole.CERTIFIED_SHOP) {
+      throw new NotFoundException('Shop not found');
+    }
+    if (viewer.role === UserRole.PARTNER) {
+      const inNetwork = await this.isUserInViewerNetwork(viewer, shopId);
+      if (!inNetwork) {
+        throw new ForbiddenException(
+          'You can only manage D-Value invoices for shops in your network.',
+        );
+      }
+    }
+
+    await this.userModel
+      .updateOne({ _id: shopId }, { $set: { dValueInvoiceEnabled: !!enabled } })
+      .exec();
+    await this.invalidateNetworkAndOrderCaches();
+    return { _id: shopId, dValueInvoiceEnabled: !!enabled };
   }
 
   async findAllPartners() {

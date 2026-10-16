@@ -34,6 +34,31 @@ export class ProductGroup {
     sizes: { size: string; price: number }[];
   }[];
 
+  /**
+   * Admin-defined D-Value (declared value) unit prices, per product size.
+   * Only products assigned to this group are valid. Used for Shop-generated
+   * D-Value invoices; never affects normal group pricing.
+   */
+  @Prop({
+    type: [
+      {
+        productId: {
+          type: MongooseSchema.Types.ObjectId,
+          ref: 'Product',
+          required: true,
+        },
+        size: { type: String, required: true },
+        price: { type: Number, required: true, min: 0 },
+      },
+    ],
+    default: [],
+  })
+  dValuePrices: {
+    productId: MongooseSchema.Types.ObjectId;
+    size: string;
+    price: number;
+  }[];
+
   @Prop({ default: true })
   isActive: boolean;
 

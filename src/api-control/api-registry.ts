@@ -116,6 +116,13 @@ export const FRONTEND_APIS: ApiEndpointDef[] = [
   def(
     'frontend',
     'Users',
+    'PATCH',
+    '/users/referred-shops/:id/d-value-invoice',
+    'Enable / disable shop D-Value invoices (Hub)',
+  ),
+  def(
+    'frontend',
+    'Users',
     'GET',
     '/users/network/search-representative',
     'Search representative',
@@ -155,6 +162,10 @@ export const FRONTEND_APIS: ApiEndpointDef[] = [
   def('frontend', 'Orders', 'GET', '/orders/activation-fee/quote', 'Activation fee quote (fee, VAT)'),
   def('frontend', 'Orders', 'POST', '/orders/activation-fee', 'Create activation fee session'),
   def('frontend', 'Orders', 'GET', '/orders/my-orders', 'My orders'),
+  def('frontend', 'Orders', 'GET', '/orders/d-value-invoice/status', 'Shop D-Value invoice availability'),
+  def('frontend', 'Orders', 'POST', '/orders/:id/d-value-invoice', 'Generate shop D-Value invoice'),
+  def('frontend', 'Orders', 'GET', '/orders/:id/duplicate-invoices', 'List D-Value invoices for order'),
+  def('frontend', 'PDF', 'GET', '/pdf/duplicate-invoice/:invoiceId', 'Download D-Value invoice PDF'),
   def('frontend', 'Orders', 'GET', '/orders/network-orders', 'Network orders'),
   def('frontend', 'Orders', 'GET', '/orders/network-sales-stats', 'Network sales stats'),
   def('frontend', 'Orders', 'GET', '/orders/commission-orders', 'Commission orders'),
@@ -376,6 +387,7 @@ export const ADMIN_APIS: ApiEndpointDef[] = [
   def('admin', 'Product Groups', 'GET', '/product-groups/:id', 'Get product group'),
   def('admin', 'Product Groups', 'PATCH', '/product-groups/assign-country', 'Assign country to pricing group'),
   def('admin', 'Product Groups', 'PATCH', '/product-groups/:id', 'Update product group'),
+  def('admin', 'Product Groups', 'PATCH', '/product-groups/:id/d-value-prices', 'Update product group D-Value prices'),
   def('admin', 'Product Groups', 'DELETE', '/product-groups/:id', 'Delete product group'),
 
   // Orders

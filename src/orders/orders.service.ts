@@ -6049,6 +6049,9 @@ export class OrdersService implements OnModuleInit {
       totalAmount: duplicatePlain.totalAmount ?? duplicate.totalAmount,
       shippingFee: duplicatePlain.shippingFee ?? duplicate.shippingFee,
       discount: duplicatePlain.discount ?? duplicate.discount,
+      vatAmount: duplicatePlain.vatAmount ?? duplicate.vatAmount,
+      vatRate: duplicatePlain.vatRate ?? duplicate.vatRate,
+      amountPaid: 0,
       orderNumber: duplicatePlain.invoiceNumber || duplicate.invoiceNumber,
     };
   }
@@ -6059,7 +6062,11 @@ export class OrdersService implements OnModuleInit {
   ) {
     const order = await this.orderModel.findById(orderId);
     if (!order) throw new NotFoundException('Order not found');
-    await this.assertHubOrAdminCanManageOrderRequest(order, actor);
+    if (actor?.role === UserRole.CERTIFIED_SHOP) {
+      this.assertShopCanUseDValueInvoice(order, actor);
+    } else {
+      await this.assertHubOrAdminCanManageOrderRequest(order, actor);
+    }
 
     return this.duplicateInvoiceModel
       .find({ orderId: order._id })
@@ -6068,7 +6075,7 @@ export class OrdersService implements OnModuleInit {
       .exec();
   }
 
-  async getDuplicateInvoiceById(invoiceId: string) {
+  async getDuplicateInvoiceById(invoiceId: string, actor?: UserDocument) {
     const duplicate = await this.duplicateInvoiceModel
       .findById(invoiceId)
       .populate({
@@ -6079,7 +6086,213 @@ export class OrdersService implements OnModuleInit {
     if (!duplicate) {
       throw new NotFoundException('D-Value invoice not found');
     }
+    if (actor?.role === UserRole.CERTIFIED_SHOP) {
+      const order = duplicate.orderId as unknown as OrderDocument;
+      if (!order) throw new NotFoundException('Order not found');
+      this.assertShopCanUseDValueInvoice(order, actor);
+    }
     return duplicate;
+  }
+
+  /** Totals (subtotal − discount + VAT + shipping) and persist a D-Value invoice. */
+  private async createDuplicateInvoiceRecord(
+    order: OrderDocument,
+    items: {
+      product: string;
+      name: string;
+      size: string;
+      quantity: number;
+      orderType: 'unit' | 'case';
+      price: number;
+      image: string;
+    }[],
+    shippingFee: number,
+    actor: UserDocument,
+  ): Promise<DuplicateInvoiceDocument> {
+    const discount = roundMoney(order.discount ?? 0);
+    const subtotal = getItemsSubtotal(items);
+    const { amount: vatAmount, rate: vatRate } = calculateEuropeOrderVatAmount(
+      getOrderVatTaxableBase(subtotal, discount),
+      {
+        country: order.shippingAddress?.country,
+        taxId: order.shippingAddress?.taxId,
+        noVatId: (order.shippingAddress as any)?.noVatId,
+      },
+    );
+    const totalAmount = roundMoney(
+      Math.max(0, subtotal - discount + vatAmount + shippingFee),
+    );
+
+    const existingCount = await this.duplicateInvoiceModel.countDocuments({
+      orderId: order._id,
+    });
+    const sequence = existingCount + 1;
+    const invoiceNumber = `${order.orderNumber}-D${sequence}`;
+
+    return this.duplicateInvoiceModel.create({
+      orderId: order._id as Types.ObjectId,
+      invoiceNumber,
+      sequence,
+      items,
+      totalAmount,
+      shippingFee,
+      vatAmount,
+      vatRate,
+      discount,
+      currency: order.currency || 'USD',
+      shippingAddress: order.shippingAddress,
+      createdBy: actor._id as Types.ObjectId,
+    });
+  }
+
+  /** Same resolution order as product pricing: explicit group → country → default. */
+  private async resolvePricingGroupForUser(
+    user: UserDocument,
+  ): Promise<ProductGroupDocument | null> {
+    if (user.productGroup) {
+      return this.productGroupModel.findById(user.productGroup).exec();
+    }
+    if (user.country) {
+      const byCountry = await this.productGroupModel
+        .findOne({
+          $or: [{ countries: user.country }, { country: user.country }],
+          isActive: true,
+        })
+        .exec();
+      if (byCountry) return byCountry;
+    }
+    return this.productGroupModel
+      .findOne({ isDefault: true, isActive: true })
+      .exec();
+  }
+
+  /** Shop may use D-Value invoices only on its own orders, when its Hub enabled them. */
+  private assertShopCanUseDValueInvoice(
+    order: OrderDocument,
+    actor: UserDocument,
+  ): void {
+    if (actor?.role !== UserRole.CERTIFIED_SHOP) {
+      throw new ForbiddenException('Not authorized');
+    }
+    if (!actor.dValueInvoiceEnabled) {
+      throw new ForbiddenException(
+        'D-Value invoices are not enabled for your shop. Please contact your Hub.',
+      );
+    }
+    const owner = order.user as any;
+    const ownerId =
+      owner && typeof owner === 'object' && '_id' in owner
+        ? String(owner._id)
+        : String(owner);
+    if (ownerId !== String(actor._id)) {
+      throw new ForbiddenException('You can only access your own orders');
+    }
+  }
+
+  getShopDValueInvoiceStatus(actor: UserDocument) {
+    return {
+      enabled:
+        actor?.role === UserRole.CERTIFIED_SHOP && !!actor.dValueInvoiceEnabled,
+    };
+  }
+
+  /**
+   * Shop-generated D-Value invoice: same items / quantities as the order, priced
+   * with the Admin-defined D-Value prices of the shop's Pricing Group.
+   * The original order is never modified.
+   */
+  async generateShopDValueInvoice(orderId: string, actor: UserDocument) {
+    if (!Types.ObjectId.isValid(orderId)) {
+      throw new NotFoundException('Order not found');
+    }
+    const order = await this.orderModel.findById(orderId);
+    if (!order) throw new NotFoundException('Order not found');
+    this.assertShopCanUseDValueInvoice(order, actor);
+
+    if (isRegistrationOrder(order)) {
+      throw new BadRequestException(
+        'Cannot create D-Value invoice for registration orders',
+      );
+    }
+    const status = String(order.status || '').toUpperCase();
+    if (status === OrderStatus.CANCELLED || status === OrderStatus.FAILED) {
+      throw new BadRequestException(
+        'D-Value invoices cannot be created for cancelled or failed orders',
+      );
+    }
+    if (!order.items?.length) {
+      throw new BadRequestException('This order has no items');
+    }
+
+    // Only D-Value prices of products / sizes assigned to the shop's group count.
+    const group = await this.resolvePricingGroupForUser(actor);
+    const assigned = new Set<string>();
+    for (const groupItem of group?.products || []) {
+      for (const s of groupItem.sizes || []) {
+        assigned.add(`${String(groupItem.productId)}|${String(s.size)}`);
+      }
+    }
+    const dValueByKey = new Map<string, number>();
+    for (const entry of group?.dValuePrices || []) {
+      const key = `${String(entry.productId)}|${String(entry.size)}`;
+      if (assigned.has(key)) dValueByKey.set(key, Number(entry.price));
+    }
+
+    const missing: string[] = [];
+    const items = order.items.map((item) => {
+      const unit = dValueByKey.get(
+        `${String(item.product)}|${String(item.size)}`,
+      );
+      if (unit == null || !Number.isFinite(unit)) {
+        missing.push(`${item.name} (${item.size})`);
+      }
+      return {
+        product: String(item.product),
+        name: item.name,
+        size: item.size,
+        quantity: Math.max(1, Number(item.quantity) || 1),
+        orderType: normalizeOrderItemType(item.orderType),
+        price: roundMoney(
+          resolveOrderLinePrice(unit ?? 0, item.orderType, item.name),
+        ),
+        image: (item as any).image || '',
+      };
+    });
+    if (missing.length) {
+      throw new BadRequestException(
+        `D-Value price is not set for: ${missing.join(', ')}. Please contact Admin.`,
+      );
+    }
+
+    const shippingFee = roundMoney(order.shippingFee ?? 0);
+
+    // Re-use the shop's latest D-Value invoice while nothing has changed.
+    const latest = await this.duplicateInvoiceModel
+      .findOne({ orderId: order._id, createdBy: actor._id })
+      .sort({ sequence: -1 })
+      .exec();
+    const unchanged =
+      !!latest &&
+      roundMoney(latest.shippingFee ?? 0) === shippingFee &&
+      roundMoney(latest.discount ?? 0) === roundMoney(order.discount ?? 0) &&
+      latest.items.length === items.length &&
+      latest.items.every(
+        (prev: any, i) =>
+          this.itemLineKey(prev) === this.itemLineKey(items[i]) &&
+          Number(prev.quantity) === items[i].quantity &&
+          roundMoney(Number(prev.price)) === items[i].price,
+      );
+    if (latest && unchanged) {
+      return { duplicateInvoice: latest.toObject() };
+    }
+
+    const duplicate = await this.createDuplicateInvoiceRecord(
+      order,
+      items,
+      shippingFee,
+      actor,
+    );
+    return { duplicateInvoice: duplicate.toObject() };
   }
 
   async createAndSendDuplicateInvoice(
@@ -6122,7 +6335,6 @@ export class OrdersService implements OnModuleInit {
       image: item.image || '',
     }));
 
-    const discount = roundMoney(order.discount ?? 0);
     const shippingFee =
       dto.shippingFee != null
         ? roundMoney(Number(dto.shippingFee))
@@ -6132,39 +6344,12 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException('Enter a valid shipping amount');
     }
 
-    const subtotal = getItemsSubtotal(items);
-    const { amount: vatAmount, rate: vatRate } = calculateEuropeOrderVatAmount(
-      getOrderVatTaxableBase(subtotal, discount),
-      {
-        country: order.shippingAddress?.country,
-        taxId: order.shippingAddress?.taxId,
-        noVatId: (order.shippingAddress as any)?.noVatId,
-      },
-    );
-    const totalAmount = roundMoney(
-      Math.max(0, subtotal - discount + vatAmount + shippingFee),
-    );
-
-    const existingCount = await this.duplicateInvoiceModel.countDocuments({
-      orderId: order._id,
-    });
-    const sequence = existingCount + 1;
-    const invoiceNumber = `${order.orderNumber}-D${sequence}`;
-
-    const duplicate = await this.duplicateInvoiceModel.create({
-      orderId: order._id as Types.ObjectId,
-      invoiceNumber,
-      sequence,
+    const duplicate = await this.createDuplicateInvoiceRecord(
+      order,
       items,
-      totalAmount,
       shippingFee,
-      vatAmount,
-      vatRate,
-      discount,
-      currency: order.currency || 'USD',
-      shippingAddress: order.shippingAddress,
-      createdBy: actor._id as Types.ObjectId,
-    });
+      actor,
+    );
 
     const userDoc =
       typeof order.user === 'object' && order.user !== null

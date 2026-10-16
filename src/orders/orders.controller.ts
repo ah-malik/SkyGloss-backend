@@ -168,9 +168,26 @@ export class OrdersController {
     return this.ordersService.getCommissionOrders(user);
   }
 
+  @Get('d-value-invoice/status')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.CERTIFIED_SHOP)
+  getShopDValueInvoiceStatus(@GetUser() user: UserDocument) {
+    return this.ordersService.getShopDValueInvoiceStatus(user);
+  }
+
+  @Post(':id/d-value-invoice')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.CERTIFIED_SHOP)
+  generateShopDValueInvoice(
+    @Param('id') id: string,
+    @GetUser() user: UserDocument,
+  ) {
+    return this.ordersService.generateShopDValueInvoice(id, user);
+  }
+
   @Get(':id/duplicate-invoices')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.PARTNER)
+  @Roles(UserRole.ADMIN, UserRole.PARTNER, UserRole.CERTIFIED_SHOP)
   getDuplicateInvoices(
     @Param('id') id: string,
     @GetUser() user: UserDocument,

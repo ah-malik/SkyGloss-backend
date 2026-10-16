@@ -12,6 +12,7 @@ import { ProductGroupsService } from './product-groups.service';
 import {
   AssignCountryDto,
   CreateProductGroupDto,
+  UpdateDValuePricesDto,
   UpdateProductGroupDto,
 } from './dto/product-group.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -56,6 +57,15 @@ export class ProductGroupsController {
     @Body() updateProductGroupDto: UpdateProductGroupDto,
   ) {
     return this.productGroupsService.update(id, updateProductGroupDto);
+  }
+
+  @Patch(':id/d-value-prices')
+  @Roles(UserRole.ADMIN)
+  updateDValuePrices(
+    @Param('id') id: string,
+    @Body() dto: UpdateDValuePricesDto,
+  ) {
+    return this.productGroupsService.updateDValuePrices(id, dto.prices);
   }
 
   @Delete(':id')

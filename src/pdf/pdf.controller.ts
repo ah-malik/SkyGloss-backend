@@ -71,12 +71,16 @@ export class PdfController {
   }
 
   @Get('duplicate-invoice/:invoiceId')
-  @Roles(UserRole.ADMIN, UserRole.PARTNER)
+  @Roles(UserRole.ADMIN, UserRole.PARTNER, UserRole.CERTIFIED_SHOP)
   async downloadDuplicateInvoice(
     @Param('invoiceId') invoiceId: string,
+    @Req() req: any,
     @Res() res: Response,
   ) {
-    const duplicate = await this.ordersService.getDuplicateInvoiceById(invoiceId);
+    const duplicate = await this.ordersService.getDuplicateInvoiceById(
+      invoiceId,
+      req.user,
+    );
     const order = duplicate.orderId as any;
     if (!order) throw new NotFoundException('Order not found');
 
@@ -86,6 +90,10 @@ export class PdfController {
       totalAmount: duplicate.totalAmount,
       shippingFee: duplicate.shippingFee,
       discount: duplicate.discount,
+      vatAmount: duplicate.vatAmount,
+      vatRate: duplicate.vatRate,
+      // D-Value is a declared-value copy, not a payment record.
+      amountPaid: 0,
       orderNumber: duplicate.invoiceNumber,
     };
 
