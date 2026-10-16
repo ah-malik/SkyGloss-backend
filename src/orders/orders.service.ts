@@ -6224,18 +6224,20 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException('This order has no items');
     }
 
-    // Only D-Value prices of products / sizes assigned to the shop's group count.
+    // D-Value price per assigned product size: Admin override, else the group price.
     const group = await this.resolvePricingGroupForUser(actor);
-    const assigned = new Set<string>();
+    const dValueByKey = new Map<string, number>();
     for (const groupItem of group?.products || []) {
       for (const s of groupItem.sizes || []) {
-        assigned.add(`${String(groupItem.productId)}|${String(s.size)}`);
+        dValueByKey.set(
+          `${String(groupItem.productId)}|${String(s.size)}`,
+          Number(s.price),
+        );
       }
     }
-    const dValueByKey = new Map<string, number>();
     for (const entry of group?.dValuePrices || []) {
       const key = `${String(entry.productId)}|${String(entry.size)}`;
-      if (assigned.has(key)) dValueByKey.set(key, Number(entry.price));
+      if (dValueByKey.has(key)) dValueByKey.set(key, Number(entry.price));
     }
 
     const missing: string[] = [];

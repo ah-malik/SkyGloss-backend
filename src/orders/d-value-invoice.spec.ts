@@ -95,21 +95,21 @@ describe('Shop D-Value invoice', () => {
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
-  it('rejects when an item has no D-Value price', async () => {
+  it('uses the group price when no D-Value price is set', async () => {
     const { svc, created } = makeService(makeOrder(), makeGroup([fullPrices[0]]));
+    await svc.generateShopDValueInvoice(String(orderId), shop(true));
+    // SHINE override 20, SEAL falls back to group price 50
+    expect(created[0].items.map((i: any) => i.price)).toEqual([20, 50]);
+  });
+
+  it('rejects items whose product is not assigned to the group', async () => {
+    const group = makeGroup(fullPrices);
+    group.products = [group.products[0]];
+    const { svc, created } = makeService(makeOrder(), group);
     await expect(
       svc.generateShopDValueInvoice(String(orderId), shop(true)),
     ).rejects.toThrow(/SEAL \(100ml\)/);
     expect(created).toHaveLength(0);
-  });
-
-  it('ignores D-Value prices of products not assigned to the group', async () => {
-    const group = makeGroup(fullPrices);
-    group.products = [group.products[0]];
-    const { svc } = makeService(makeOrder(), group);
-    await expect(
-      svc.generateShopDValueInvoice(String(orderId), shop(true)),
-    ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('re-uses the previous invoice when nothing changed', async () => {
