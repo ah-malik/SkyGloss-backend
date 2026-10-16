@@ -2954,22 +2954,34 @@ export class UsersService implements OnModuleInit {
         throw new ForbiddenException('You do not have permission to update this user');
       }
 
+      // Shop Intro / upline Rep / Promoter are view-only on shops —
+      // only the shop's Operational Support Partner (or Hub) manages.
+      if (
+        !isSelfUpdate &&
+        !isGlobalPartner &&
+        !this.canRepOrPromoterManageShop(currentUser, targetUser)
+      ) {
+        throw new ForbiddenException(
+          'Introduction Partners have view-only access. This shop is managed by its Operational Support Partner (or Hub).',
+        );
+      }
+
       if (updateUserDto.isCertified === true) {
         if (!canCertifyShops(currentUser.role, currentUser.partnerCode)) {
           throw new ForbiddenException(
             'You do not have permission to certify this shop.',
           );
         }
-        // Operational Support assignment alone is view-only — certify requires
-        // the shop to be in the viewer's referral / linked network tree.
-        if (!isGlobalPartner) {
+        // Hub / Distributor certify within their network tree; Representatives
+        // certify only shops where they are the Operational Support Partner.
+        if (!isGlobalPartner && !this.isShopIntroViewerRole(currentUser.role)) {
           const inCertifyNetwork = await this.isShopInViewerCertifyNetwork(
             currentUser,
             targetUser._id.toString(),
           );
           if (!inCertifyNetwork) {
             throw new ForbiddenException(
-              'Operational Support Partners cannot certify shops. Certification is handled by the shop’s network partner.',
+              'You do not have permission to certify this shop.',
             );
           }
         }
@@ -3968,9 +3980,34 @@ export class UsersService implements OnModuleInit {
     return shops.map((shop) => String(shop._id));
   }
 
+  /** Representative / Promoter — Shop Intro or upline viewers of network shops. */
+  private isShopIntroViewerRole(role?: string): boolean {
+    return role === UserRole.MASTER_PARTNER || role === UserRole.REGIONAL_PARTNER;
+  }
+
+  /**
+   * Representative / Promoter may manage (certify / block / map / update) a
+   * shop only as its Admin-assigned Operational Support Partner. Shop Intro
+   * and upline access is view-only. Other roles and non-shop targets are
+   * unaffected (returns true).
+   */
+  private canRepOrPromoterManageShop(
+    viewer: Pick<UserDocument, 'role' | 'partnerCode'>,
+    shop: Pick<UserDocument, 'role' | 'operationalSupportRepresentativeCode'>,
+  ): boolean {
+    if (shop.role !== UserRole.CERTIFIED_SHOP) return true;
+    if (!this.isShopIntroViewerRole(viewer.role)) return true;
+    if (viewer.role !== UserRole.MASTER_PARTNER) return false;
+    const viewerCode = normalizePartnerCode(viewer.partnerCode);
+    return (
+      !!viewerCode &&
+      normalizePartnerCode(shop.operationalSupportRepresentativeCode) === viewerCode
+    );
+  }
+
   /**
    * True when the shop is in the viewer's referral / linked network tree
-   * (certify-eligible). Operational Support assignment alone does not qualify.
+   * (certify-eligible for Hub / Distributor).
    */
   async isShopInViewerCertifyNetwork(
     viewer: UserDocument,
@@ -4706,6 +4743,15 @@ export class UsersService implements OnModuleInit {
     } else {
       const inNetwork = await this.isUserInViewerNetwork(viewer, memberId);
       if (!inNetwork && !isSelf) return null;
+      if (
+        !isSelf &&
+        !isGlobalHubPartnerCode(viewer.partnerCode) &&
+        !this.canRepOrPromoterManageShop(viewer, member)
+      ) {
+        throw new ForbiddenException(
+          'Introduction Partners have view-only access. Map visibility is managed by the shop’s Operational Support Partner (or Hub).',
+        );
+      }
     }
 
     const updatePayload: any = { isVisibleOnMap };
