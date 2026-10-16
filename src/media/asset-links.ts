@@ -18,6 +18,10 @@ export const ASSET_FILE_LINKS: Record<string, Record<number, string>> = {
   'owner-pres': {
     0: 'Copy of Get SkyGloss Certified.pdf',
   },
+  // SkyGloss Global Master Distributor presentation -> "For presenting"
+  'gmd-pres': {
+    0: 'SkyGloss Global Master Distributor Presentation.pdf',
+  },
   // Paint Health Check form -> "Print or fill in on screen"
   'phc-form': {
     0: 'SkyGloss Paint Health Check Form.pdf',
