@@ -28,7 +28,7 @@ import {
   originalNameFromFileName,
   resolveContentType,
 } from './media-types';
-import { ASSET_FILE_LINKS } from './asset-links';
+import { ASSET_FILE_LINKS, ASSET_PACK_LINKS } from './asset-links';
 
 // Signed URLs for thumbnails/previews inside the admin panel.
 const VIEW_TOKEN_TTL_SECONDS = 24 * 60 * 60;
@@ -329,64 +329,111 @@ ${contentDisposition ?? ''}`;
 
   /**
    * Files linked to the portal Assets library (see asset-links.ts), keyed by
-   * asset id and download-row index. Only linked files are exposed.
+   * asset id and download-row index (plus "In this pack" rows when linked).
+   * Only linked files are exposed.
    */
   async getAssetFiles() {
     const names = [
-      ...new Set(
-        Object.values(ASSET_FILE_LINKS).flatMap((links) =>
+      ...new Set([
+        ...Object.values(ASSET_FILE_LINKS).flatMap((links) =>
           Object.values(links),
         ),
-      ),
+        ...Object.values(ASSET_PACK_LINKS).flatMap((links) =>
+          Object.values(links).flat(),
+        ),
+      ]),
     ];
+    // A link is either an upload name or an exact storage path ("media/...").
+    const isPath = (name: string) => name.startsWith(MEDIA_ROOT);
+    const uploadNames = names.filter((name) => !isPath(name));
+    const paths = names.filter(isPath);
     const docs = names.length
       ? await this.mediaModel
-          .find({ originalName: { $in: names } })
+          .find({
+            $or: [
+              { originalName: { $in: uploadNames } },
+              { fileName: { $in: paths } },
+            ],
+          })
           .sort({ createdAt: -1 })
           .lean<MediaLean[]>()
       : [];
     const newestByName = new Map<string, MediaLean>();
+    const byPath = new Map<string, MediaLean>();
     for (const doc of docs) {
+      byPath.set(doc.fileName, doc);
       if (!newestByName.has(doc.originalName)) {
         newestByName.set(doc.originalName, doc);
       }
     }
 
+    type LinkedFile = {
+      name: string;
+      size: number;
+      url: string;
+      downloadUrl: string;
+    };
+    const linkedFile = async (
+      name: string,
+    ): Promise<{ file: LinkedFile; doc: MediaLean } | null> => {
+      const doc = isPath(name) ? byPath.get(name) : newestByName.get(name);
+      if (!doc) return null;
+      const downloadName = doc.originalName.replace(/^copy of\s+/i, '');
+      // B2 only accepts printable ASCII in the header value.
+      const safeName = downloadName.replace(/[^\x20-\x7e]|["\\]/g, '_');
+      return {
+        doc,
+        file: {
+          name: downloadName,
+          size: doc.size,
+          url: await this.assetFileUrl(doc.fileName),
+          downloadUrl: await this.assetFileUrl(
+            doc.fileName,
+            `attachment; filename="${safeName}"`,
+          ),
+        },
+      };
+    };
+
     const result: Record<
       string,
       {
         previewUrl: string | null;
-        files: Record<
-          string,
-          { name: string; size: number; url: string; downloadUrl: string }
-        >;
+        files: Record<string, LinkedFile>;
+        pack?: Record<string, LinkedFile[]>;
       }
     > = {};
     for (const [assetId, links] of Object.entries(ASSET_FILE_LINKS)) {
-      const files: (typeof result)[string]['files'] = {};
+      const files: Record<string, LinkedFile> = {};
       let previewUrl: string | null = null;
       const ordered = Object.entries(links).sort(
         ([a], [b]) => Number(a) - Number(b),
       );
       for (const [index, name] of ordered) {
-        const doc = newestByName.get(name);
-        if (!doc) continue;
-        const downloadName = name.replace(/^copy of\s+/i, '');
-        // B2 only accepts printable ASCII in the header value.
-        const safeName = downloadName.replace(/[^\x20-\x7e]|["\\]/g, '_');
-        const url = await this.assetFileUrl(doc.fileName);
-        files[index] = {
-          name: downloadName,
-          size: doc.size,
-          url,
-          downloadUrl: await this.assetFileUrl(
-            doc.fileName,
-            `attachment; filename="${safeName}"`,
-          ),
-        };
-        if (!previewUrl && doc.category === 'pdf') previewUrl = url;
+        const linked = await linkedFile(name);
+        if (!linked) continue;
+        files[index] = linked.file;
+        if (!previewUrl && linked.doc.category === 'pdf') {
+          previewUrl = linked.file.url;
+        }
       }
       if (Object.keys(files).length) result[assetId] = { previewUrl, files };
+    }
+    for (const [assetId, rows] of Object.entries(ASSET_PACK_LINKS)) {
+      const pack: Record<string, LinkedFile[]> = {};
+      for (const [index, rowNames] of Object.entries(rows)) {
+        const rowFiles: LinkedFile[] = [];
+        for (const name of rowNames) {
+          const linked = await linkedFile(name);
+          if (linked) rowFiles.push(linked.file);
+        }
+        if (rowFiles.length) pack[index] = rowFiles;
+      }
+      if (!Object.keys(pack).length) continue;
+      result[assetId] = {
+        ...(result[assetId] || { previewUrl: null, files: {} }),
+        pack,
+      };
     }
     return result;
   }

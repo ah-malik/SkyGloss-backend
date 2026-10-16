@@ -450,7 +450,7 @@ UserSchema.index({ role: 1, status: 1 });
 UserSchema.index({ role: 1, createdAt: -1 });
 UserSchema.index({ role: 1, country: 1 });
 UserSchema.index({ role: 1, countries: 1 });
-UserSchema.index({ hubPartnerCode: 1 });
+// hubPartnerCode single-field index comes from @Prop({ sparse: true }) above.
 UserSchema.index({ role: 1, hubPartnerCode: 1 });
 UserSchema.index({ role: 1, referredByPartnerCode: 1 });
 UserSchema.index({ role: 1, operationalSupportRepresentativeCode: 1 });
