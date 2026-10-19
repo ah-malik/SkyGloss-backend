@@ -332,6 +332,10 @@ export class User {
   @Prop({ default: false })
   isAccountActivated: boolean;
 
+  /** Set when Admin deactivates the account; keeps the startup backfill from re-activating it. */
+  @Prop()
+  accountDeactivatedAt?: Date;
+
   @Prop({ default: false })
   isCertified: boolean;
 

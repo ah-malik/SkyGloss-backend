@@ -97,4 +97,10 @@ export class AccountActivationController {
       dto.note,
     );
   }
+
+  @Patch('admin/users/:userId/deactivate')
+  @Roles(UserRole.ADMIN)
+  adminDeactivateUser(@Param('userId') userId: string) {
+    return this.accountActivationService.adminDeactivateUser(userId);
+  }
 }

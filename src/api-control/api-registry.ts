@@ -538,6 +538,13 @@ export const ADMIN_APIS: ApiEndpointDef[] = [
     '/account-activation/admin/users/:userId/activate',
     'Admin activate partner directly',
   ),
+  def(
+    'admin',
+    'Account Activation',
+    'PATCH',
+    '/account-activation/admin/users/:userId/deactivate',
+    'Admin deactivate partner account',
+  ),
 
   // Withdrawals
   def('admin', 'Withdrawals', 'GET', '/withdrawals/admin/pending', 'Pending withdrawals'),

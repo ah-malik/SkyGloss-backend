@@ -85,6 +85,7 @@ export class AccountActivationService implements OnModuleInit {
             ],
           },
           isTrainingComplete: true,
+          accountDeactivatedAt: { $exists: false },
           $or: [
             { isAccountActivated: { $exists: false } },
             { isAccountActivated: false },
@@ -147,6 +148,7 @@ export class AccountActivationService implements OnModuleInit {
         isTrainingComplete: true,
         status: UserStatus.ACTIVE,
       },
+      $unset: { accountDeactivatedAt: 1 },
     });
   }
 
@@ -538,6 +540,29 @@ export class AccountActivationService implements OnModuleInit {
     await this.notifyAdminActivation(userId, adminUserId);
 
     return { userId, isAccountActivated: true, request: null };
+  }
+
+  /**
+   * Admin deactivates a partner's account from the admin panel. Withdrawals are
+   * gated again until the account is re-activated by Admin or a new Hub approval.
+   */
+  async adminDeactivateUser(userId: string) {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new NotFoundException('User not found');
+    }
+    const user = await this.usersService.findOne(userId);
+    if (!user) throw new NotFoundException('User not found');
+    this.assertEligible(user);
+
+    if (!user.isAccountActivated) {
+      throw new BadRequestException('This account is not activated.');
+    }
+
+    await this.userModel.findByIdAndUpdate(userId, {
+      $set: { isAccountActivated: false, accountDeactivatedAt: new Date() },
+    });
+
+    return { userId, isAccountActivated: false };
   }
 
   private async notifyAdminActivation(
