@@ -71,7 +71,12 @@ export class PdfController {
   }
 
   @Get('duplicate-invoice/:invoiceId')
-  @Roles(UserRole.ADMIN, UserRole.PARTNER, UserRole.CERTIFIED_SHOP)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.PARTNER,
+    UserRole.DISTRIBUTOR,
+    UserRole.CERTIFIED_SHOP,
+  )
   async downloadDuplicateInvoice(
     @Param('invoiceId') invoiceId: string,
     @Req() req: any,

@@ -27,6 +27,7 @@ import {
 import {
   canTraverseNetwork,
   canCertifyShops,
+  canViewerManageShopDValueInvoice,
   canViewerManageShopOrderStatus,
   getParentLinkLabel,
   isShopParentLinkRole,
@@ -4806,31 +4807,46 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
-   * Hub (or Admin) enables / disables D-Value invoice generation for a shop.
-   * Hub may only change shops inside its own network.
+   * Hub / Distributor (or Admin) enables / disables D-Value invoice generation
+   * for a shop. Hub and Distributor may only change shops whose Parent Link
+   * they are, so one role's setting never changes the other's shops.
    */
   async setShopDValueInvoiceEnabled(
     shopId: string,
     enabled: boolean,
     viewer: UserDocument,
   ): Promise<{ _id: string; dValueInvoiceEnabled: boolean }> {
-    if (viewer.role !== UserRole.ADMIN && viewer.role !== UserRole.PARTNER) {
+    if (
+      viewer.role !== UserRole.ADMIN &&
+      viewer.role !== UserRole.PARTNER &&
+      viewer.role !== UserRole.DISTRIBUTOR
+    ) {
       throw new ForbiddenException(
-        'Only the Hub can manage D-Value invoices for shops.',
+        'Only the Hub or Distributor can manage D-Value invoices for shops.',
       );
     }
     if (!Types.ObjectId.isValid(shopId)) {
       throw new NotFoundException('Shop not found');
     }
-    const shop = await this.userModel.findById(shopId).select('role').lean();
+    const shop = await this.userModel
+      .findById(shopId)
+      .select('role hubPartnerCode')
+      .lean();
     if (!shop || shop.role !== UserRole.CERTIFIED_SHOP) {
       throw new NotFoundException('Shop not found');
     }
-    if (viewer.role === UserRole.PARTNER) {
+    if (viewer.role !== UserRole.ADMIN) {
       const inNetwork = await this.isUserInViewerNetwork(viewer, shopId);
-      if (!inNetwork) {
+      if (
+        !inNetwork ||
+        !canViewerManageShopDValueInvoice({
+          viewerRole: viewer.role,
+          viewerPartnerCode: viewer.partnerCode,
+          shopHubPartnerCode: shop.hubPartnerCode,
+        })
+      ) {
         throw new ForbiddenException(
-          'You can only manage D-Value invoices for shops in your network.',
+          'You can only manage D-Value invoices for shops linked to you.',
         );
       }
     }

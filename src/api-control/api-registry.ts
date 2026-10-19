@@ -118,7 +118,7 @@ export const FRONTEND_APIS: ApiEndpointDef[] = [
     'Users',
     'PATCH',
     '/users/referred-shops/:id/d-value-invoice',
-    'Enable / disable shop D-Value invoices (Hub)',
+    'Enable / disable shop D-Value invoices (Hub / Distributor)',
   ),
   def(
     'frontend',

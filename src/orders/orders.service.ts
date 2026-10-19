@@ -1067,7 +1067,7 @@ export class OrdersService implements OnModuleInit {
   async getOrderById(id: string, viewer?: UserDocument): Promise<Order> {
     const order = await this.orderModel
       .findById(id)
-      .populate('user', 'firstName lastName email role country shopName companyName hubPartnerCode parentLinkAssignedAt previousParentPartnerCode')
+      .populate('user', 'firstName lastName email role country shopName companyName hubPartnerCode parentLinkAssignedAt previousParentPartnerCode dValueInvoiceEnabled')
       .lean();
     if (!order) {
       throw new NotFoundException('Order not found');
@@ -6109,12 +6109,17 @@ export class OrdersService implements OnModuleInit {
     orderId: string,
     actor: UserDocument,
   ) {
-    const order = await this.orderModel.findById(orderId);
+    const order = await this.orderModel
+      .findById(orderId)
+      .populate(
+        'user',
+        'role country hubPartnerCode parentLinkAssignedAt previousParentPartnerCode dValueInvoiceEnabled',
+      );
     if (!order) throw new NotFoundException('Order not found');
     if (actor?.role === UserRole.CERTIFIED_SHOP) {
       this.assertShopCanUseDValueInvoice(order, actor);
     } else {
-      await this.assertHubOrAdminCanManageOrderRequest(order, actor);
+      await this.assertParentCanUseDValueInvoice(order, actor, false);
     }
 
     return this.duplicateInvoiceModel
@@ -6139,6 +6144,13 @@ export class OrdersService implements OnModuleInit {
       const order = duplicate.orderId as unknown as OrderDocument;
       if (!order) throw new NotFoundException('Order not found');
       this.assertShopCanUseDValueInvoice(order, actor);
+    } else if (
+      actor?.role === UserRole.PARTNER ||
+      actor?.role === UserRole.DISTRIBUTOR
+    ) {
+      const order = duplicate.orderId as unknown as OrderDocument;
+      if (!order) throw new NotFoundException('Order not found');
+      await this.assertParentCanUseDValueInvoice(order, actor, false);
     }
     return duplicate;
   }
@@ -6213,6 +6225,84 @@ export class OrdersService implements OnModuleInit {
     return this.productGroupModel
       .findOne({ isDefault: true, isActive: true })
       .exec();
+  }
+
+  /**
+   * Hub / Distributor may use D-Value invoices only on orders they manage via
+   * Parent Link. Creating one also needs the shop's D-Value toggle to be on.
+   * Admin is always allowed.
+   */
+  private async assertParentCanUseDValueInvoice(
+    order: OrderDocument,
+    actor: UserDocument,
+    requireEnabled: boolean,
+  ): Promise<void> {
+    if (!actor) {
+      throw new ForbiddenException('Not authorized');
+    }
+    if (actor.role === UserRole.ADMIN) {
+      return;
+    }
+    if (
+      actor.role !== UserRole.PARTNER &&
+      actor.role !== UserRole.DISTRIBUTOR
+    ) {
+      throw new ForbiddenException(
+        'Only Hub, Distributor and Admin can manage D-Value invoices',
+      );
+    }
+
+    const orderUserId =
+      typeof order.user === 'object' &&
+      order.user !== null &&
+      '_id' in (order.user as object)
+        ? String((order.user as any)._id)
+        : String(order.user);
+    const inNetwork = await this.usersService.isUserInViewerNetwork(
+      actor,
+      orderUserId,
+    );
+    if (!inNetwork) {
+      throw new ForbiddenException(
+        'You can only manage orders from users in your network',
+      );
+    }
+
+    const shop = (order.user || {}) as {
+      hubPartnerCode?: string;
+      country?: string;
+      role?: string;
+      parentLinkAssignedAt?: Date;
+      previousParentPartnerCode?: string;
+      dValueInvoiceEnabled?: boolean;
+    };
+    const actingCode = await this.usersService.resolveActingParentForOrder({
+      actingParentPartnerCode: (order as any).actingParentPartnerCode,
+      createdAt: (order as any).createdAt,
+      user: shop,
+    });
+    const parentRoles = await this.usersService.getShopParentLinkRolesByCode([
+      actingCode,
+    ]);
+    const canManage = this.usersService.canViewerManageShopOrder(
+      actor,
+      {
+        actingParentPartnerCode: actingCode,
+        hubPartnerCode: shop.hubPartnerCode,
+      },
+      actingCode ? parentRoles.get(actingCode) : undefined,
+      shop.role,
+    );
+    if (!canManage) {
+      throw new ForbiddenException(
+        'You can only manage D-Value invoices for orders created under you.',
+      );
+    }
+    if (requireEnabled && !shop.dValueInvoiceEnabled) {
+      throw new ForbiddenException(
+        'D-Value Invoice is not enabled for this shop. Turn it on from the shop settings.',
+      );
+    }
   }
 
   /** Shop may use D-Value invoices only on its own orders, when its Hub enabled them. */
@@ -6354,7 +6444,7 @@ export class OrdersService implements OnModuleInit {
     const order = await this.orderModel.findById(orderId).populate('user');
     if (!order) throw new NotFoundException('Order not found');
 
-    await this.assertHubOrAdminCanManageOrderRequest(order, actor);
+    await this.assertParentCanUseDValueInvoice(order, actor, true);
 
     if (isRegistrationOrder(order)) {
       throw new BadRequestException(

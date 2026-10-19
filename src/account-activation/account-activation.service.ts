@@ -42,11 +42,41 @@ export class AccountActivationService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
+    // Submitting a request sets isTrainingComplete, so partners that already
+    // used the activation flow must not be grandfathered — Hub/Admin decides.
+    let usersWithRequest: Types.ObjectId[] = [];
+    try {
+      usersWithRequest = await this.activationModel.distinct('userId');
+
+      // Repair accounts the old backfill activated while their request was
+      // still waiting for the Hub (Hub/Admin approval always moves the
+      // request out of WAITING_HUB_APPROVAL, so this state is only the bug).
+      const waitingUserIds = await this.activationModel.distinct('userId', {
+        status: AccountActivationStatus.WAITING_HUB_APPROVAL,
+      });
+      if (waitingUserIds.length > 0) {
+        const repaired = await this.userModel.updateMany(
+          { _id: { $in: waitingUserIds }, isAccountActivated: true },
+          { $set: { isAccountActivated: false } },
+        );
+        if (repaired.modifiedCount > 0) {
+          console.log(
+            `[AccountActivation] Reset ${repaired.modifiedCount} account(s) activated while their request was waiting for Hub approval.`,
+          );
+        }
+      }
+    } catch (err) {
+      console.error('[AccountActivation] Pending-request repair failed', err);
+      // Without the request list we cannot tell who is safe to grandfather.
+      return;
+    }
+
     // Grandfather existing Rep/Promoter who already finished training so
     // withdrawals and live state stay intact after this feature ships.
     try {
       const result = await this.userModel.updateMany(
         {
+          _id: { $nin: usersWithRequest },
           role: {
             $in: [
               UserRole.MASTER_PARTNER,

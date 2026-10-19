@@ -387,7 +387,7 @@ export class UsersController {
   }
 
   @Patch('referred-shops/:id/d-value-invoice')
-  @Roles(UserRole.PARTNER, UserRole.ADMIN)
+  @Roles(UserRole.PARTNER, UserRole.DISTRIBUTOR, UserRole.ADMIN)
   updateShopDValueInvoice(
     @Param('id') id: string,
     @Body('enabled') enabled: boolean,

@@ -187,7 +187,12 @@ export class OrdersController {
 
   @Get(':id/duplicate-invoices')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.PARTNER, UserRole.CERTIFIED_SHOP)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.PARTNER,
+    UserRole.DISTRIBUTOR,
+    UserRole.CERTIFIED_SHOP,
+  )
   getDuplicateInvoices(
     @Param('id') id: string,
     @GetUser() user: UserDocument,
@@ -296,7 +301,7 @@ export class OrdersController {
 
   @Post(':id/duplicate-invoice')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.PARTNER)
+  @Roles(UserRole.ADMIN, UserRole.PARTNER, UserRole.DISTRIBUTOR)
   createDuplicateInvoice(
     @Param('id') id: string,
     @Body() dto: CreateDuplicateInvoiceDto,

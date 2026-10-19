@@ -1,5 +1,6 @@
 import {
   canManageNetworkOrderStatus,
+  canViewerManageShopDValueInvoice,
   canViewerManageShopOrderStatus,
   canViewerSeeCommissionRecipient,
   canViewerSeeOrderPlacerRole,
@@ -146,5 +147,33 @@ describe('user-hierarchy visibility', () => {
         orderPlacerRole: 'partner',
       }),
     ).toBe(false);
+  });
+
+  it('lets only the shop Parent Link (Hub or Distributor) manage D-Value', () => {
+    const hub = { viewerRole: 'partner', viewerPartnerCode: 'HUB1' };
+    const dist = { viewerRole: 'distributor', viewerPartnerCode: 'DIST1' };
+
+    // Hub-linked shop: Hub yes, Distributor no
+    expect(canViewerManageShopDValueInvoice({ ...hub, shopHubPartnerCode: 'hub1' })).toBe(true);
+    expect(canViewerManageShopDValueInvoice({ ...dist, shopHubPartnerCode: 'HUB1' })).toBe(false);
+
+    // Distributor-linked shop: Distributor yes, Hub no
+    expect(canViewerManageShopDValueInvoice({ ...dist, shopHubPartnerCode: 'DIST1' })).toBe(true);
+    expect(canViewerManageShopDValueInvoice({ ...hub, shopHubPartnerCode: 'DIST1' })).toBe(false);
+
+    // No stored Parent Link → territory Hub only
+    expect(canViewerManageShopDValueInvoice({ ...hub, shopHubPartnerCode: '' })).toBe(true);
+    expect(canViewerManageShopDValueInvoice({ ...dist, shopHubPartnerCode: null })).toBe(false);
+
+    // Shops, Reps and Promoters never get the toggle
+    for (const viewerRole of ['certified_shop', 'master_partner', 'regional_partner']) {
+      expect(
+        canViewerManageShopDValueInvoice({
+          viewerRole,
+          viewerPartnerCode: 'HUB1',
+          shopHubPartnerCode: 'HUB1',
+        }),
+      ).toBe(false);
+    }
   });
 });

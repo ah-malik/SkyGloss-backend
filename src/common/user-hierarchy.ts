@@ -106,6 +106,26 @@ export function canViewerManageShopOrderStatus(params: {
   return viewerCode === actingCode;
 }
 
+/**
+ * D-Value Invoice per-shop toggle belongs to the shop's current Parent Link
+ * (Hub or Distributor). A shop without a stored Parent Link falls back to its
+ * territory Hub. Network membership is checked separately by the caller.
+ */
+export function canViewerManageShopDValueInvoice(params: {
+  viewerRole?: string;
+  viewerPartnerCode?: string;
+  shopHubPartnerCode?: string | null;
+}): boolean {
+  const viewerRole = params.viewerRole;
+  const viewerCode = (params.viewerPartnerCode || '').trim().toUpperCase();
+  if (!isShopParentLinkRole(viewerRole) || !viewerCode) return false;
+  const shopCode = (params.shopHubPartnerCode || '').trim().toUpperCase();
+  if (!shopCode) {
+    return viewerRole === UserRole.PARTNER || viewerRole === 'partner';
+  }
+  return shopCode === viewerCode;
+}
+
 export type CommissionLike = {
   recipientRole?: string;
   recipientPartnerCode?: string;
