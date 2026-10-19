@@ -419,6 +419,27 @@ export class User {
   @Prop({ type: Number, min: 0, max: 100 })
   partnerDiscountPercent?: number | null;
 
+  /**
+   * Distributor agreement — Exhibit C (Performance) table size, set by Admin.
+   * Unset → 3 years × Q1–Q4 (the standard agreement table).
+   */
+  @Prop({ type: Number, min: 1, max: 10 })
+  performanceYears?: number | null;
+
+  @Prop({ type: Number, min: 1, max: 4 })
+  performanceQuarters?: number | null;
+
+  /** Distributor agreement — Exhibit B market, set by Admin for this user only. */
+  @Prop()
+  assignedOperationalMarket?: string;
+
+  /**
+   * Distributor agreement — Exhibit C minimum purchase values, set by Admin
+   * for this user only. Keys: minPurchaseY{year}Q{quarter}. Missing → "$0".
+   */
+  @Prop({ type: Object })
+  performanceValues?: Record<string, string>;
+
   /** Soft-delete timestamp. Null / missing = active. */
   @Prop({ type: Date, default: null, index: true })
   deletedAt?: Date | null;

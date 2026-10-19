@@ -88,6 +88,22 @@ export interface NetworkUsersResult {
   viewerRole: string;
 }
 
+/** Distributor Exhibit C keys: minPurchaseY{1-10}Q{1-4}. */
+const PERFORMANCE_VALUE_KEY = /^minPurchaseY([1-9]|10)Q[1-4]$/;
+
+/** Keeps only valid Exhibit C keys with short, non-empty string values. */
+function sanitizePerformanceValues(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!PERFORMANCE_VALUE_KEY.test(key)) continue;
+    if (typeof value !== 'string' && typeof value !== 'number') continue;
+    const text = String(value).trim().slice(0, 50);
+    if (text) out[key] = text;
+  }
+  return out;
+}
+
 @Injectable()
 export class UsersService implements OnModuleInit {
   private readonly logger = new Logger(UsersService.name);
@@ -806,6 +822,11 @@ export class UsersService implements OnModuleInit {
       password: hashedPassword,
       role: createUserDto.role,
     };
+    if (userData.performanceValues !== undefined) {
+      userData.performanceValues = sanitizePerformanceValues(
+        userData.performanceValues,
+      );
+    }
     // Map legacy FO aliases → current rate fields, then strip helpers.
     if (
       userData.customCommissionRate == null &&
@@ -2989,6 +3010,17 @@ export class UsersService implements OnModuleInit {
     }
 
     const updatePayload: any = { ...updateUserDto };
+    // Exhibit C size of the Distributor agreement is Admin-only.
+    if (currentUser.role !== UserRole.ADMIN) {
+      delete updatePayload.performanceYears;
+      delete updatePayload.performanceQuarters;
+      delete updatePayload.assignedOperationalMarket;
+      delete updatePayload.performanceValues;
+    } else if (updatePayload.performanceValues !== undefined) {
+      updatePayload.performanceValues = sanitizePerformanceValues(
+        updatePayload.performanceValues,
+      );
+    }
     const partnerIntroProvided = updateUserDto.partnerIntroCode !== undefined;
     const partnerIntroCode = normalizePartnerCode(updateUserDto.partnerIntroCode);
     const operationalSupportCodeRaw =

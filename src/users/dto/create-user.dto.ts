@@ -2,6 +2,8 @@ import {
   IsEmail,
   IsEnum,
   IsNotEmpty,
+  IsInt,
+  IsObject,
   IsNumber,
   IsOptional,
   IsString,
@@ -229,6 +231,31 @@ export class CreateUserDto {
   @Max(100)
   @IsOptional()
   partnerDiscountPercent?: number | null;
+
+  /** Distributor agreement Exhibit C: number of years (rows). Null → default 3. */
+  @IsInt()
+  @Min(1)
+  @Max(10)
+  @IsOptional()
+  performanceYears?: number | null;
+
+  /** Distributor agreement Exhibit C: quarter columns, Q1 up to Q4. Null → default 4. */
+  @IsInt()
+  @Min(1)
+  @Max(4)
+  @IsOptional()
+  performanceQuarters?: number | null;
+
+  /** Distributor agreement Exhibit B. Empty string clears. */
+  @IsString()
+  @MaxLength(300)
+  @IsOptional()
+  assignedOperationalMarket?: string;
+
+  /** Distributor agreement Exhibit C values, keyed minPurchaseY{y}Q{q}. */
+  @IsObject()
+  @IsOptional()
+  performanceValues?: Record<string, string>;
 
   /**
    * Legacy FO rate field aliases (still accepted).

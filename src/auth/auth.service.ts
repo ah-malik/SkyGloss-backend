@@ -139,6 +139,10 @@ export class AuthService {
         user.partnerDiscountPercent != null
           ? Number(user.partnerDiscountPercent)
           : null,
+      performanceYears: user.performanceYears ?? null,
+      performanceQuarters: user.performanceQuarters ?? null,
+      assignedOperationalMarket: user.assignedOperationalMarket ?? '',
+      performanceValues: user.performanceValues ?? {},
       hasSeenWelcomePopup: user.hasSeenWelcomePopup,
       mustChangePassword: !!user.mustChangePassword,
       preferredLanguage: user.preferredLanguage,
