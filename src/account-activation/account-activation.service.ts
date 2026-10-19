@@ -27,8 +27,7 @@ import { UsersService } from '../users/users.service';
 import { BankDetailsService } from '../payouts/services/bank-details.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/entities/notification.entity';
-import { getRequiredCourseKeysForRole } from '../common/course-catalog';
-import { COURSE_STEPS } from '../common/course-catalog';
+import { isTrainingRequirementSatisfied } from '../common/course-completion';
 
 @Injectable()
 export class AccountActivationService implements OnModuleInit {
@@ -82,26 +81,7 @@ export class AccountActivationService implements OnModuleInit {
   }
 
   private coursesComplete(user: UserDocument): boolean {
-    const required = getRequiredCourseKeysForRole(user.role);
-    if (!required.length) return true;
-    const progress = user.courseProgress || new Map();
-    let completed = 0;
-    for (const key of required) {
-      const requiredSteps = COURSE_STEPS[key] || 0;
-      const steps =
-        (progress instanceof Map
-          ? progress.get(key)
-          : (progress as any)?.[key]) || [];
-      const count = Array.isArray(steps) ? steps.length : 0;
-      if (requiredSteps > 0 && count >= requiredSteps) completed += 1;
-      else if (
-        Array.isArray(user.completedCourses) &&
-        user.completedCourses.includes(key)
-      ) {
-        completed += 1;
-      }
-    }
-    return completed >= required.length;
+    return isTrainingRequirementSatisfied(user);
   }
 
   private formatRequest(doc: any) {

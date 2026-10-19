@@ -41,83 +41,10 @@ import { UserActivityService } from '../user-activity/user-activity.service';
 import { UserActivityAction } from '../user-activity/entities/user-activity-log.entity';
 import { getRequestMeta } from '../user-activity/request-meta';
 import {
-  COURSE_STEPS,
-  getRequiredCourseKeysForRole,
-} from '../common/course-catalog';
+  countCompletedRequiredCourses,
+  isTrainingRequirementSatisfied,
+} from '../common/course-completion';
 import * as crypto from 'crypto';
-
-const WELCOME_SECTION_STEP_IDS = [
-  'intro_foundation',
-  'data_fusion',
-  'data_core',
-  'intro_replacement',
-  'learning_curve',
-  'intro_reality',
-  'data_real_world',
-  'intro_opportunity',
-  'data_access',
-  'intro_engine',
-  'data_bigger_picture',
-  'proper_perspective',
-  'new_craft',
-  'professional_mindset',
-  'payoff',
-  'intro_final',
-];
-
-function courseProgressIsComplete(
-  courseKey: string,
-  progress: unknown,
-  totalSteps: number,
-) {
-  const list = Array.isArray(progress) ? progress.map(String) : [];
-  if (courseKey !== 'WELCOME_TO_SKYGLOSS') {
-    return list.length >= totalSteps;
-  }
-
-  const questionHits = list.filter((id) => id.startsWith('q:')).length;
-  const nonQuestion = list.length - questionHits;
-  if (questionHits === 0 && nonQuestion >= WELCOME_SECTION_STEP_IDS.length) {
-    return true;
-  }
-
-  const sectionHits = WELCOME_SECTION_STEP_IDS.filter((id) =>
-    list.includes(id),
-  ).length;
-  return sectionHits + questionHits >= WELCOME_SECTION_STEP_IDS.length + 8;
-}
-
-function countCompletedRequiredCourses(user: {
-  role?: string | null;
-  courseProgress?: Record<string, string[]> | Map<string, string[]> | null;
-  completedCourses?: string[] | null;
-}) {
-  const requiredKeys = getRequiredCourseKeysForRole(user.role);
-  const progressMap = user.courseProgress
-    ? JSON.parse(JSON.stringify(user.courseProgress || {}))
-    : {};
-
-  let completedCount = 0;
-  for (const courseKey of requiredKeys) {
-    const totalSteps = COURSE_STEPS[courseKey] || 1;
-    const progress =
-      progressMap[courseKey] ||
-      progressMap[courseKey.replace('_', ' ')] ||
-      [];
-    if (courseProgressIsComplete(courseKey, progress, totalSteps)) {
-      completedCount++;
-    }
-  }
-
-  const legacyCount = user.completedCourses?.length || 0;
-  return {
-    completedCount: Math.min(
-      Math.max(completedCount, legacyCount),
-      requiredKeys.length,
-    ),
-    totalRequired: requiredKeys.length,
-  };
-}
 
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -549,9 +476,9 @@ export class UsersController {
     const { completedCount, totalRequired } =
       countCompletedRequiredCourses(user);
 
-    if (completedCount < totalRequired) {
+    if (!isTrainingRequirementSatisfied(user)) {
       throw new BadRequestException(
-        `You must complete all ${totalRequired} courses before uploading a certification video.`,
+        `You must complete all ${totalRequired} courses before uploading a certification video. (${completedCount}/${totalRequired})`,
       );
     }
 
@@ -592,9 +519,9 @@ export class UsersController {
     const { completedCount, totalRequired } =
       countCompletedRequiredCourses(user);
 
-    if (completedCount < totalRequired) {
+    if (!isTrainingRequirementSatisfied(user)) {
       throw new BadRequestException(
-        `You must complete all ${totalRequired} training courses before finalizing certification.`,
+        `You must complete all ${totalRequired} training courses before finalizing certification. (${completedCount}/${totalRequired})`,
       );
     }
     const updatedUser = await this.usersService.update(user._id.toString(), {

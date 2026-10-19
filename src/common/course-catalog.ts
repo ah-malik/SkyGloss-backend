@@ -12,12 +12,39 @@ export const COURSE_STEPS: Record<string, number> = {
   YOUR_ROLE_REPRESENTATIVE: 52,
   SKYGLOSS_SHOP_SETUP: 4,
   SOCIAL_MEDIA_COMMUNICATION: 11,
+  /**
+   * Catalog / gating total. The FUSION player may expose more sections
+   * (`FUSION_SECTION_TOTAL`); completion still honors `completedCourses`
+   * and this step threshold so prior finishes stay valid.
+   */
   FUSION: 20,
   RESIN_FILM: 8,
   SEAL: 5,
   SHINE: 6,
   MATTE: 6,
 };
+
+/**
+ * Courses made required when Marketing Masterclass / Partner Marketing Manual
+ * shipped (2026-10-09). Must not retroactively invalidate prior completions.
+ */
+export const POST_CUTOVER_REQUIRED_COURSE_KEYS = [
+  'MARKETING_MASTERCLASS',
+  'PARTNER_MARKETING_MANUAL',
+] as const;
+
+export const MARKETING_COURSES_REQUIRED_SINCE = new Date(
+  '2026-10-09T00:00:00.000Z',
+);
+
+export function userCreatedBeforeMarketingCutover(user?: {
+  createdAt?: Date | string | null;
+} | null) {
+  if (!user?.createdAt) return false;
+  const created = new Date(user.createdAt).getTime();
+  if (Number.isNaN(created)) return false;
+  return created < MARKETING_COURSES_REQUIRED_SINCE.getTime();
+}
 
 export const ALL_USER_PRODUCT_KEYS = [
   'RESIN_FILM',
