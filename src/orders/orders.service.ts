@@ -3,6 +3,7 @@ import {
   BadRequestException,
   NotFoundException,
   ForbiddenException,
+  ConflictException,
   Inject,
   forwardRef,
   OnModuleInit,
@@ -70,6 +71,9 @@ import {
   getOrderAmountPaid,
   getOrderRemainingAmount,
   shouldMarkFailedOnCheckoutExpire,
+  isOrderPaymentRecorded,
+  isStripeCheckoutSessionPaid,
+  paymentNotRecordedStatusFilter,
 } from '../common/order-modifiable';
 import {
   createOrderPaymentToken,
@@ -1469,10 +1473,17 @@ export class OrdersService implements OnModuleInit {
           order.status,
         )
       ) {
-        order.status = OrderStatus.PAID;
-        order.cancellationReason = undefined;
-        order.amountPaid = order.totalAmount;
-        await order.save();
+        // Atomic claim: a webhook or admin Mark Paid may record this payment concurrently.
+        const claimed = await this.orderModel.updateOne(
+          { _id: order._id, status: order.status },
+          {
+            $set: { status: OrderStatus.PAID, amountPaid: order.totalAmount },
+            $unset: { cancellationReason: 1 },
+          },
+        );
+        if (!claimed.modifiedCount) {
+          return (await this.orderModel.findById(order._id)) ?? order;
+        }
 
         await this.sendPaidOrderNotificationsIfNeeded(order._id.toString());
 
@@ -1874,9 +1885,16 @@ export class OrdersService implements OnModuleInit {
         return { received: true };
       }
 
+      if (!isStripeCheckoutSessionPaid(session)) {
+        console.warn(
+          `[USA Stripe Webhook] Session ${session.id} for order ${orderId} is not paid (payment_status=${session.payment_status}). Order left unpaid.`,
+        );
+        return { received: true };
+      }
+
       const existingOrder = await this.orderModel.findById(orderId);
-      if (existingOrder && existingOrder.status === OrderStatus.PAID) {
-        console.log(`[USA Stripe Webhook] Order ${existingOrder.orderNumber} is already PAID. Skipping duplicate notifications/emails.`);
+      if (existingOrder && isOrderPaymentRecorded(existingOrder.status)) {
+        console.log(`[USA Stripe Webhook] Order ${existingOrder.orderNumber} is already ${existingOrder.status}. Skipping duplicate notifications/emails.`);
         if (existingOrder.includesCertificationKit) {
           await this.applyCertificationKitPurchaseBenefits(existingOrder);
         }
@@ -1915,9 +1933,10 @@ export class OrdersService implements OnModuleInit {
             };
 
       const updatedOrder = await this.orderModel
-        .findByIdAndUpdate(
-          orderId,
-          { 
+        .findOneAndUpdate(
+          // Atomic: concurrent/duplicate webhooks or an admin Mark Paid cannot both process payment.
+          { _id: orderId, status: paymentNotRecordedStatusFilter() },
+          {
             status: OrderStatus.PAID,
             discount,
             couponCode,
@@ -1950,7 +1969,7 @@ export class OrdersService implements OnModuleInit {
           await this.applyCertificationKitPurchaseBenefits(updatedOrder);
         }
       } else {
-        console.error(`[USA Stripe Webhook] Order ${orderId} not found in DB.`);
+        console.log(`[USA Stripe Webhook] Order ${orderId} not found or payment already recorded; nothing to do.`);
       }
       return { received: true };
     }
@@ -2126,9 +2145,16 @@ export class OrdersService implements OnModuleInit {
         return { received: true };
       }
 
+      if (!isStripeCheckoutSessionPaid(session)) {
+        console.warn(
+          `[Europe Stripe Webhook] Session ${session.id} for order ${orderId} is not paid (payment_status=${session.payment_status}). Order left unpaid.`,
+        );
+        return { received: true };
+      }
+
       const existingOrder = await this.orderModel.findById(orderId);
-      if (existingOrder && existingOrder.status === OrderStatus.PAID) {
-        console.log(`[Europe Stripe Webhook] Order ${existingOrder.orderNumber} is already PAID. Skipping duplicate notifications/emails.`);
+      if (existingOrder && isOrderPaymentRecorded(existingOrder.status)) {
+        console.log(`[Europe Stripe Webhook] Order ${existingOrder.orderNumber} is already ${existingOrder.status}. Skipping duplicate notifications/emails.`);
         if (existingOrder.includesCertificationKit) {
           await this.applyCertificationKitPurchaseBenefits(existingOrder);
         }
@@ -2166,8 +2192,9 @@ export class OrdersService implements OnModuleInit {
             };
 
       const updatedOrder = await this.orderModel
-        .findByIdAndUpdate(
-          orderId,
+        .findOneAndUpdate(
+          // Atomic: concurrent/duplicate webhooks or an admin Mark Paid cannot both process payment.
+          { _id: orderId, status: paymentNotRecordedStatusFilter() },
           {
             status: OrderStatus.PAID,
             discount,
@@ -2201,7 +2228,7 @@ export class OrdersService implements OnModuleInit {
           await this.applyCertificationKitPurchaseBenefits(updatedOrder);
         }
       } else {
-        console.error(`[Europe Stripe Webhook] Order ${orderId} not found in DB.`);
+        console.log(`[Europe Stripe Webhook] Order ${orderId} not found or payment already recorded; nothing to do.`);
       }
       return { received: true };
     }
@@ -2548,9 +2575,16 @@ export class OrdersService implements OnModuleInit {
           return { received: true };
         }
 
+        if (!isStripeCheckoutSessionPaid(session)) {
+          console.warn(
+            `[Stripe Webhook] Session ${session.id} for order ${orderId} is not paid (payment_status=${session.payment_status}). Order left unpaid.`,
+          );
+          return { received: true };
+        }
+
         const existingOrder = await this.orderModel.findById(orderId);
-        if (existingOrder && existingOrder.status === OrderStatus.PAID) {
-          console.log(`[Stripe Webhook] Order ${existingOrder.orderNumber} is already PAID. Skipping duplicate notifications/emails.`);
+        if (existingOrder && isOrderPaymentRecorded(existingOrder.status)) {
+          console.log(`[Stripe Webhook] Order ${existingOrder.orderNumber} is already ${existingOrder.status}. Skipping duplicate notifications/emails.`);
           if (existingOrder.includesCertificationKit) {
             await this.applyCertificationKitPurchaseBenefits(existingOrder);
           }
@@ -2588,9 +2622,10 @@ export class OrdersService implements OnModuleInit {
               };
 
         const updatedOrder = await this.orderModel
-          .findByIdAndUpdate(
-            orderId,
-            { 
+          .findOneAndUpdate(
+            // Atomic: concurrent/duplicate webhooks or an admin Mark Paid cannot both process payment.
+            { _id: orderId, status: paymentNotRecordedStatusFilter() },
+            {
               status: OrderStatus.PAID,
               discount,
               couponCode,
@@ -2623,7 +2658,7 @@ export class OrdersService implements OnModuleInit {
             await this.applyCertificationKitPurchaseBenefits(updatedOrder);
           }
         } else {
-          console.error(`[Stripe Webhook] Order with id ${orderId} not found in DB.`);
+          console.log(`[Stripe Webhook] Order ${orderId} not found or payment already recorded; nothing to do.`);
         }
         return { received: true };
       }
@@ -4128,6 +4163,20 @@ export class OrdersService implements OnModuleInit {
         await this.mailService.sendOrderCancelledAdminNotification(order, order.user).catch(err => {
           console.error('Failed to send order cancelled email to admin', err);
         });
+      }
+    }
+
+    if (status === OrderStatus.PAID && oldStatus !== OrderStatus.PAID) {
+      // Claim the PAID transition atomically so a Stripe webhook arriving at the
+      // same time cannot also process this payment (coupon usage, inventory, emails).
+      const claimed = await this.orderModel.updateOne(
+        { _id: order._id, status: oldStatus },
+        { $set: { status: OrderStatus.PAID } },
+      );
+      if (!claimed.modifiedCount) {
+        throw new ConflictException(
+          'Order status changed meanwhile (it may have just been paid via Stripe). Please refresh and try again.',
+        );
       }
     }
 

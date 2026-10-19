@@ -18,6 +18,37 @@ const CHECKOUT_EXPIRE_PROTECTED_STATUSES = new Set<string>([
   OrderStatus.PENDING_PAYMENT,
 ]);
 
+/** Statuses that mean payment was already recorded (by Stripe or an admin). */
+const PAYMENT_RECORDED_STATUSES = [
+  OrderStatus.PAID,
+  OrderStatus.SHIPPED,
+  OrderStatus.DELIVERED,
+];
+
+/**
+ * True when the order is already PAID or has moved past PAID in the workflow.
+ * A (duplicate / late) Stripe confirmation must not move such orders back to PAID.
+ */
+export function isOrderPaymentRecorded(status?: string): boolean {
+  if (!status) return false;
+  return (PAYMENT_RECORDED_STATUSES as string[]).includes(
+    String(status).toUpperCase(),
+  );
+}
+
+/** Mongo filter matching orders whose payment has not been recorded yet. */
+export function paymentNotRecordedStatusFilter() {
+  return { $nin: [...PAYMENT_RECORDED_STATUSES] };
+}
+
+/** Stripe is the source of truth: only a verified paid checkout session counts as payment. */
+export function isStripeCheckoutSessionPaid(session?: {
+  payment_status?: string | null;
+} | null): boolean {
+  const paymentStatus = session?.payment_status;
+  return paymentStatus === 'paid' || paymentStatus === 'no_payment_required';
+}
+
 /** True only for unpaid PENDING orders (not already paid or waiting on the 3-day payment window). */
 export function shouldMarkFailedOnCheckoutExpire(status?: string): boolean {
   if (!status) return false;
