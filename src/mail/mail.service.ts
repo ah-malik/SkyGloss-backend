@@ -1034,22 +1034,24 @@ export class MailService {
   private buildInvoiceAttachments(
     order: any,
     invoiceBuffer?: Buffer,
+    extraAttachments: { filename: string; content: Buffer }[] = [],
   ): { filename: string; content: Buffer }[] | undefined {
+    const attachments: { filename: string; content: Buffer }[] = [];
     if (
-      !invoiceBuffer ||
-      !Buffer.isBuffer(invoiceBuffer) ||
-      invoiceBuffer.length === 0
+      invoiceBuffer &&
+      Buffer.isBuffer(invoiceBuffer) &&
+      invoiceBuffer.length > 0
     ) {
-      return undefined;
-    }
-    const orderNumber =
-      String(order?.orderNumber || 'Order').trim() || 'Order';
-    return [
-      {
+      const orderNumber =
+        String(order?.orderNumber || 'Order').trim() || 'Order';
+      attachments.push({
         filename: `Invoice_${orderNumber}.pdf`,
         content: invoiceBuffer,
-      },
-    ];
+      });
+    }
+    // D-Value orders: Invoice A (Original) + Invoice B (D-Value) next to the main invoice.
+    attachments.push(...extraAttachments);
+    return attachments.length ? attachments : undefined;
   }
 
   async sendNewOrderNotification(
@@ -1163,8 +1165,13 @@ export class MailService {
     order: any,
     user: any,
     invoiceBuffer?: Buffer,
+    extraAttachments: { filename: string; content: Buffer }[] = [],
   ) {
-    const attachments = this.buildInvoiceAttachments(order, invoiceBuffer);
+    const attachments = this.buildInvoiceAttachments(
+      order,
+      invoiceBuffer,
+      extraAttachments,
+    );
 
     if (await this.useLatestTemplates()) {
       const footerContact = await this.resolveLatestFooterContact(user);
@@ -1270,9 +1277,14 @@ export class MailService {
     order: any,
     user: any,
     invoiceBuffer?: Buffer,
+    extraAttachments: { filename: string; content: Buffer }[] = [],
   ) {
     const to = await this.withNotificationRecipients(user.email, user);
-    const attachments = this.buildInvoiceAttachments(order, invoiceBuffer);
+    const attachments = this.buildInvoiceAttachments(
+      order,
+      invoiceBuffer,
+      extraAttachments,
+    );
 
     if (await this.useLatestTemplates()) {
       const footerContact = await this.resolveLatestFooterContact(user);
@@ -1754,6 +1766,8 @@ export class MailService {
       dValue?: {
         originalOrderNumber: string;
       };
+      /** D-Value orders: Invoice A + Invoice B attached after the main invoice. */
+      extraAttachments?: { filename: string; content: Buffer }[];
     },
   ) {
     const currencySymbols: { [key: string]: string } = {
@@ -1796,6 +1810,7 @@ export class MailService {
         filename: `Invoice_${order.orderNumber}.pdf`,
         content: invoiceBuffer,
       },
+      ...(options?.extraAttachments || []),
     ];
 
     if (await this.useLatestTemplates()) {

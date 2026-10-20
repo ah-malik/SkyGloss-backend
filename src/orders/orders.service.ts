@@ -4741,6 +4741,8 @@ export class OrdersService implements OnModuleInit {
         ? this.getOrderDirectPayUrl(String(order._id))
         : this.getOrderPayUrl(String(order._id), userDoc?.role);
 
+    const dValueAttachments = await this.buildDValueSplitPdfAttachments(order);
+
     try {
       await this.mailService.sendOrderInvoiceEmail(
         to,
@@ -4751,6 +4753,7 @@ export class OrdersService implements OnModuleInit {
           payUrl,
           amountPaid,
           remainingAmount: remaining,
+          extraAttachments: dValueAttachments,
         },
       );
     } catch (err) {
@@ -5235,8 +5238,16 @@ export class OrdersService implements OnModuleInit {
           );
         }
 
+        const dValueAttachments =
+          await this.buildDValueSplitPdfAttachments(savedOrder);
+
         await this.mailService
-          .sendNewOrderRequestNotification(savedOrder, currentUser, invoiceBuffer)
+          .sendNewOrderRequestNotification(
+            savedOrder,
+            currentUser,
+            invoiceBuffer,
+            dValueAttachments,
+          )
           .catch((err) => {
             console.error('Failed to send order request email to sales', err);
           });
@@ -5247,6 +5258,7 @@ export class OrdersService implements OnModuleInit {
             savedOrder,
             currentUser,
             invoiceBuffer,
+            dValueAttachments,
           )
           .catch((err) => {
             console.error(
@@ -6710,6 +6722,55 @@ export class OrdersService implements OnModuleInit {
       locked.set(this.dValueLineKey(line as any), Number(line.price));
     }
     return this.computeDValueSplitInvoices(shop, order as any, locked);
+  }
+
+  /**
+   * Email attachments for a D-Value order: Invoice A (Original) and Invoice B
+   * (D-Value) PDFs. Empty for other orders. A PDF failure never blocks the email.
+   */
+  private async buildDValueSplitPdfAttachments(
+    order: OrderDocument,
+  ): Promise<{ filename: string; content: Buffer }[]> {
+    if (!(order as any)?.isDValueOrder) return [];
+    try {
+      const numbers = this.dValueSplitInvoiceNumbers(order.orderNumber);
+      const [orderWithUser, invoices] = await Promise.all([
+        this.orderModel.findById(order._id).populate('user'),
+        this.duplicateInvoiceModel
+          .find({
+            orderId: order._id,
+            invoiceNumber: { $in: [numbers.original, numbers.dValue] },
+          })
+          .exec(),
+      ]);
+      const source = (orderWithUser || order) as OrderDocument;
+      const ordered = [numbers.original, numbers.dValue]
+        .map((n) => invoices.find((i) => i.invoiceNumber === n))
+        .filter(Boolean) as DuplicateInvoiceDocument[];
+      const attachments: { filename: string; content: Buffer }[] = [];
+      for (const invoice of ordered) {
+        const content = await this.pdfService.generateOrderDetails(
+          this.buildDuplicateInvoiceSnapshot(source, invoice) as any,
+          {
+            headerTitle: 'Invoice',
+            displayOrderNumber: invoice.invoiceNumber,
+          },
+        );
+        const label =
+          (invoice as any).invoiceType === 'original' ? 'Original' : 'D-Value';
+        attachments.push({
+          filename: `Invoice_${invoice.invoiceNumber}_${label}.pdf`,
+          content,
+        });
+      }
+      return attachments;
+    } catch (err) {
+      this.logger.error(
+        `Failed to build D-Value invoice PDFs for ${order?.orderNumber}`,
+        (err as Error)?.stack || err,
+      );
+      return [];
+    }
   }
 
   private dValueSplitInvoiceNumbers(orderNumber: string) {
