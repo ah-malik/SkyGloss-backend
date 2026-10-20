@@ -149,7 +149,7 @@ describe('user-hierarchy visibility', () => {
     ).toBe(false);
   });
 
-  it('lets only the shop Parent Link (Hub or Distributor) manage D-Value', () => {
+  it('lets Hub (network shops) and Distributor (own Parent Link shops) manage D-Value', () => {
     const hub = { viewerRole: 'partner', viewerPartnerCode: 'HUB1' };
     const dist = { viewerRole: 'distributor', viewerPartnerCode: 'DIST1' };
 
@@ -157,11 +157,11 @@ describe('user-hierarchy visibility', () => {
     expect(canViewerManageShopDValueInvoice({ ...hub, shopHubPartnerCode: 'hub1' })).toBe(true);
     expect(canViewerManageShopDValueInvoice({ ...dist, shopHubPartnerCode: 'HUB1' })).toBe(false);
 
-    // Distributor-linked shop: Distributor yes, Hub no
-    expect(canViewerManageShopDValueInvoice({ ...dist, shopHubPartnerCode: 'DIST1' })).toBe(true);
-    expect(canViewerManageShopDValueInvoice({ ...hub, shopHubPartnerCode: 'DIST1' })).toBe(false);
+    // Distributor-linked shop: both Distributor and Hub
+    expect(canViewerManageShopDValueInvoice({ ...dist, shopHubPartnerCode: 'dist1' })).toBe(true);
+    expect(canViewerManageShopDValueInvoice({ ...hub, shopHubPartnerCode: 'DIST1' })).toBe(true);
 
-    // No stored Parent Link → territory Hub only
+    // No stored Parent Link → Hub only
     expect(canViewerManageShopDValueInvoice({ ...hub, shopHubPartnerCode: '' })).toBe(true);
     expect(canViewerManageShopDValueInvoice({ ...dist, shopHubPartnerCode: null })).toBe(false);
 

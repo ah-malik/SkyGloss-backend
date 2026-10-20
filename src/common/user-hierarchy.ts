@@ -107,9 +107,9 @@ export function canViewerManageShopOrderStatus(params: {
 }
 
 /**
- * D-Value Invoice per-shop toggle belongs to the shop's current Parent Link
- * (Hub or Distributor). A shop without a stored Parent Link falls back to its
- * territory Hub. Network membership is checked separately by the caller.
+ * D-Value Invoice per-shop toggle: Hub manages every shop in its network
+ * (including Distributor-linked shops); a Distributor manages the shops whose
+ * Parent Link it is. Network membership is checked separately by the caller.
  */
 export function canViewerManageShopDValueInvoice(params: {
   viewerRole?: string;
@@ -117,13 +117,13 @@ export function canViewerManageShopDValueInvoice(params: {
   shopHubPartnerCode?: string | null;
 }): boolean {
   const viewerRole = params.viewerRole;
-  const viewerCode = (params.viewerPartnerCode || '').trim().toUpperCase();
-  if (!isShopParentLinkRole(viewerRole) || !viewerCode) return false;
-  const shopCode = (params.shopHubPartnerCode || '').trim().toUpperCase();
-  if (!shopCode) {
-    return viewerRole === UserRole.PARTNER || viewerRole === 'partner';
+  if (viewerRole === UserRole.PARTNER || viewerRole === 'partner') return true;
+  if (viewerRole !== UserRole.DISTRIBUTOR && viewerRole !== 'distributor') {
+    return false;
   }
-  return shopCode === viewerCode;
+  const viewerCode = (params.viewerPartnerCode || '').trim().toUpperCase();
+  const shopCode = (params.shopHubPartnerCode || '').trim().toUpperCase();
+  return !!viewerCode && shopCode === viewerCode;
 }
 
 export type CommissionLike = {
