@@ -981,7 +981,9 @@ export class OrdersService implements OnModuleInit {
           vatAmount,
           vatRate,
           shippingAddress: orderShippingAddress,
-          ...(isPickup ? { isPickup: true } : {}),
+          ...(pickupHub
+            ? { isPickup: true, pickupHubPhone: pickupHub.phoneNumber || undefined }
+            : {}),
           status: requiresOnlinePayment
             ? OrderStatus.PENDING_PAYMENT
             : OrderStatus.PENDING,
@@ -5104,7 +5106,9 @@ export class OrdersService implements OnModuleInit {
                   shippingCountry,
                 )
               : shippingAddress,
-            ...(isPickup ? { isPickup: true } : {}),
+            ...(pickupHub
+              ? { isPickup: true, pickupHubPhone: pickupHub.phoneNumber || undefined }
+              : {}),
             status: OrderStatus.PENDING,
             orderNumber,
             orderFlow: 'request',

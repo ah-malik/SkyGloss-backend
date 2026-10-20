@@ -141,6 +141,10 @@ export class Order {
   @Prop({ default: false })
   isPickup?: boolean;
 
+  /** Hub contact phone at order time (pickup orders only). */
+  @Prop()
+  pickupHubPhone?: string;
+
   @Prop({ type: String, enum: OrderStatus, default: OrderStatus.PENDING })
   status: OrderStatus;
 

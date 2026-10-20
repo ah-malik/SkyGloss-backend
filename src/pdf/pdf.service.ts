@@ -531,6 +531,24 @@ export class PdfService {
         fontName: fontRegular,
         fontSize: 12,
       });
+      // Pickup orders show the Hub below, so the customer's phone / tax ID live here.
+      if (snapshot.isPickup && clean(shippingPreview.phoneNumber)) {
+        customerLines.push({
+          text: `Phone: ${clean(shippingPreview.phoneNumber)}`,
+          fontName: fontRegular,
+          fontSize: 12,
+        });
+      }
+      if (snapshot.isPickup && clean(shippingPreview.taxId)) {
+        const taxLabel = isEuropeCountryName(shippingPreview.country)
+          ? 'VAT Number'
+          : 'Tax ID';
+        customerLines.push({
+          text: `${taxLabel}: ${clean(shippingPreview.taxId)}`,
+          fontName: fontRegular,
+          fontSize: 12,
+        });
+      }
 
       const leftEnd = drawColumn(contentLeft, halfWidth, columnsY, orderLines);
       const rightEnd = drawColumn(rightX, halfWidth, columnsY, customerLines);
@@ -539,38 +557,57 @@ export class PdfService {
 
       // Shipping Info
       const shipping = snapshot.shippingAddress || {};
-      doc
-        .fontSize(14)
-        .font(fontBold)
-        .text(
-          snapshot.isPickup
-            ? 'Pickup Address (Hub) - Customer Pickup:'
-            : 'Shipping Address:',
+      if (snapshot.isPickup) {
+        // shippingAddress holds the Hub's address; skip placeholders saved for missing fields.
+        const hubValue = (value: unknown) => {
+          const text = clean(value);
+          return text.toUpperCase() === 'N/A' ? '' : text;
+        };
+        doc.fontSize(14).font(fontBold).text('Pickup Location (Hub):');
+        doc.fontSize(12).font(fontRegular);
+        doc.text('Customer will collect this order from the Hub (no shipping).');
+        const hubLines: Array<[string, unknown]> = [
+          ['Hub', shipping.companyName],
+          ['Address', shipping.address],
+          ['Address Line 2', shipping.address2],
+          ['City', shipping.city],
+          ['State', shipping.state],
+          ['Zip Code', shipping.zipCode],
+          ['Country', shipping.country],
+          ['Hub Phone', (snapshot as any).pickupHubPhone],
+        ];
+        for (const [label, value] of hubLines) {
+          const text = hubValue(value);
+          if (text) doc.text(`${label}: ${text}`);
+        }
+        doc.moveDown();
+      } else {
+        doc.fontSize(14).font(fontBold).text('Shipping Address:');
+        doc.fontSize(12).font(fontRegular);
+        doc.text(
+          `Name: ${[shipping.firstName, shipping.lastName].filter(Boolean).join(' ') || 'N/A'}`,
         );
-      doc.fontSize(12).font(fontRegular);
-      doc.text(
-        `Name: ${[shipping.firstName, shipping.lastName].filter(Boolean).join(' ') || 'N/A'}`,
-      );
-      doc.text(`Email: ${shipping.email || 'N/A'}`);
-      if (shipping.companyName) {
-        doc.text(`Company: ${shipping.companyName}`);
+        doc.text(`Email: ${shipping.email || 'N/A'}`);
+        if (shipping.companyName) {
+          doc.text(`Company: ${shipping.companyName}`);
+        }
+        doc.text(`Address: ${shipping.address || 'N/A'}`);
+        if (shipping.address2 && !addressLine2IsBusinessName) {
+          doc.text(`Address Line 2: ${shipping.address2}`);
+        }
+        doc.text(`City: ${shipping.city || 'N/A'}`);
+        doc.text(`State: ${shipping.state || 'N/A'}`);
+        doc.text(`Zip Code: ${shipping.zipCode || 'N/A'}`);
+        doc.text(`Country: ${shipping.country || 'N/A'}`);
+        doc.text(`Phone: ${shipping.phoneNumber || 'N/A'}`);
+        if (shipping.taxId) {
+          const taxLabel = isEuropeCountryName(shipping.country)
+            ? 'VAT Number'
+            : 'Tax ID';
+          doc.text(`${taxLabel}: ${shipping.taxId}`);
+        }
+        doc.moveDown();
       }
-      doc.text(`Address: ${shipping.address || 'N/A'}`);
-      if (shipping.address2 && !addressLine2IsBusinessName) {
-        doc.text(`Address Line 2: ${shipping.address2}`);
-      }
-      doc.text(`City: ${shipping.city || 'N/A'}`);
-      doc.text(`State: ${shipping.state || 'N/A'}`);
-      doc.text(`Zip Code: ${shipping.zipCode || 'N/A'}`);
-      doc.text(`Country: ${shipping.country || 'N/A'}`);
-      doc.text(`Phone: ${shipping.phoneNumber || 'N/A'}`);
-      if (shipping.taxId) {
-        const taxLabel = isEuropeCountryName(shipping.country)
-          ? 'VAT Number'
-          : 'Tax ID';
-        doc.text(`${taxLabel}: ${shipping.taxId}`);
-      }
-      doc.moveDown();
 
       // Items Table
       doc.fontSize(14).font(fontBold).text('Order Items:');
