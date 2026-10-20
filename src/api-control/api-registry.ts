@@ -425,6 +425,7 @@ export const ADMIN_APIS: ApiEndpointDef[] = [
   def('admin', 'Orders', 'POST', '/orders/:id/shipping', 'Set order-request shipping'),
   def('admin', 'Orders', 'POST', '/orders/:id/send-invoice', 'Send order-request invoice'),
   def('admin', 'Orders', 'POST', '/orders/:id/duplicate-invoice', 'Create and email D-Value invoice'),
+  def('admin', 'Users', 'PATCH', '/users/referred-shops/:id/d-value-invoice', 'Show / hide shop D-Value invoices'),
   def('admin', 'Orders', 'GET', '/orders/:id/duplicate-invoices', 'List D-Value invoices for order'),
   def('admin', 'PDF', 'GET', '/pdf/duplicate-invoice/:invoiceId', 'Download D-Value invoice PDF'),
 
