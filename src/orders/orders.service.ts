@@ -4609,6 +4609,11 @@ export class OrdersService implements OnModuleInit {
     if (!Number.isFinite(shippingFee) || shippingFee < 0) {
       throw new BadRequestException('Enter a valid shipping amount');
     }
+    if ((order as any).isPickup && shippingFee > 0) {
+      throw new BadRequestException(
+        'This is a pickup order — shipping charges cannot be added.',
+      );
+    }
 
     const previousTotal = Number(order.totalAmount) || 0;
     const wasPaid = String(order.status).toUpperCase() === OrderStatus.PAID;
@@ -4970,6 +4975,11 @@ export class OrdersService implements OnModuleInit {
 
       const { items: rawItems, shippingAddress, couponCode } = createOrderDto;
       this.assertShippingAddressComplete(shippingAddress);
+      // Order requests keep the entered address; pickup only waives shipping.
+      const isPickup = createOrderDto.isPickup === true;
+      if (isPickup && !(await this.getPickupHubForUser(userId))) {
+        throw new BadRequestException('Pickup is not available for your account.');
+      }
       await this.assertAndNormalizeEuropeanVat(
         shippingAddress,
         currentUser?.country,
@@ -5019,7 +5029,7 @@ export class OrdersService implements OnModuleInit {
         rateToUsd: await this.exchangeRatesService.getRateToBase(orderCurrency),
         currency: orderCurrency,
       });
-      if (includesCertificationKit) {
+      if (includesCertificationKit || isPickup) {
         shippingFee = 0;
       }
 
@@ -5072,6 +5082,7 @@ export class OrdersService implements OnModuleInit {
             vatAmount,
             vatRate,
             shippingAddress,
+            ...(isPickup ? { isPickup: true } : {}),
             status: OrderStatus.PENDING,
             orderNumber,
             orderFlow: 'request',
