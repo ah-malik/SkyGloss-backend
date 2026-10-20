@@ -3,7 +3,7 @@ const PDFDocument = require('pdfkit');
 const SVGtoPDF = require('svg-to-pdfkit');
 import * as fs from 'fs';
 import * as path from 'path';
-import { User } from '../users/entities/user.entity';
+import { User, UserRole } from '../users/entities/user.entity';
 import { Order } from '../orders/entities/order.entity';
 import {
   getDiscountDisplayLabel,
@@ -22,6 +22,17 @@ export interface OrderPdfOptions {
   totalAmount?: number;
   shippingFee?: number;
   discount?: number;
+}
+
+export interface PartnerCertificateData {
+  /** Role line above the name, e.g. "REPRESENTATIVE". */
+  title: string;
+  /** Certificate holder (person or company). */
+  name: string;
+  /** Country / countries printed on the Territory line. */
+  territory: string;
+  /** Activation date printed next to the signature. */
+  date: Date;
 }
 
 @Injectable()
@@ -332,6 +343,241 @@ export class PdfService {
           .fontSize(10)
           .fillColor('#333333')
           .text('Certification No', signX, certY + 26);
+
+        doc.end();
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Partner certificate (Assets → Your certificate)
+  // Layout matches the "Master Distributor Certificate" design (A4 landscape):
+  // navy header with the Factory Forever signature (vector SVG), role title,
+  // partner name, Skygloss Inc. signature + date, and a Territory line.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  private resolvePartnerCertificateHeaderSvg(): string | null {
+    const file = this.resolveAssetPath('partner-certificate-header.svg', '');
+    if (!file) return null;
+    return fs.readFileSync(file, 'utf8');
+  }
+
+  /** Day with ordinal + month + year, e.g. "27th May 2025" (certificate design). */
+  private formatPartnerCertificateDate(date: Date): string {
+    const months = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December',
+    ];
+    const day = date.getDate();
+    const suffix =
+      day % 10 === 1 && day !== 11
+        ? 'st'
+        : day % 10 === 2 && day !== 12
+          ? 'nd'
+          : day % 10 === 3 && day !== 13
+            ? 'rd'
+            : 'th';
+    return `${day}${suffix} ${months[date.getMonth()]} ${date.getFullYear()}`;
+  }
+
+  /** Certificate title / holder name / territory derived from the user record. */
+  getPartnerCertificateData(user: User | any): PartnerCertificateData {
+    const role = String(user?.role || '');
+    const fullName = `${user?.firstName || ''} ${user?.lastName || ''}`.trim();
+    const company = String(user?.companyName || '').trim();
+    const isCompanyRole =
+      role === UserRole.DISTRIBUTOR || role === UserRole.PARTNER;
+
+    const title =
+      role === UserRole.MASTER_PARTNER
+        ? 'REPRESENTATIVE'
+        : role === UserRole.REGIONAL_PARTNER
+          ? 'PROMOTER'
+          : role === UserRole.DISTRIBUTOR
+            ? 'DISTRIBUTOR'
+            : role === UserRole.PARTNER
+              ? 'HUB'
+              : 'SKYGLOSS PARTNER';
+
+    const name =
+      (isCompanyRole ? company || fullName : fullName || company) ||
+      'SkyGloss Partner';
+
+    const countries: string[] = Array.isArray(user?.countries)
+      ? user.countries.filter(Boolean)
+      : [];
+    const territory =
+      (role === UserRole.PARTNER && countries.length > 0
+        ? countries.join(', ')
+        : String(user?.country || '').trim()) || '';
+
+    const activatedAt =
+      user?.accountActivatedAt ||
+      (role === UserRole.PARTNER ? user?.createdAt : null) ||
+      user?.updatedAt ||
+      new Date();
+
+    return { title, name, territory, date: new Date(activatedAt) };
+  }
+
+  async generatePartnerCertificate(data: PartnerCertificateData): Promise<Buffer> {
+    const headerSvg = this.resolvePartnerCertificateHeaderSvg();
+    const regularPath = this.resolveAssetPath('Mulish-Regular.ttf', 'fonts');
+    const boldPath = this.resolveAssetPath('Mulish-Bold.ttf', 'fonts');
+    const semiBoldPath =
+      this.resolveAssetPath('Mulish-SemiBold.ttf', 'fonts') || boldPath;
+    const signaturePath = this.resolveAssetPath('factory-forever.png', '');
+
+    return new Promise((resolve, reject) => {
+      try {
+        const doc = new PDFDocument({
+          size: 'A4',
+          layout: 'landscape',
+          margin: 0,
+          pdfVersion: '1.7',
+          info: { Title: `SkyGloss ${data.title} Certificate` },
+        });
+        const chunks: Buffer[] = [];
+        doc.on('data', (chunk) => chunks.push(chunk));
+        doc.on('end', () => resolve(Buffer.concat(chunks)));
+        doc.on('error', reject);
+
+        const pageW = doc.page.width; // 841.89
+        const pageH = doc.page.height; // 595.28
+        const INK = '#030404';
+        const GREY = '#221f20';
+        const NAVY = '#282b71';
+        const RULE = '#333131';
+
+        const FONT_REG = regularPath ? 'Mulish' : 'Helvetica';
+        const FONT_SEMI = semiBoldPath ? 'Mulish-SemiBold' : 'Helvetica-Bold';
+        const FONT_BOLD = boldPath ? 'Mulish-Bold' : 'Helvetica-Bold';
+        if (regularPath) doc.registerFont('Mulish', regularPath);
+        if (semiBoldPath) doc.registerFont('Mulish-SemiBold', semiBoldPath);
+        if (boldPath) doc.registerFont('Mulish-Bold', boldPath);
+
+        // Draw text with its baseline at `baseline` (design coordinates are baselines).
+        const textAt = (
+          str: string,
+          x: number,
+          baseline: number,
+          font: string,
+          size: number,
+          color: string,
+          opts: { characterSpacing?: number } = {},
+        ) => {
+          doc.font(font).fontSize(size).fillColor(color);
+          const ascender = ((doc as any)._font?.ascender ?? 1000) / 1000;
+          doc.text(str, x, baseline - ascender * size, {
+            lineBreak: false,
+            characterSpacing: opts.characterSpacing ?? 0,
+          });
+        };
+        const rule = (x1: number, x2: number, y: number) => {
+          doc.strokeColor(RULE).lineWidth(0.3).moveTo(x1, y).lineTo(x2, y).stroke();
+        };
+
+        // ── Header: navy band + Factory Forever signature + SKYGLOSS logo (vector) ──
+        if (headerSvg) {
+          SVGtoPDF(doc, headerSvg, 0, 0, {
+            width: pageW,
+            height: pageH,
+            preserveAspectRatio: 'none',
+            assumePt: true,
+          });
+        } else {
+          doc.rect(0, 0, pageW, 345).fill(NAVY);
+        }
+        // "BORN IN THE USA" sits inside the navy pill on the header line.
+        textAt('BORN IN THE USA', 633.3, 277.2, FONT_BOLD, 12, '#ffffff', {
+          characterSpacing: 1,
+        });
+
+        // ── Left: role title + holder name ──
+        textAt(data.title, 101.26, 425, FONT_BOLD, 12, INK, {
+          characterSpacing: 1.2,
+        });
+
+        // Name: design size 56.41pt on one line; long names shrink, then wrap
+        // onto two lines so they never run into the signature column (x ≥ 472).
+        const nameMaxWidth = 352;
+        const nameBaseline = 518.32;
+        const fits = (lines: string[], size: number) => {
+          doc.font(FONT_SEMI).fontSize(size);
+          return lines.every((l) => doc.widthOfString(l) <= nameMaxWidth);
+        };
+        const wrapTwo = (text: string, size: number): string[] | null => {
+          const words = text.split(/\s+/).filter(Boolean);
+          if (words.length < 2) return null;
+          doc.font(FONT_SEMI).fontSize(size);
+          // Best split: both lines fit, first line as long as possible.
+          for (let i = words.length - 1; i >= 1; i -= 1) {
+            const a = words.slice(0, i).join(' ');
+            const b = words.slice(i).join(' ');
+            if (
+              doc.widthOfString(a) <= nameMaxWidth &&
+              doc.widthOfString(b) <= nameMaxWidth
+            ) {
+              return [a, b];
+            }
+          }
+          return null;
+        };
+        let nameLines = [data.name];
+        let nameSize = 56.41;
+        while (nameSize > 30 && !fits(nameLines, nameSize)) nameSize -= 1;
+        if (!fits(nameLines, nameSize)) {
+          let wrapped: string[] | null = null;
+          nameSize = 34;
+          while (nameSize > 16 && !(wrapped = wrapTwo(data.name, nameSize))) {
+            nameSize -= 1;
+          }
+          if (wrapped) {
+            nameLines = wrapped;
+          } else {
+            // Single very long word: keep shrinking on one line.
+            while (nameSize > 12 && !fits(nameLines, nameSize)) nameSize -= 1;
+          }
+        }
+        nameLines.forEach((line, idx) => {
+          const fromBottom = nameLines.length - 1 - idx;
+          textAt(line, 101.26, nameBaseline - fromBottom * nameSize * 1.12, FONT_SEMI, nameSize, INK);
+        });
+
+        // ── Right: Skygloss Inc. signature + date ──
+        if (signaturePath) {
+          const sigW = 132;
+          const sigH = sigW * (182 / 520); // factory-forever.png aspect
+          doc.image(signaturePath, 479, 417 - sigH / 2, { width: sigW });
+        }
+        rule(471.92, 667.04, 427.74);
+        textAt('Skygloss Inc.', 471.8, 443.06, FONT_REG, 10, GREY);
+
+        textAt(
+          this.formatPartnerCertificateDate(data.date),
+          681.68,
+          419.06,
+          FONT_SEMI,
+          10,
+          GREY,
+        );
+        rule(681.68, 776.72, 427.74);
+        textAt('Date', 681.68, 443.06, FONT_REG, 10, GREY);
+
+        // ── Territory ──
+        textAt('Territory:', 471.8, 518.32, FONT_REG, 10, GREY);
+        rule(522.38, 776.72, 517.05);
+        if (data.territory) {
+          let terrSize = 10;
+          doc.font(FONT_SEMI).fontSize(terrSize);
+          while (terrSize > 7 && doc.widthOfString(data.territory) > 246) {
+            terrSize -= 0.5;
+            doc.fontSize(terrSize);
+          }
+          textAt(data.territory, 528, 514, FONT_SEMI, terrSize, GREY);
+        }
 
         doc.end();
       } catch (error) {

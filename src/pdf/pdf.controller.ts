@@ -34,6 +34,37 @@ export class PdfController {
     res.end(buffer);
   }
 
+  /**
+   * Partner certificate (Assets → Your certificate). Rep / Promoter /
+   * Distributor need an activated account; Hub is never gated.
+   */
+  @Get('partner-certificate')
+  @Roles(
+    UserRole.PARTNER,
+    UserRole.DISTRIBUTOR,
+    UserRole.MASTER_PARTNER,
+    UserRole.REGIONAL_PARTNER,
+  )
+  async downloadPartnerCertificate(@Req() req: any, @Res() res: Response) {
+    const user = await this.usersService.findOne(req.user.id);
+    if (!user) throw new NotFoundException('User not found');
+    if (user.role !== UserRole.PARTNER && !user.isAccountActivated) {
+      throw new ForbiddenException('Partner account is not activated yet');
+    }
+
+    const data = this.pdfService.getPartnerCertificateData(user);
+    const buffer = await this.pdfService.generatePartnerCertificate(data);
+    const safeName = data.name.replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '');
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename=SkyGloss_Certificate_${safeName || 'Partner'}.pdf`,
+      'Content-Length': buffer.length,
+    });
+
+    res.end(buffer);
+  }
+
   @Get('business-card')
   async downloadBusinessCard(@Req() req: any, @Res() res: Response) {
     const user = await this.usersService.findOne(req.user.id);

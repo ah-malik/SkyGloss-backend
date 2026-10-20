@@ -336,6 +336,13 @@ export class User {
   @Prop()
   accountDeactivatedAt?: Date;
 
+  /**
+   * When the partner account was (last) activated by Hub/Admin.
+   * Printed as the date on the partner certificate (Assets → Your certificate).
+   */
+  @Prop()
+  accountActivatedAt?: Date;
+
   @Prop({ default: false })
   isCertified: boolean;
 

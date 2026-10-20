@@ -101,6 +101,12 @@ export class AccountActivationService implements OnModuleInit {
     } catch (err) {
       console.error('[AccountActivation] Grandfather backfill failed', err);
     }
+
+    try {
+      await this.backfillAccountActivatedAt();
+    } catch (err) {
+      console.error('[AccountActivation] accountActivatedAt backfill failed', err);
+    }
   }
 
   private assertEligible(user: UserDocument) {
@@ -147,9 +153,60 @@ export class AccountActivationService implements OnModuleInit {
         isAccountActivated: true,
         isTrainingComplete: true,
         status: UserStatus.ACTIVE,
+        // Certificate date (Assets → Your certificate).
+        accountActivatedAt: new Date(),
       },
       $unset: { accountDeactivatedAt: 1 },
     });
+  }
+
+  /**
+   * Partners activated before `accountActivatedAt` existed: take the date from
+   * their approved request (Hub/Admin review), else from the user record.
+   */
+  private async backfillAccountActivatedAt() {
+    const users = await this.userModel
+      .find({
+        isAccountActivated: true,
+        accountActivatedAt: { $exists: false },
+      })
+      .select('_id updatedAt createdAt')
+      .lean();
+    if (users.length === 0) return;
+
+    let filled = 0;
+    for (const user of users) {
+      const request = await this.activationModel
+        .findOne({
+          userId: user._id,
+          status: {
+            $in: [
+              AccountActivationStatus.APPROVED_BY_HUB,
+              AccountActivationStatus.APPROVED_BY_ADMIN,
+            ],
+          },
+        })
+        .sort({ createdAt: -1 })
+        .select('hubReviewedAt adminReviewedAt updatedAt')
+        .lean();
+      const activatedAt =
+        request?.hubReviewedAt ||
+        request?.adminReviewedAt ||
+        (request as any)?.updatedAt ||
+        (user as any).updatedAt ||
+        (user as any).createdAt ||
+        new Date();
+      await this.userModel.updateOne(
+        { _id: user._id, accountActivatedAt: { $exists: false } },
+        { $set: { accountActivatedAt: activatedAt } },
+      );
+      filled += 1;
+    }
+    if (filled > 0) {
+      console.log(
+        `[AccountActivation] Backfilled accountActivatedAt for ${filled} activated partner account(s).`,
+      );
+    }
   }
 
   /** Admin notifications must never block the partner's submission. */
