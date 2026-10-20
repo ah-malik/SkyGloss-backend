@@ -447,14 +447,12 @@ export class PdfService {
       const customerEmail =
         clean(user?.email) || clean(shippingPreview.email) || 'N/A';
       const addressLine2 = clean(shippingPreview.address2);
-      const hubAddressPickup =
-        !!snapshot.isPickup && snapshot.orderFlow !== 'request';
       const businessName = [
         user?.companyName,
         user?.shopName,
         // Pickup orders store the Hub's name here, not the customer's business.
-        hubAddressPickup ? '' : shippingPreview.companyName,
-        hubAddressPickup ? '' : addressLine2,
+        snapshot.isPickup ? '' : shippingPreview.companyName,
+        snapshot.isPickup ? '' : addressLine2,
       ]
         .map((value) => clean(value))
         .find(Boolean);
@@ -545,12 +543,9 @@ export class PdfService {
         .fontSize(14)
         .font(fontBold)
         .text(
-          // Checkout pickups store the Hub address; order-request pickups keep the shop's.
-          snapshot.isPickup && snapshot.orderFlow !== 'request'
+          snapshot.isPickup
             ? 'Pickup Address (Hub) - Customer Pickup:'
-            : snapshot.isPickup
-              ? 'Shipping Address (Customer Pickup - no shipping charges):'
-              : 'Shipping Address:',
+            : 'Shipping Address:',
         );
       doc.fontSize(12).font(fontRegular);
       doc.text(

@@ -951,16 +951,7 @@ export class OrdersService implements OnModuleInit {
     // Pickup orders keep the buyer's contact details but use the Hub's address,
     // so invoices and emails show where the order will be collected.
     const orderShippingAddress = pickupHub
-      ? {
-          ...shippingAddress,
-          companyName: pickupHub.name,
-          address: pickupHub.address,
-          address2: pickupHub.address2,
-          city: pickupHub.city,
-          state: pickupHub.state,
-          zipCode: pickupHub.zipCode,
-          country: pickupHub.country || shippingCountry,
-        }
+      ? this.buildPickupShippingAddress(shippingAddress, pickupHub, shippingCountry)
       : shippingAddress;
 
     await this.productInventoryService.assertStockAvailableForOrder({
@@ -1238,6 +1229,27 @@ export class OrdersService implements OnModuleInit {
       zipCode: orNA(clean(hub.zipCode)),
       country: clean(hub.country),
       phoneNumber: clean(hub.phoneNumber),
+    };
+  }
+
+  /**
+   * Pickup orders keep the buyer's contact details but use the Hub's address,
+   * so invoices and emails show where the order will be collected.
+   */
+  private buildPickupShippingAddress(
+    shippingAddress: CreateOrderDto['shippingAddress'],
+    hub: NonNullable<Awaited<ReturnType<OrdersService['getPickupHubForUser']>>>,
+    fallbackCountry: string,
+  ) {
+    return {
+      ...shippingAddress,
+      companyName: hub.name,
+      address: hub.address,
+      address2: hub.address2,
+      city: hub.city,
+      state: hub.state,
+      zipCode: hub.zipCode,
+      country: hub.country || fallbackCountry,
     };
   }
 
@@ -4974,11 +4986,15 @@ export class OrdersService implements OnModuleInit {
       const orderCurrency = await this.getCurrencyForUser(currentUser);
 
       const { items: rawItems, shippingAddress, couponCode } = createOrderDto;
-      this.assertShippingAddressComplete(shippingAddress);
-      // Order requests keep the entered address; pickup only waives shipping.
       const isPickup = createOrderDto.isPickup === true;
-      if (isPickup && !(await this.getPickupHubForUser(userId))) {
-        throw new BadRequestException('Pickup is not available for your account.');
+      const pickupHub = isPickup ? await this.getPickupHubForUser(userId) : null;
+      if (isPickup && !pickupHub) {
+        throw new BadRequestException(
+          'Pickup is not available for your account. Please enter a shipping address.',
+        );
+      }
+      if (!isPickup) {
+        this.assertShippingAddressComplete(shippingAddress);
       }
       await this.assertAndNormalizeEuropeanVat(
         shippingAddress,
@@ -5081,7 +5097,13 @@ export class OrdersService implements OnModuleInit {
             shippingFee,
             vatAmount,
             vatRate,
-            shippingAddress,
+            shippingAddress: pickupHub
+              ? this.buildPickupShippingAddress(
+                  shippingAddress,
+                  pickupHub,
+                  shippingCountry,
+                )
+              : shippingAddress,
             ...(isPickup ? { isPickup: true } : {}),
             status: OrderStatus.PENDING,
             orderNumber,
