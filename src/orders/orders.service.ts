@@ -851,6 +851,16 @@ export class OrdersService implements OnModuleInit {
     const userCountry = (currentUser?.country || '').toLowerCase().trim();
 
     const { items: rawItems, shippingAddress, couponCode } = createOrderDto;
+    const isPickup = createOrderDto.isPickup === true;
+    const pickupHub = isPickup ? await this.getPickupHubForUser(userId) : null;
+    if (isPickup && !pickupHub) {
+      throw new BadRequestException(
+        'Pickup is not available for your account. Please enter a shipping address.',
+      );
+    }
+    if (!isPickup) {
+      this.assertShippingAddressComplete(shippingAddress);
+    }
     await this.assertAndNormalizeEuropeanVat(
       shippingAddress,
       currentUser?.country,
@@ -904,7 +914,7 @@ export class OrdersService implements OnModuleInit {
       rateToUsd,
       currency: orderCurrency,
     });
-    if (includesCertificationKit) {
+    if (includesCertificationKit || isPickup) {
       shippingFee = 0;
     }
 
@@ -938,6 +948,21 @@ export class OrdersService implements OnModuleInit {
     );
     const orderTotal = Math.max(0, itemsSubtotal - discount + vatAmount + shippingFee);
 
+    // Pickup orders keep the buyer's contact details but use the Hub's address,
+    // so invoices and emails show where the order will be collected.
+    const orderShippingAddress = pickupHub
+      ? {
+          ...shippingAddress,
+          companyName: pickupHub.name,
+          address: pickupHub.address,
+          address2: pickupHub.address2,
+          city: pickupHub.city,
+          state: pickupHub.state,
+          zipCode: pickupHub.zipCode,
+          country: pickupHub.country || shippingCountry,
+        }
+      : shippingAddress;
+
     await this.productInventoryService.assertStockAvailableForOrder({
       items: resolvedItems,
       user: currentUser as any,
@@ -964,7 +989,8 @@ export class OrdersService implements OnModuleInit {
           shippingFee,
           vatAmount,
           vatRate,
-          shippingAddress,
+          shippingAddress: orderShippingAddress,
+          ...(isPickup ? { isPickup: true } : {}),
           status: requiresOnlinePayment
             ? OrderStatus.PENDING_PAYMENT
             : OrderStatus.PENDING,
@@ -1168,6 +1194,68 @@ export class OrdersService implements OnModuleInit {
       country: shop.country,
     });
     return code ? { actingParentPartnerCode: code } : {};
+  }
+
+  /**
+   * Hub/Distributor a Shop can collect a pickup order from (its acting parent).
+   * Returns null for non-shop accounts or when no active parent can be resolved.
+   */
+  async getPickupHubForUser(userId: string): Promise<{
+    partnerCode: string;
+    name: string;
+    address: string;
+    address2: string;
+    city: string;
+    state: string;
+    zipCode: string;
+    country: string;
+    phoneNumber: string;
+  } | null> {
+    const { actingParentPartnerCode } = await this.actingParentStampForUser(userId);
+    if (!actingParentPartnerCode) return null;
+    const hub = await this.usersService.findByPartnerCode(actingParentPartnerCode);
+    if (!hub) return null;
+
+    const clean = (value: unknown) => String(value ?? '').trim();
+    const street = clean(hub.address) || clean(hub.streetAddress);
+    const extraStreet =
+      clean(hub.streetAddress) && clean(hub.streetAddress) !== street
+        ? clean(hub.streetAddress)
+        : '';
+    // Mongoose rejects empty required strings on the order's shippingAddress.
+    const orNA = (value: string) => value || 'N/A';
+    return {
+      partnerCode: actingParentPartnerCode,
+      name:
+        clean(hub.companyName) ||
+        clean(hub.shopName) ||
+        [clean(hub.firstName), clean(hub.lastName)].filter(Boolean).join(' ') ||
+        actingParentPartnerCode,
+      address: orNA(street),
+      address2: extraStreet,
+      city: orNA(clean(hub.city)),
+      state: orNA(clean(hub.state)),
+      zipCode: orNA(clean(hub.zipCode)),
+      country: clean(hub.country),
+      phoneNumber: clean(hub.phoneNumber),
+    };
+  }
+
+  /** Street, city/state and ZIP are required for orders that are shipped. */
+  private assertShippingAddressComplete(
+    shippingAddress?: CreateOrderDto['shippingAddress'],
+  ): void {
+    const missing = (value?: string) => !String(value ?? '').trim();
+    if (
+      missing(shippingAddress?.address) ||
+      missing(shippingAddress?.city) ||
+      missing(shippingAddress?.state) ||
+      missing(shippingAddress?.zipCode)
+    ) {
+      throw new BadRequestException(
+        'Shipping address, city, state and ZIP code are required.',
+      );
+    }
   }
 
   /**
@@ -4881,6 +4969,7 @@ export class OrdersService implements OnModuleInit {
       const orderCurrency = await this.getCurrencyForUser(currentUser);
 
       const { items: rawItems, shippingAddress, couponCode } = createOrderDto;
+      this.assertShippingAddressComplete(shippingAddress);
       await this.assertAndNormalizeEuropeanVat(
         shippingAddress,
         currentUser?.country,

@@ -60,24 +60,28 @@ class ShippingAddressDto {
   @IsOptional()
   companyName: string;
 
+  /** Required unless the order is a Hub pickup (checked in the service). */
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   address: string;
 
   @IsString()
   @IsOptional()
   address2?: string;
 
+  /** Required unless the order is a Hub pickup (checked in the service). */
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   city: string;
 
+  /** Required unless the order is a Hub pickup (checked in the service). */
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   state: string;
 
+  /** Required unless the order is a Hub pickup (checked in the service). */
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   zipCode: string;
 
   @IsString()
@@ -110,4 +114,9 @@ export class CreateOrderDto {
   @IsString()
   @IsOptional()
   couponCode?: string;
+
+  /** Shop collects the order from its Hub: shipping is free and the Hub address is used. */
+  @IsBoolean()
+  @IsOptional()
+  isPickup?: boolean;
 }

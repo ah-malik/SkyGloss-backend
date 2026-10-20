@@ -450,8 +450,9 @@ export class PdfService {
       const businessName = [
         user?.companyName,
         user?.shopName,
-        shippingPreview.companyName,
-        addressLine2,
+        // Pickup orders store the Hub's name here, not the customer's business.
+        snapshot.isPickup ? '' : shippingPreview.companyName,
+        snapshot.isPickup ? '' : addressLine2,
       ]
         .map((value) => clean(value))
         .find(Boolean);
@@ -538,7 +539,14 @@ export class PdfService {
 
       // Shipping Info
       const shipping = snapshot.shippingAddress || {};
-      doc.fontSize(14).font(fontBold).text('Shipping Address:');
+      doc
+        .fontSize(14)
+        .font(fontBold)
+        .text(
+          snapshot.isPickup
+            ? 'Pickup Address (Hub) - Customer Pickup:'
+            : 'Shipping Address:',
+        );
       doc.fontSize(12).font(fontRegular);
       doc.text(
         `Name: ${[shipping.firstName, shipping.lastName].filter(Boolean).join(' ') || 'N/A'}`,

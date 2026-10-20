@@ -75,6 +75,14 @@ export class OrdersController {
     );
   }
 
+  /** Hub address a Shop can pick its order up from at checkout (null when unavailable). */
+  @Get('pickup-hub')
+  @UseGuards(JwtAuthGuard)
+  async getPickupHub(@GetUser('_id') userId: string) {
+    const hub = await this.ordersService.getPickupHubForUser(userId);
+    return { available: !!hub, hub };
+  }
+
   @Get('activation-fee/quote')
   @UseGuards(JwtAuthGuard)
   getActivationFeeQuote(

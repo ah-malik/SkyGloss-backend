@@ -134,6 +134,13 @@ export class Order {
   @Prop({ type: ShippingAddress, required: true })
   shippingAddress: ShippingAddress;
 
+  /**
+   * Shop collects the order from its acting Hub/Distributor.
+   * Shipping is free and shippingAddress holds the Hub's address.
+   */
+  @Prop({ default: false })
+  isPickup?: boolean;
+
   @Prop({ type: String, enum: OrderStatus, default: OrderStatus.PENDING })
   status: OrderStatus;
 
