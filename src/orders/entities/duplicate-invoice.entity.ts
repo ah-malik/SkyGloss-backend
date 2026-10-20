@@ -20,6 +20,14 @@ export class DuplicateInvoice {
   @Prop({ required: true, default: 1 })
   sequence: number;
 
+  /**
+   * 'd_value' — D-Value invoice (ORDERNO-D{n}).
+   * 'original' — Invoice A of a Shop D-Value order request (ORDERNO-A).
+   * Missing on older records → D-Value.
+   */
+  @Prop({ type: String, enum: ['original', 'd_value'], default: 'd_value' })
+  invoiceType?: 'original' | 'd_value';
+
   @Prop({ type: [OrderItem], required: true })
   items: OrderItem[];
 

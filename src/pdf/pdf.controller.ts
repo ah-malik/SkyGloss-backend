@@ -94,6 +94,7 @@ export class PdfController {
       items: duplicate.items,
       totalAmount: duplicate.totalAmount,
       shippingFee: duplicate.shippingFee,
+      shippingFeeIsFinal: true,
       discount: duplicate.discount,
       vatAmount: duplicate.vatAmount,
       vatRate: duplicate.vatRate,

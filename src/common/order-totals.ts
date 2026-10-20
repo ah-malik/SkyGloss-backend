@@ -117,11 +117,17 @@ export function resolveOrderShippingFee(
     vatAmount?: number;
     shippingAddress?: { country?: string };
     orderNumber?: string;
+    /** DuplicateInvoice snapshots: the stored shippingFee is the invoice value. */
+    shippingFeeIsFinal?: boolean;
   },
   countryFallback?: string,
 ): number {
   if (isRegistrationOrder(order)) {
     return 0;
+  }
+
+  if (order.shippingFeeIsFinal) {
+    return Number(order.shippingFee) || 0;
   }
 
   if (order.shippingFee != null && order.shippingFee > 0) {

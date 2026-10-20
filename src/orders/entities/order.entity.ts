@@ -141,6 +141,14 @@ export class Order {
   @Prop({ default: false })
   isPickup?: boolean;
 
+  /**
+   * Shop D-Value order request: billed as Invoice A (Original − D-Value prices,
+   * plus shipping / discount / VAT) and Invoice B (D-Value prices), both stored
+   * in DuplicateInvoice. The order itself keeps the original prices and total.
+   */
+  @Prop({ default: false })
+  isDValueOrder?: boolean;
+
   /** Hub contact phone at order time (pickup orders only). */
   @Prop()
   pickupHubPhone?: string;

@@ -4669,7 +4669,11 @@ export class OrdersService implements OnModuleInit {
         : OrderStatus.PENDING;
     }
 
-    const updatedOrder = await order.save();
+    const updatedOrder = await this.saveOrderWithDValueSplit(
+      order,
+      shopUser,
+      actor._id,
+    );
     return this.returnManagedOrder(updatedOrder, actor);
   }
 
@@ -4929,7 +4933,11 @@ export class OrdersService implements OnModuleInit {
         : OrderStatus.PENDING;
     }
 
-    const updatedOrder = await order.save();
+    const updatedOrder = await this.saveOrderWithDValueSplit(
+      order,
+      shopUser,
+      actor._id,
+    );
 
     try {
       await this.productInventoryService.deductForOrder({
@@ -4988,6 +4996,10 @@ export class OrdersService implements OnModuleInit {
       const orderCurrency = await this.getCurrencyForUser(currentUser);
 
       const { items: rawItems, shippingAddress, couponCode } = createOrderDto;
+      const wantsDValue = createOrderDto.dValueInvoice === true;
+      if (wantsDValue) {
+        this.assertShopCanRequestDValueSplit(currentUser);
+      }
       const isPickup = createOrderDto.isPickup === true;
       const pickupHub = isPickup ? await this.getPickupHubForUser(userId) : null;
       if (isPickup && !pickupHub) {
@@ -5020,6 +5032,11 @@ export class OrdersService implements OnModuleInit {
       );
       const resolvedItems = kitResolved.items;
       const includesCertificationKit = kitResolved.includesCertificationKit;
+      if (wantsDValue && includesCertificationKit) {
+        throw new BadRequestException(
+          'D-Value invoices are not available for the Certification Kit Bundle.',
+        );
+      }
 
       await this.productInventoryService.assertStockAvailableForOrder({
         items: resolvedItems,
@@ -5032,7 +5049,10 @@ export class OrdersService implements OnModuleInit {
       const itemsSubtotal = getItemsSubtotal(resolvedItems);
       const shippingCountry =
         shippingAddress?.country || currentUser?.country || '';
+      // D-Value orders always go through the order request flow (admin sends
+      // the payment link later), even in online-payment regions.
       if (
+        !wantsDValue &&
         this.requiresOnlinePaymentDestinationOrder(
           shippingAddress?.country,
           currentUser?.country,
@@ -5081,6 +5101,19 @@ export class OrdersService implements OnModuleInit {
       );
       const finalAmount = Math.max(0, itemsSubtotal - discount + vatAmount + shippingFee);
 
+      // Validate the D-Value split before anything is saved.
+      if (wantsDValue) {
+        await this.computeDValueSplitInvoices(currentUser, {
+          items: resolvedItems,
+          shippingFee,
+          discount,
+          vatAmount,
+          vatRate,
+          totalAmount: finalAmount,
+          shippingAddress: { ...(shippingAddress || {}), country: shippingCountry },
+        });
+      }
+
       let savedOrder;
       let retries = 3;
       while (retries > 0) {
@@ -5118,6 +5151,7 @@ export class OrdersService implements OnModuleInit {
               : {}),
             couponCode: appliedCouponCode,
             includesCertificationKit: includesCertificationKit || undefined,
+            ...(wantsDValue ? { isDValueOrder: true } : {}),
             ...(await this.actingParentStampForUser(userId)),
             ...monetary,
           });
@@ -5135,6 +5169,29 @@ export class OrdersService implements OnModuleInit {
             continue;
           }
           throw saveError;
+        }
+      }
+
+      // Invoice A + Invoice B. On failure remove the order so no half-split
+      // order request is left behind (nothing else has been written yet).
+      if (savedOrder && wantsDValue) {
+        try {
+          const split = await this.computeDValueSplitInvoices(
+            currentUser,
+            savedOrder,
+          );
+          await this.saveDValueSplitInvoices(savedOrder, split, currentUser._id);
+        } catch (splitErr) {
+          await this.duplicateInvoiceModel
+            .deleteMany({ orderId: savedOrder._id })
+            .catch(() => undefined);
+          await this.orderModel
+            .deleteOne({ _id: savedOrder._id })
+            .catch(() => undefined);
+          if (splitErr instanceof BadRequestException) throw splitErr;
+          throw new BadRequestException(
+            'Failed to create the D-Value invoices. Please try again.',
+          );
         }
       }
 
@@ -6063,8 +6120,11 @@ export class OrdersService implements OnModuleInit {
     const session = await stripeInstance.checkout.sessions.create({
       payment_method_types: ['card'],
       // Kit pricing is fixed server-side (7% + free shipping); block Stripe promo stacking.
+      // D-Value orders: Invoice A + B must keep matching the order total.
       allow_promotion_codes:
-        !chargeRemainingOnly && !order.includesCertificationKit,
+        !chargeRemainingOnly &&
+        !order.includesCertificationKit &&
+        !(order as any).isDValueOrder,
       line_items,
       mode: 'payment',
       success_url: `${baseUrl}${dashboardPath}?success=true&order_id=${order._id}`,
@@ -6223,6 +6283,7 @@ export class OrdersService implements OnModuleInit {
       items: duplicatePlain.items || duplicate.items,
       totalAmount: duplicatePlain.totalAmount ?? duplicate.totalAmount,
       shippingFee: duplicatePlain.shippingFee ?? duplicate.shippingFee,
+      shippingFeeIsFinal: true,
       discount: duplicatePlain.discount ?? duplicate.discount,
       vatAmount: duplicatePlain.vatAmount ?? duplicate.vatAmount,
       vatRate: duplicatePlain.vatRate ?? duplicate.vatRate,
@@ -6312,6 +6373,7 @@ export class OrdersService implements OnModuleInit {
 
     const existingCount = await this.duplicateInvoiceModel.countDocuments({
       orderId: order._id,
+      invoiceType: { $ne: 'original' },
     });
     const sequence = existingCount + 1;
     const invoiceNumber = `${order.orderNumber}-D${sequence}`;
@@ -6431,6 +6493,269 @@ export class OrdersService implements OnModuleInit {
     }
   }
 
+  /** Shop D-Value checkout needs the D-Value toggle (Hub / Distributor / Admin). */
+  private assertShopCanRequestDValueSplit(shop: UserDocument | null): void {
+    if (shop?.role !== UserRole.CERTIFIED_SHOP) {
+      throw new BadRequestException(
+        'D-Value invoices are only available for shop orders.',
+      );
+    }
+    if (!shop.dValueInvoiceEnabled) {
+      throw new BadRequestException(
+        'D-Value invoices are not enabled for your shop. Please contact your Hub.',
+      );
+    }
+  }
+
+  private dValueLineKey(item: {
+    product: unknown;
+    size?: unknown;
+    orderType?: unknown;
+  }): string {
+    return `${String(item.product)}|${String(item.size)}|${normalizeOrderItemType(item.orderType as any)}`;
+  }
+
+  /**
+   * Shop D-Value order request split:
+   *  Invoice B (D-Value)  — Pricing Group D-Value prices, VAT on its own base.
+   *  Invoice A (Original) — per line Original − D-Value, plus shipping,
+   *                         discount and the remaining VAT.
+   * A + B always equals the order total. Prices already on Invoice B stay
+   * locked (lockedDValueLines); only new lines read the Pricing Group.
+   */
+  private async computeDValueSplitInvoices(
+    shop: UserDocument,
+    order: {
+      items: Array<{
+        product: unknown;
+        name: string;
+        size: string;
+        quantity: number;
+        orderType?: unknown;
+        price: number;
+        image?: string;
+      }>;
+      shippingFee?: number;
+      discount?: number;
+      vatAmount?: number;
+      vatRate?: number;
+      totalAmount: number;
+      shippingAddress?: any;
+    },
+    lockedDValueLines?: Map<string, number>,
+  ) {
+    const group = await this.resolvePricingGroupForUser(shop);
+    const dValueByKey = new Map<string, number>();
+    for (const entry of group?.dValuePrices || []) {
+      dValueByKey.set(
+        `${String(entry.productId)}|${String(entry.size)}`,
+        Number(entry.price),
+      );
+    }
+
+    const missing: string[] = [];
+    const notLower: string[] = [];
+    const originalItems: Array<Record<string, any>> = [];
+    const dValueItems: Array<Record<string, any>> = [];
+    for (const item of order.items || []) {
+      const label = `${item.name} (${item.size})`;
+      const orderType = normalizeOrderItemType(item.orderType as any);
+      let dValueLine = lockedDValueLines?.get(this.dValueLineKey(item));
+      if (dValueLine == null) {
+        const unit = dValueByKey.get(
+          `${String(item.product)}|${String(item.size)}`,
+        );
+        if (unit == null || !Number.isFinite(unit)) {
+          missing.push(label);
+          continue;
+        }
+        dValueLine = roundMoney(
+          resolveOrderLinePrice(unit, orderType, item.name),
+        );
+      }
+      const originalLine = roundMoney(Number(item.price) || 0);
+      if (dValueLine >= originalLine) {
+        notLower.push(label);
+        continue;
+      }
+      const line = {
+        product: String(item.product),
+        name: item.name,
+        size: item.size,
+        quantity: Math.max(1, Number(item.quantity) || 1),
+        orderType,
+        image: item.image || '',
+      };
+      dValueItems.push({ ...line, price: dValueLine });
+      originalItems.push({
+        ...line,
+        price: roundMoney(originalLine - dValueLine),
+      });
+    }
+    if (missing.length) {
+      throw new BadRequestException(
+        `D-Value price is not set for: ${missing.join(', ')}. Please contact Admin.`,
+      );
+    }
+    if (notLower.length) {
+      throw new BadRequestException(
+        `D-Value price must be lower than the original price for: ${notLower.join(', ')}. Please contact Admin.`,
+      );
+    }
+
+    const address = order.shippingAddress || {};
+    const dValueSubtotal = roundMoney(getItemsSubtotal(dValueItems as any));
+    const dValueVat = calculateEuropeOrderVatAmount(
+      getOrderVatTaxableBase(dValueSubtotal, 0),
+      {
+        country: address.country || shop?.country,
+        taxId: address.taxId,
+        noVatId: address.noVatId,
+      },
+    );
+    const dValueTotal = roundMoney(dValueSubtotal + dValueVat.amount);
+
+    const discount = roundMoney(Number(order.discount) || 0);
+    const originalSubtotal = roundMoney(getItemsSubtotal(originalItems as any));
+    const originalTotal = roundMoney(
+      (Number(order.totalAmount) || 0) - dValueTotal,
+    );
+    if (discount - originalSubtotal > 0.01 || originalTotal < 0) {
+      throw new BadRequestException(
+        'The order discount is larger than the Original invoice amount, so this order cannot be split into D-Value invoices.',
+      );
+    }
+
+    return {
+      original: {
+        items: originalItems,
+        totalAmount: originalTotal,
+        shippingFee: roundMoney(Number(order.shippingFee) || 0),
+        vatAmount: roundMoney(
+          Math.max(0, (Number(order.vatAmount) || 0) - dValueVat.amount),
+        ),
+        vatRate: Number(order.vatRate) || 0,
+        discount,
+      },
+      dValue: {
+        items: dValueItems,
+        totalAmount: dValueTotal,
+        shippingFee: 0,
+        vatAmount: dValueVat.amount,
+        vatRate: dValueVat.rate,
+        discount: 0,
+      },
+    };
+  }
+
+  /**
+   * Save an edited order. D-Value orders: Invoice A/B are written first; if the
+   * order save then fails they are re-synced to the stored order.
+   */
+  private async saveOrderWithDValueSplit(
+    order: OrderDocument,
+    shopUser: UserDocument | null | undefined,
+    actorId: unknown,
+  ): Promise<OrderDocument> {
+    const split = await this.computeDValueSplitForExistingOrder(order, shopUser);
+    if (!split) return order.save();
+
+    await this.saveDValueSplitInvoices(order, split, actorId);
+    try {
+      return await order.save();
+    } catch (err) {
+      try {
+        const stored = await this.orderModel.findById(order._id);
+        if (stored) {
+          const restored = await this.computeDValueSplitForExistingOrder(
+            stored,
+            shopUser,
+          );
+          if (restored) {
+            await this.saveDValueSplitInvoices(stored, restored, actorId);
+          }
+        }
+      } catch (restoreErr) {
+        this.logger.error(
+          `Failed to re-sync D-Value invoices for order ${order.orderNumber}`,
+          (restoreErr as Error)?.stack || restoreErr,
+        );
+      }
+      throw err;
+    }
+  }
+
+  /** Re-split a D-Value order after shipping / items change; null for other orders. */
+  private async computeDValueSplitForExistingOrder(
+    order: OrderDocument,
+    shopUser?: UserDocument | null,
+  ) {
+    if (!(order as any).isDValueOrder) return null;
+    const shop =
+      shopUser && (shopUser as any).role
+        ? shopUser
+        : await this.usersService.findOne(
+            String((order.user as any)?._id || order.user),
+          );
+    if (!shop) throw new NotFoundException('Shop not found');
+
+    const existing = await this.duplicateInvoiceModel
+      .findOne({
+        invoiceNumber: this.dValueSplitInvoiceNumbers(order.orderNumber).dValue,
+      })
+      .lean()
+      .exec();
+    const locked = new Map<string, number>();
+    for (const line of existing?.items || []) {
+      locked.set(this.dValueLineKey(line as any), Number(line.price));
+    }
+    return this.computeDValueSplitInvoices(shop, order as any, locked);
+  }
+
+  private dValueSplitInvoiceNumbers(orderNumber: string) {
+    return { original: `${orderNumber}-A`, dValue: `${orderNumber}-D1` };
+  }
+
+  /** Upsert Invoice A + Invoice B by invoice number (never duplicates). */
+  private async saveDValueSplitInvoices(
+    order: OrderDocument,
+    split: Awaited<ReturnType<OrdersService['computeDValueSplitInvoices']>>,
+    actorId: unknown,
+  ): Promise<void> {
+    const numbers = this.dValueSplitInvoiceNumbers(order.orderNumber);
+    const common = {
+      orderId: order._id as Types.ObjectId,
+      currency: order.currency || 'USD',
+      shippingAddress: order.shippingAddress,
+    };
+    const entries = [
+      {
+        invoiceNumber: numbers.original,
+        invoiceType: 'original',
+        sequence: 0,
+        ...split.original,
+      },
+      {
+        invoiceNumber: numbers.dValue,
+        invoiceType: 'd_value',
+        sequence: 1,
+        ...split.dValue,
+      },
+    ];
+    for (const entry of entries) {
+      await this.duplicateInvoiceModel
+        .findOneAndUpdate(
+          { invoiceNumber: entry.invoiceNumber, orderId: common.orderId },
+          {
+            $set: { ...common, ...entry },
+            $setOnInsert: { createdBy: actorId as Types.ObjectId },
+          },
+          { upsert: true, new: true, setDefaultsOnInsert: true },
+        )
+        .exec();
+    }
+  }
+
   /** Shop may use D-Value invoices only on its own orders, when its Hub enabled them. */
   private assertShopCanUseDValueInvoice(
     order: OrderDocument,
@@ -6474,6 +6799,11 @@ export class OrdersService implements OnModuleInit {
     if (!order) throw new NotFoundException('Order not found');
     this.assertShopCanUseDValueInvoice(order, actor);
 
+    if ((order as any).isDValueOrder) {
+      throw new BadRequestException(
+        'This order already has its Original and D-Value invoices.',
+      );
+    }
     if (isRegistrationOrder(order)) {
       throw new BadRequestException(
         'Cannot create D-Value invoice for registration orders',
@@ -6535,7 +6865,11 @@ export class OrdersService implements OnModuleInit {
 
     // Re-use the shop's latest D-Value invoice while nothing has changed.
     const latest = await this.duplicateInvoiceModel
-      .findOne({ orderId: order._id, createdBy: actor._id })
+      .findOne({
+        orderId: order._id,
+        createdBy: actor._id,
+        invoiceType: { $ne: 'original' },
+      })
       .sort({ sequence: -1 })
       .exec();
     const unchanged =

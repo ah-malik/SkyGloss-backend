@@ -119,4 +119,9 @@ export class CreateOrderDto {
   @IsBoolean()
   @IsOptional()
   isPickup?: boolean;
+
+  /** Shop order request split into Invoice A (Original) and Invoice B (D-Value). */
+  @IsBoolean()
+  @IsOptional()
+  dValueInvoice?: boolean;
 }
