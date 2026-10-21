@@ -132,6 +132,12 @@ export class AuthService {
       isSelfRegistered: !!user.isSelfRegistered,
       isCertified: !!user.isCertified,
       isTrainingComplete: !!user.isTrainingComplete,
+      // Course counts on first render after login depend on these (same as /auth/profile).
+      isAccountActivated: !!user.isAccountActivated,
+      accountActivatedAt: user.accountActivatedAt || null,
+      completedCourses: user.completedCourses || [],
+      courseProgress: user.courseProgress || {},
+      createdAt: user.createdAt || null,
       enrolledAt: user.enrolledAt || null,
       certifiedAt: user.certifiedAt || null,
       partnerCode: user.partnerCode,

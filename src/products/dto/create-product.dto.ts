@@ -27,6 +27,11 @@ class SizeDto {
   @IsNumber()
   @IsNotEmpty()
   price: number;
+
+  /** Shipping weight per unit in LB. */
+  @IsNumber()
+  @IsOptional()
+  weight?: number;
 }
 
 export class CreateProductDto {

@@ -117,7 +117,10 @@ export class ProductsService {
 
           return {
             ...productObj,
-            ...this.withViewerSizePricing(item.sizes, user),
+            ...this.withViewerSizePricing(
+              this.withProductSizeWeights(item.sizes, productObj.sizes),
+              user,
+            ),
             currency: groupToUse.currency || 'USD',
             groupName: groupToUse.name,
           };
@@ -242,7 +245,10 @@ export class ProductsService {
         return this.attachViewerHubStockToOne(
           {
             ...productObj,
-            ...this.withViewerSizePricing(groupItem.sizes, user),
+            ...this.withViewerSizePricing(
+              this.withProductSizeWeights(groupItem.sizes, productObj.sizes),
+              user,
+            ),
             currency: groupToUse.currency || 'USD',
             groupName: groupToUse.name,
           },
@@ -275,16 +281,68 @@ export class ProductsService {
     );
   }
 
+  /** Group sizes carry prices only; take shipping weights from the catalog product. */
+  private withProductSizeWeights(
+    groupSizes: Array<{ size: string; price: number } | string>,
+    productSizes?: Array<{ size: string; weight?: number } | string>,
+  ): Array<{ size: string; price: number; weight?: number } | string> {
+    const weights = new Map<string, number>();
+    for (const s of productSizes || []) {
+      if (typeof s !== 'string' && Number(s.weight) > 0) {
+        weights.set(String(s.size), Number(s.weight));
+      }
+    }
+    return (groupSizes || []).map((s) => {
+      if (typeof s === 'string') return s;
+      // Group sizes are Mongoose subdocs; spreading one copies internals, not size/price.
+      const plain = { size: s.size, price: s.price };
+      const weight = weights.get(String(s.size));
+      return weight ? { ...plain, weight } : plain;
+    });
+  }
+
+  /**
+   * Per-unit shipping weights (LB) keyed by product id, then size.
+   * Read from the catalog so group pricing never hides them.
+   */
+  async getSizeWeightsByProductIds(
+    productIds: string[],
+  ): Promise<Map<string, Map<string, number>>> {
+    const ids = [...new Set(productIds.filter(Boolean).map(String))].filter(
+      (id) => /^[a-f0-9]{24}$/i.test(id),
+    );
+    const result = new Map<string, Map<string, number>>();
+    if (!ids.length) return result;
+    const products = await this.productModel
+      .find({ _id: { $in: ids } })
+      .select('sizes')
+      .lean()
+      .exec();
+    for (const product of products as any[]) {
+      const bySize = new Map<string, number>();
+      for (const s of product.sizes || []) {
+        if (Number(s?.weight) > 0) bySize.set(String(s.size), Number(s.weight));
+      }
+      result.set(String(product._id), bySize);
+    }
+    return result;
+  }
+
   /**
    * Map size prices for the viewing shop. Unpaid self-registered shops get +10%
    * on the Pricing Group / catalog price; groupPrice keeps the pre-markup amount
    * for strikethrough UI.
    */
   private withViewerSizePricing(
-    sizes: Array<{ size: string; price: number } | string>,
+    sizes: Array<{ size: string; price: number; weight?: number } | string>,
     user?: User,
   ): {
-    sizes: Array<{ size: string; price: number; groupPrice?: number }>;
+    sizes: Array<{
+      size: string;
+      price: number;
+      groupPrice?: number;
+      weight?: number;
+    }>;
     isUnpaidPricing?: boolean;
   } {
     const unpaid = isUnpaidSelfRegisteredShop(user);
@@ -294,13 +352,16 @@ export class ProductsService {
           return { size: s, price: 0 };
         }
         const groupPrice = Number(s.price) || 0;
+        const weight =
+          Number(s.weight) > 0 ? { weight: Number(s.weight) } : {};
         if (!unpaid) {
-          return { size: s.size, price: groupPrice };
+          return { size: s.size, price: groupPrice, ...weight };
         }
         return {
           size: s.size,
           price: resolveChargePriceForShop(groupPrice, user),
           groupPrice,
+          ...weight,
         };
       }),
       ...(unpaid ? { isUnpaidPricing: true } : {}),

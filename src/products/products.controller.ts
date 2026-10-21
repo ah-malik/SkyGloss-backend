@@ -21,7 +21,7 @@ import { ProductsService } from './products.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { User, UserRole } from '../users/entities/user.entity';
-import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
+import { StrictOptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -62,7 +62,7 @@ export class ProductsController {
   }
 
   @Get()
-  @UseGuards(OptionalJwtAuthGuard)
+  @UseGuards(StrictOptionalJwtAuthGuard)
   async findAll(
     @Query('status') status?: string,
     @Query('targetAudience') targetAudience?: string,
@@ -74,7 +74,7 @@ export class ProductsController {
   }
 
   @Get(':id')
-  @UseGuards(OptionalJwtAuthGuard)
+  @UseGuards(StrictOptionalJwtAuthGuard)
   async findOne(
     @Param('id') id: string,
     @Query('forUser') forUserId?: string,

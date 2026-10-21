@@ -15,6 +15,7 @@ async function main() {
       firstName: 'Alex',
       lastName: 'Morgan',
       country: 'United States',
+      partnerCode: 'SG-REP-10482',
       accountActivatedAt: new Date('2025-05-27T12:00:00Z'),
     },
     {

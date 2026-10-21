@@ -159,6 +159,9 @@ export const FRONTEND_APIS: ApiEndpointDef[] = [
   // Orders
   def('frontend', 'Orders', 'POST', '/orders/checkout-session', 'Create checkout session'),
   def('frontend', 'Orders', 'POST', '/orders/validate-vat', 'Validate European VAT via VIES'),
+  def('frontend', 'Orders', 'POST', '/orders/shipping-quote', 'Checkout shipping quote (FedEx from Hub)'),
+  def('frontend', 'Orders', 'GET', '/geo/address-autocomplete', 'Address autocomplete (Geoapify)'),
+  def('frontend', 'Orders', 'GET', '/geo/validate-postcode', 'ZIP / postal code check (Geoapify)'),
   def('frontend', 'Orders', 'GET', '/orders/activation-fee/quote', 'Activation fee quote (fee, VAT)'),
   def('frontend', 'Orders', 'POST', '/orders/activation-fee', 'Create activation fee session'),
   def('frontend', 'Orders', 'GET', '/orders/my-orders', 'My orders'),

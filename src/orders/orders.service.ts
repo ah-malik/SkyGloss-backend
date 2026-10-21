@@ -33,7 +33,8 @@ import { CreateDuplicateInvoiceDto } from './dto/create-duplicate-invoice.dto';
 import { CreateAdminTestOrderDto } from './dto/create-admin-test-order.dto';
 import { ProductsService } from '../products/products.service';
 import { ProductInventoryService } from '../inventory/product-inventory.service';
-import { FedexService } from '../fedex/fedex.service';
+import { FedexService, FedExAddressInput } from '../fedex/fedex.service';
+import { GeoService } from '../geo/geo.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
 import { NotificationType } from '../notifications/entities/notification.entity';
@@ -45,7 +46,12 @@ import { UserDocument, UserRole, UserStatus } from '../users/entities/user.entit
 import { normalizePartnerCode } from '../common/partner-code';
 import { ProductGroup, ProductGroupDocument } from '../product-groups/entities/product-group.entity';
 import { RegistrationFeesService } from '../registration-fees/registration-fees.service';
-import { calculateShippingFee, getShippingRegion, SHIPPING_FEE_AMOUNT } from '../common/shipping-config';
+import {
+  calculateShippingFee,
+  getShippingRegion,
+  SHIPPING_FEE_AMOUNT,
+  usdToLocalAmount,
+} from '../common/shipping-config';
 import {
   getItemsSubtotal,
   isRegistrationOrder,
@@ -128,7 +134,10 @@ import {
 import { applyPartnerAccountDiscount } from '../common/partner-order-discount';
 import { normalizeCurrencyCode } from '../common/currency-codes';
 import { normalizeOrderItemType } from '../common/order-type';
-import { resolveOrderLinePrice } from '../common/units-per-case';
+import {
+  getUnitsPerCaseForProduct,
+  resolveOrderLinePrice,
+} from '../common/units-per-case';
 import {
   applyCertificationKitDiscount,
   isCertificationKitCartItem,
@@ -146,6 +155,7 @@ import {
 } from '../common/soft-delete';
 import { OrderCommissionTransferService } from '../payouts/services/order-commission-transfer.service';
 import {
+  isCanadaCountryName,
   isEuropeCountryName,
   isUsaShopOrder,
   requiresOnlinePaymentShopOrder,
@@ -200,6 +210,7 @@ export class OrdersService implements OnModuleInit {
     private readonly cache: RedisCacheService,
     private fedexService: FedexService,
     private userActivityService: UserActivityService,
+    private geoService: GeoService,
   ) {
     const stripeSecretKey = this.configService.get<string>('STRIPE_SECRET_KEY');
     const usaStripeSecretKey = this.configService.get<string>('USA_STRIPE_SECRET_KEY');
@@ -860,6 +871,7 @@ export class OrdersService implements OnModuleInit {
     }
     if (!isPickup) {
       this.assertShippingAddressComplete(shippingAddress);
+      await this.assertValidShippingPostcode(shippingAddress);
     }
     await this.assertAndNormalizeEuropeanVat(
       shippingAddress,
@@ -910,13 +922,17 @@ export class OrdersService implements OnModuleInit {
     // Certification Kit prices are always server-resolved from catalog components.
     const itemsSubtotal = getItemsSubtotal(resolvedItems);
     const rateToUsd = await this.exchangeRatesService.getRateToBase(orderCurrency);
-    let shippingFee = calculateShippingFee(shippingCountry, itemsSubtotal, {
+    const shippingQuote = await this.quoteCheckoutShipping({
+      user: currentUser,
+      items: resolvedItems,
+      shippingAddress,
+      itemsSubtotal,
+      orderCurrency,
       rateToUsd,
-      currency: orderCurrency,
+      isPickup,
+      includesCertificationKit,
     });
-    if (includesCertificationKit || isPickup) {
-      shippingFee = 0;
-    }
+    const shippingFee = shippingQuote.shippingFee;
 
     let discount = 0;
     let appliedCouponCode: string | undefined;
@@ -1256,6 +1272,21 @@ export class OrdersService implements OnModuleInit {
   }
 
   /** Street, city/state and ZIP are required for orders that are shipped. */
+  private async assertValidShippingPostcode(
+    shippingAddress?: CreateOrderDto['shippingAddress'],
+  ): Promise<void> {
+    const check = await this.geoService.validatePostcode(
+      shippingAddress?.zipCode || '',
+      shippingAddress?.country,
+      shippingAddress?.state,
+    );
+    if (!check.valid) {
+      throw new BadRequestException(
+        check.message || 'Invalid ZIP / Postal code.',
+      );
+    }
+  }
+
   private assertShippingAddressComplete(
     shippingAddress?: CreateOrderDto['shippingAddress'],
   ): void {
@@ -4460,6 +4491,243 @@ export class OrdersService implements OnModuleInit {
   /**
    * Quote FedEx rates from the order user's Hub address → order shipping address.
    */
+  /** FedEx origin for a shop: its territory Hub's address. */
+  private async resolveFedexHubOrigin(
+    shop: UserDocument,
+    originZipCode?: string,
+  ): Promise<{ hub: UserDocument; shipper: FedExAddressInput }> {
+    const hubCode =
+      await this.usersService.resolveTerritoryHubPartnerCodeForShop({
+        hubPartnerCode: (shop as any).hubPartnerCode,
+        country: shop.country,
+      });
+    const hub = await this.usersService.findByPartnerCode(hubCode);
+    if (!hub) {
+      throw new BadRequestException(
+        `Hub account not found for partner code ${hubCode}.`,
+      );
+    }
+
+    const zipCode = originZipCode || hub.zipCode;
+    // Hubs often have only a ZIP; FedEx needs the US/CA state, so look it up.
+    let state = hub.state;
+    if (!state && zipCode) {
+      const lookup = await this.geoService.validatePostcode(
+        zipCode,
+        hub.country,
+      );
+      state = lookup.stateCode || lookup.state;
+    }
+
+    const shipper = this.fedexService.buildAddress(
+      {
+        streetAddress: hub.streetAddress,
+        address: hub.address,
+        city: hub.city,
+        state,
+        zipCode,
+        country: hub.country,
+      },
+      `Hub origin (${hub.partnerCode || hubCode})`,
+    );
+    return { hub, shipper };
+  }
+
+  /** Total cart weight in LB from per-size catalog weights (default per unit when unset). */
+  private async getCartShippingWeightLb(
+    items: Array<{
+      product: string;
+      name?: string;
+      size: string;
+      quantity: number;
+      orderType?: string;
+    }>,
+  ): Promise<number> {
+    const defaultUnitWeight =
+      Number(process.env.FEDEX_DEFAULT_UNIT_WEIGHT_LB) || 1;
+    const weights = await this.productsService.getSizeWeightsByProductIds(
+      items.map((item) => String(item.product)),
+    );
+    let total = 0;
+    for (const item of items) {
+      const unitWeight =
+        weights.get(String(item.product))?.get(String(item.size)) ||
+        defaultUnitWeight;
+      const units =
+        normalizeOrderItemType(item.orderType) === 'case'
+          ? getUnitsPerCaseForProduct(item.name)
+          : 1;
+      total += unitWeight * units * Math.max(1, Number(item.quantity) || 1);
+    }
+    return Math.min(150, Math.max(0.1, Number(total.toFixed(2))));
+  }
+
+  /**
+   * Checkout shipping for Canada destinations (FedEx is Canada-only for now):
+   * the free-shipping rule still decides whether shipping is charged; when it
+   * is, the fee is the cheapest FedEx rate from the shop's Hub to the address.
+   * Falls back to the flat fee if FedEx cannot quote.
+   */
+  async quoteCheckoutShipping(params: {
+    user: UserDocument | null | undefined;
+    items: Array<{
+      product: string;
+      name: string;
+      size: string;
+      quantity: number;
+      orderType?: string;
+      price: number;
+    }>;
+    shippingAddress?: Partial<CreateOrderDto['shippingAddress']>;
+    itemsSubtotal: number;
+    orderCurrency: string;
+    rateToUsd: number;
+    isPickup?: boolean;
+    includesCertificationKit?: boolean;
+  }): Promise<{
+    shippingFee: number;
+    currency: string;
+    source: 'free' | 'flat' | 'fedex';
+    serviceName?: string;
+    transitDays?: number | null;
+    error?: string;
+  }> {
+    const currency = String(params.orderCurrency || 'USD').toUpperCase();
+    const shippingCountry =
+      params.shippingAddress?.country || params.user?.country || '';
+
+    if (params.includesCertificationKit || params.isPickup) {
+      return { shippingFee: 0, currency, source: 'free' };
+    }
+
+    const flatFee = calculateShippingFee(shippingCountry, params.itemsSubtotal, {
+      rateToUsd: params.rateToUsd,
+      currency,
+    });
+    if (flatFee <= 0) {
+      return { shippingFee: 0, currency, source: 'free' };
+    }
+    if (
+      !params.user ||
+      !isCanadaCountryName(shippingCountry) ||
+      !this.requiresOnlinePaymentDestinationOrder(
+        params.shippingAddress?.country,
+        params.user.country,
+      )
+    ) {
+      return { shippingFee: flatFee, currency, source: 'flat' };
+    }
+
+    try {
+      const shipTo = params.shippingAddress;
+      if (!shipTo) {
+        throw new BadRequestException('Shipping address is required.');
+      }
+      const { shipper } = await this.resolveFedexHubOrigin(params.user);
+      const recipient = this.fedexService.buildAddress(
+        {
+          address: shipTo.address,
+          address2: shipTo.address2,
+          city: shipTo.city,
+          state: shipTo.state,
+          zipCode: shipTo.zipCode,
+          country: shipTo.country,
+          residential: true,
+        },
+        'Shipping address',
+      );
+
+      const weight = await this.getCartShippingWeightLb(params.items);
+      const commodities = params.items.map((item) => ({
+        description: String(item.name || 'Product').slice(0, 450),
+        quantity: Math.max(1, Number(item.quantity) || 1),
+        unitPrice: Math.max(0.01, Number(item.price) || 0.01),
+        countryOfManufacture: shipper.countryCode,
+      }));
+
+      const rates = await this.fedexService.getRateQuotes({
+        shipper,
+        recipient,
+        weight,
+        weightUnits: 'LB',
+        preferredCurrency: currency,
+        customsValue: Math.max(1, params.itemsSubtotal),
+        commodities,
+      });
+      const cheapest = rates[0];
+      if (!cheapest) {
+        throw new BadRequestException('FedEx returned no rates for this route.');
+      }
+
+      let fee = Number(cheapest.totalNetCharge) || 0;
+      const quoteCurrency = String(cheapest.currency || currency).toUpperCase();
+      if (quoteCurrency !== currency) {
+        const quoteRateToUsd =
+          await this.exchangeRatesService.getRateToBase(quoteCurrency);
+        fee = usdToLocalAmount(fee * quoteRateToUsd, params.rateToUsd);
+      }
+
+      return {
+        shippingFee: Math.round(fee * 100) / 100,
+        currency,
+        source: 'fedex',
+        serviceName: cheapest.serviceName,
+        transitDays: cheapest.transitDays ?? null,
+      };
+    } catch (err: any) {
+      this.logger.warn(
+        `[FedEx checkout] Falling back to flat shipping for user ${params.user?._id}: ${err?.message || err}`,
+      );
+      return {
+        shippingFee: flatFee,
+        currency,
+        source: 'flat',
+        error: err?.message ? String(err.message) : undefined,
+      };
+    }
+  }
+
+  /**
+   * Checkout preview: same server-side shipping the checkout session will charge.
+   */
+  async previewCheckoutShipping(
+    userId: string,
+    dto: {
+      items: CreateOrderDto['items'];
+      shippingAddress?: Partial<CreateOrderDto['shippingAddress']>;
+      isPickup?: boolean;
+    },
+  ) {
+    const currentUser = await this.usersService.findOne(userId);
+    const orderCurrency = await this.getCurrencyForUser(currentUser);
+    const items = await this.repriceOrderItemsForUser(
+      currentUser,
+      (dto.items || []).map((item) => ({
+        ...item,
+        orderType: normalizeOrderItemType(item.orderType),
+      })),
+    );
+    const kitResolved = await this.resolveCertificationKitOrderItems(
+      currentUser as any,
+      items,
+    );
+    const itemsSubtotal = getItemsSubtotal(kitResolved.items);
+    const rateToUsd = await this.exchangeRatesService.getRateToBase(orderCurrency);
+    const quote = await this.quoteCheckoutShipping({
+      user: currentUser,
+      items: kitResolved.items,
+      shippingAddress: dto.shippingAddress,
+      itemsSubtotal,
+      orderCurrency,
+      rateToUsd,
+      isPickup: dto.isPickup === true,
+      includesCertificationKit: kitResolved.includesCertificationKit,
+    });
+    // Internal FedEx errors stay in server logs.
+    const { error: _error, ...publicQuote } = quote;
+    return publicQuote;
+  }
+
   async calculateFedexShippingRates(
     orderId: string,
     actor: UserDocument,
@@ -4478,29 +4746,9 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException('Order has no associated user.');
     }
 
-    const hubCode =
-      await this.usersService.resolveTerritoryHubPartnerCodeForShop({
-        hubPartnerCode: (shop as any).hubPartnerCode,
-        country: shop.country,
-      });
-    const hub = await this.usersService.findByPartnerCode(hubCode);
-    if (!hub) {
-      throw new BadRequestException(
-        `Hub account not found for partner code ${hubCode}.`,
-      );
-    }
-
-    const hubLabel = `Hub origin (${hub.partnerCode || hubCode})`;
-    const shipper = this.fedexService.buildAddress(
-      {
-        streetAddress: hub.streetAddress,
-        address: hub.address,
-        city: hub.city,
-        state: hub.state,
-        zipCode: originZipCode || hub.zipCode,
-        country: hub.country,
-      },
-      hubLabel,
+    const { hub, shipper } = await this.resolveFedexHubOrigin(
+      shop,
+      originZipCode,
     );
 
     const shipTo = order.shippingAddress;
@@ -5012,6 +5260,7 @@ export class OrdersService implements OnModuleInit {
       }
       if (!isPickup) {
         this.assertShippingAddressComplete(shippingAddress);
+      await this.assertValidShippingPostcode(shippingAddress);
       }
       await this.assertAndNormalizeEuropeanVat(
         shippingAddress,

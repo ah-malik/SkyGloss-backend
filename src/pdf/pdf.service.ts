@@ -31,6 +31,8 @@ export interface PartnerCertificateData {
   name: string;
   /** Country / countries printed on the Territory line. */
   territory: string;
+  /** Partner ID (user.partnerCode) printed on the Partner ID line. */
+  partnerId: string;
   /** Activation date printed next to the signature. */
   date: Date;
 }
@@ -419,7 +421,9 @@ export class PdfService {
       user?.updatedAt ||
       new Date();
 
-    return { title, name, territory, date: new Date(activatedAt) };
+    const partnerId = String(user?.partnerCode || '').trim();
+
+    return { title, name, territory, partnerId, date: new Date(activatedAt) };
   }
 
   async generatePartnerCertificate(data: PartnerCertificateData): Promise<Buffer> {
@@ -566,18 +570,21 @@ export class PdfService {
         rule(681.68, 776.72, 427.74);
         textAt('Date', 681.68, 443.06, FONT_REG, 10, GREY);
 
-        // ── Territory ──
-        textAt('Territory:', 471.8, 518.32, FONT_REG, 10, GREY);
-        rule(522.38, 776.72, 517.05);
-        if (data.territory) {
-          let terrSize = 10;
-          doc.font(FONT_SEMI).fontSize(terrSize);
-          while (terrSize > 7 && doc.widthOfString(data.territory) > 246) {
-            terrSize -= 0.5;
-            doc.fontSize(terrSize);
+        // ── Partner ID + Territory (rules/values share one start so they align) ──
+        const fieldLine = (label: string, value: string, baseline: number) => {
+          textAt(label, 471.8, baseline, FONT_REG, 10, GREY);
+          rule(531, 776.72, baseline - 1.27);
+          if (!value) return;
+          let size = 10;
+          doc.font(FONT_SEMI).fontSize(size);
+          while (size > 7 && doc.widthOfString(value) > 237) {
+            size -= 0.5;
+            doc.fontSize(size);
           }
-          textAt(data.territory, 528, 514, FONT_SEMI, terrSize, GREY);
-        }
+          textAt(value, 536.6, baseline - 4.32, FONT_SEMI, size, GREY);
+        };
+        fieldLine('Partner ID:', data.partnerId, 480.69);
+        fieldLine('Territory:', data.territory, 518.32);
 
         doc.end();
       } catch (error) {

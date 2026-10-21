@@ -18,6 +18,7 @@ import { AddOrderItemsDto } from './dto/add-order-items.dto';
 import { CreateAdminTestOrderDto } from './dto/create-admin-test-order.dto';
 import { SetOrderRequestShippingDto } from './dto/set-order-request-shipping.dto';
 import { CalculateFedexRatesDto } from './dto/calculate-fedex-rates.dto';
+import { ShippingQuoteDto } from './dto/shipping-quote.dto';
 import { CreateDuplicateInvoiceDto } from './dto/create-duplicate-invoice.dto';
 import { ValidateVatDto } from './dto/validate-vat.dto';
 import { ActivationFeeDto } from './dto/activation-fee.dto';
@@ -73,6 +74,23 @@ export class OrdersController {
       createOrderDto,
       role,
     );
+  }
+
+  /** Checkout shipping preview (FedEx from the shop's Hub for online-pay destinations). */
+  @Post('shipping-quote')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    UserRole.CERTIFIED_SHOP,
+    UserRole.PARTNER,
+    UserRole.REGIONAL_PARTNER,
+    UserRole.MASTER_PARTNER,
+    UserRole.DISTRIBUTOR,
+  )
+  getShippingQuote(
+    @GetUser('_id') userId: string,
+    @Body() dto: ShippingQuoteDto,
+  ) {
+    return this.ordersService.previewCheckoutShipping(userId, dto);
   }
 
   /** Hub address a Shop can pick its order up from at checkout (null when unavailable). */

@@ -28,6 +28,77 @@ export type FedExRateQuote = {
   rateType?: string | null;
 };
 
+const STATE_CODES: Record<string, string> = {
+  alabama: 'AL',
+  alaska: 'AK',
+  arizona: 'AZ',
+  arkansas: 'AR',
+  california: 'CA',
+  colorado: 'CO',
+  connecticut: 'CT',
+  delaware: 'DE',
+  florida: 'FL',
+  georgia: 'GA',
+  hawaii: 'HI',
+  idaho: 'ID',
+  illinois: 'IL',
+  indiana: 'IN',
+  iowa: 'IA',
+  kansas: 'KS',
+  kentucky: 'KY',
+  louisiana: 'LA',
+  maine: 'ME',
+  maryland: 'MD',
+  massachusetts: 'MA',
+  michigan: 'MI',
+  minnesota: 'MN',
+  mississippi: 'MS',
+  missouri: 'MO',
+  montana: 'MT',
+  nebraska: 'NE',
+  nevada: 'NV',
+  'new hampshire': 'NH',
+  'new jersey': 'NJ',
+  'new mexico': 'NM',
+  'new york': 'NY',
+  'north carolina': 'NC',
+  'north dakota': 'ND',
+  ohio: 'OH',
+  oklahoma: 'OK',
+  oregon: 'OR',
+  pennsylvania: 'PA',
+  'rhode island': 'RI',
+  'south carolina': 'SC',
+  'south dakota': 'SD',
+  tennessee: 'TN',
+  texas: 'TX',
+  utah: 'UT',
+  vermont: 'VT',
+  virginia: 'VA',
+  washington: 'WA',
+  'west virginia': 'WV',
+  wisconsin: 'WI',
+  wyoming: 'WY',
+  'district of columbia': 'DC',
+  alberta: 'AB',
+  'british columbia': 'BC',
+  manitoba: 'MB',
+  'new brunswick': 'NB',
+  newfoundland: 'NL',
+  'newfoundland and labrador': 'NL',
+  'northwest territories': 'NT',
+  'nova scotia': 'NS',
+  nunavut: 'NU',
+  ontario: 'ON',
+  'prince edward island': 'PE',
+  quebec: 'QC',
+  saskatchewan: 'SK',
+  yukon: 'YT',
+};
+
+/** FedEx allows up to 3 street lines of 35 characters. */
+const FEDEX_STREET_LINE_MAX = 35;
+
 @Injectable()
 export class FedexService {
   private readonly logger = new Logger(FedexService.name);
@@ -76,74 +147,7 @@ export class FedexService {
     if (!raw) return undefined;
     if (/^[A-Za-z]{2}$/.test(raw)) return raw.toUpperCase();
 
-    const map: Record<string, string> = {
-      alabama: 'AL',
-      alaska: 'AK',
-      arizona: 'AZ',
-      arkansas: 'AR',
-      california: 'CA',
-      colorado: 'CO',
-      connecticut: 'CT',
-      delaware: 'DE',
-      florida: 'FL',
-      georgia: 'GA',
-      hawaii: 'HI',
-      idaho: 'ID',
-      illinois: 'IL',
-      indiana: 'IN',
-      iowa: 'IA',
-      kansas: 'KS',
-      kentucky: 'KY',
-      louisiana: 'LA',
-      maine: 'ME',
-      maryland: 'MD',
-      massachusetts: 'MA',
-      michigan: 'MI',
-      minnesota: 'MN',
-      mississippi: 'MS',
-      missouri: 'MO',
-      montana: 'MT',
-      nebraska: 'NE',
-      nevada: 'NV',
-      'new hampshire': 'NH',
-      'new jersey': 'NJ',
-      'new mexico': 'NM',
-      'new york': 'NY',
-      'north carolina': 'NC',
-      'north dakota': 'ND',
-      ohio: 'OH',
-      oklahoma: 'OK',
-      oregon: 'OR',
-      pennsylvania: 'PA',
-      'rhode island': 'RI',
-      'south carolina': 'SC',
-      'south dakota': 'SD',
-      tennessee: 'TN',
-      texas: 'TX',
-      utah: 'UT',
-      vermont: 'VT',
-      virginia: 'VA',
-      washington: 'WA',
-      'west virginia': 'WV',
-      wisconsin: 'WI',
-      wyoming: 'WY',
-      'district of columbia': 'DC',
-      alberta: 'AB',
-      'british columbia': 'BC',
-      manitoba: 'MB',
-      'new brunswick': 'NB',
-      newfoundland: 'NL',
-      'newfoundland and labrador': 'NL',
-      'northwest territories': 'NT',
-      'nova scotia': 'NS',
-      nunavut: 'NU',
-      ontario: 'ON',
-      'prince edward island': 'PE',
-      quebec: 'QC',
-      saskatchewan: 'SK',
-      yukon: 'YT',
-    };
-    return map[raw.toLowerCase()] || raw.slice(0, 2).toUpperCase();
+    return STATE_CODES[raw.toLowerCase()] || raw.slice(0, 2).toUpperCase();
   }
 
   buildAddress(
@@ -168,7 +172,7 @@ export class FedexService {
 
     const line1 = String(parts.streetAddress || parts.address || '').trim();
     const line2 = String(parts.address2 || '').trim();
-    const streetLines = [line1, line2].filter(Boolean);
+    const streetLines = this.toFedexStreetLines([line1, line2]);
     if (!streetLines.length) {
       throw new BadRequestException(
         `${label}: street address is required for FedEx rates.`,
@@ -197,7 +201,14 @@ export class FedexService {
       );
     }
 
-    const stateOrProvinceCode = this.toStateCode(parts.state);
+    const stateOrProvinceCode =
+      this.toStateCode(parts.state) ||
+      this.extractStateCode(
+        [parts.streetAddress, parts.address, parts.address2, parts.city]
+          .filter(Boolean)
+          .join(' '),
+        countryCode,
+      );
     const needsState = countryCode === 'US' || countryCode === 'CA';
     if (needsState && !stateOrProvinceCode) {
       throw new BadRequestException(
@@ -213,6 +224,51 @@ export class FedexService {
       countryCode,
       ...(parts.residential != null ? { residential: parts.residential } : {}),
     };
+  }
+
+  /**
+   * US/CA state from free-form address text when the profile has no state,
+   * e.g. "123 Main St, New York, NY 10001" → NY.
+   */
+  extractStateCode(text?: string | null, countryCode?: string | null): string | undefined {
+    const raw = String(text || '').trim();
+    const cc = String(countryCode || '').toUpperCase();
+    if (!raw || (cc !== 'US' && cc !== 'CA')) return undefined;
+
+    const known = new Set(Object.values(STATE_CODES));
+    const pattern =
+      cc === 'US'
+        ? /\b([A-Z]{2})\s*,?\s*\d{5}(?:-\d{4})?\b/g
+        : /\b([A-Z]{2})\s*,?\s*[A-Z]\d[A-Z]\s?\d[A-Z]\d\b/gi;
+    for (const match of raw.matchAll(pattern)) {
+      const code = match[1].toUpperCase();
+      if (known.has(code)) return code;
+    }
+
+    const lower = raw.toLowerCase();
+    const byName = Object.keys(STATE_CODES)
+      .sort((a, b) => b.length - a.length)
+      .find((name) => new RegExp(`\\b${name}\\b`).test(lower));
+    return byName ? STATE_CODES[byName] : undefined;
+  }
+
+  /** Split long address text into FedEx-sized street lines. */
+  private toFedexStreetLines(lines: string[]): string[] {
+    const out: string[] = [];
+    for (const line of lines.map((l) => l.trim()).filter(Boolean)) {
+      let current = '';
+      for (const word of line.split(/\s+/)) {
+        const next = current ? `${current} ${word}` : word;
+        if (next.length <= FEDEX_STREET_LINE_MAX) {
+          current = next;
+        } else {
+          if (current) out.push(current);
+          current = word.slice(0, FEDEX_STREET_LINE_MAX);
+        }
+      }
+      if (current) out.push(current);
+    }
+    return out.slice(0, 3);
   }
 
   /** Best-effort postal extraction from free-form address text. */

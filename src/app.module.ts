@@ -29,6 +29,7 @@ import { HealthModule } from './health/health.module';
 import { UserActivityModule } from './user-activity/user-activity.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { MediaModule } from './media/media.module';
+import { GeoModule } from './geo/geo.module';
 import { CsrfMiddleware } from './auth/csrf.middleware';
 
 @Module({
@@ -68,6 +69,7 @@ import { CsrfMiddleware } from './auth/csrf.middleware';
     UserActivityModule,
     InventoryModule,
     MediaModule,
+    GeoModule,
   ],
   controllers: [AppController],
   providers: [AppService, SeedService],

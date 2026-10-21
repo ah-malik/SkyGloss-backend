@@ -40,11 +40,13 @@ export class Product {
       {
         size: { type: String, required: true },
         price: { type: Number, required: true },
+        /** Shipping weight per unit in LB (FedEx checkout rates). */
+        weight: { type: Number, required: false },
       },
     ],
     default: [],
   })
-  sizes: { size: string; price: number }[];
+  sizes: { size: string; price: number; weight?: number }[];
 
   @Prop()
   technicalSheetUrl?: string;
