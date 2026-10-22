@@ -1,3 +1,4 @@
+import { getOrderKitExtrasTotal } from '../../common/order-totals';
 import {
   BRAND_BLUE,
   buildLatestOrderItemsHtml,
@@ -32,9 +33,14 @@ function orderShippingFee(order: any, subtotal: number): number {
   if (order.shippingFee != null && Number(order.shippingFee) > 0) {
     return Number(order.shippingFee);
   }
+  // Certification Kit: the stored shipping is final; fee + training are not shipping.
+  if (order.includesCertificationKit && order.shippingFee != null) return 0;
   return Math.max(
     0,
-    Number(order.totalAmount || 0) - subtotal + Number(order.discount || 0),
+    Number(order.totalAmount || 0) -
+      subtotal +
+      Number(order.discount || 0) -
+      getOrderKitExtrasTotal(order),
   );
 }
 

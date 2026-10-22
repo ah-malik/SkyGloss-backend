@@ -147,6 +147,11 @@ export function resolveOrderShippingFee(
     return order.shippingFee;
   }
 
+  // Certification Kit: the shipping stored at checkout is final (0 = free shipping).
+  if ((order as any).includesCertificationKit && order.shippingFee != null) {
+    return 0;
+  }
+
   const subtotal = getItemsSubtotal(order.items);
   const vatAmount = Number(order.vatAmount) || 0;
   const derived = Math.max(

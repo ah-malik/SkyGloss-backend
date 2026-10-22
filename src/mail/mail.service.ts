@@ -5,6 +5,7 @@ import { formatRoleLabel } from '../common/role-labels';
 import { isGlobalHubPartnerCode } from '../common/global-hub';
 import { UserRole } from '../users/entities/user.entity';
 import { formatOrderItemDisplayName, formatOrderItemTypeLabel } from '../common/order-type';
+import { getOrderKitExtrasTotal } from '../common/order-totals';
 import { EmailSettingsService } from '../email-settings/email-settings.service';
 import { UsersService } from '../users/users.service';
 import {
@@ -1581,10 +1582,13 @@ export class MailService {
       (sum: number, item: any) => sum + item.price * item.quantity,
       0,
     );
+    const kitExtras = getOrderKitExtrasTotal(order);
     const shippingFee =
       order.shippingFee != null && order.shippingFee > 0
         ? order.shippingFee
-        : Math.max(0, order.totalAmount - subtotal + (order.discount || 0));
+        : order.includesCertificationKit && order.shippingFee != null
+          ? 0
+          : Math.max(0, order.totalAmount - subtotal + (order.discount || 0) - kitExtras);
 
     const mailOptions = {
       from: `"SkyGloss Portal" <sales@skygloss.com>`,
@@ -1628,6 +1632,11 @@ export class MailService {
                         <tr>
                           <td align="right" style="color: #666;">Shipping:</td>
                           <td align="right" width="100" style="font-weight: bold;">${symbol}${shippingFee.toFixed(2)}</td>
+                        </tr>` : ''}
+                        ${kitExtras > 0.01 ? `
+                        <tr>
+                          <td align="right" style="color: #666;">Certification fee${Number(order.certificationKitTraining) > 0 ? ' & hands-on training' : ''}:</td>
+                          <td align="right" width="100" style="font-weight: bold;">${symbol}${kitExtras.toFixed(2)}</td>
                         </tr>` : ''}
                         ${(order.discount || 0) > 0 ? `
                         <tr>
@@ -1785,10 +1794,13 @@ export class MailService {
       (sum: number, item: any) => sum + item.price * item.quantity,
       0,
     );
+    const kitExtras = getOrderKitExtrasTotal(order);
     const shippingFee =
       order.shippingFee != null && order.shippingFee > 0
         ? order.shippingFee
-        : Math.max(0, order.totalAmount - subtotal + (order.discount || 0));
+        : order.includesCertificationKit && order.shippingFee != null
+          ? 0
+          : Math.max(0, order.totalAmount - subtotal + (order.discount || 0) - kitExtras);
     const payUrl = options?.payUrl;
     const isDValue = !!options?.dValue?.originalOrderNumber;
     const originalOrderNumber = options?.dValue?.originalOrderNumber || '';
@@ -1880,6 +1892,11 @@ export class MailService {
                         <tr>
                           <td align="right" style="color: #666;">Shipping:</td>
                           <td align="right" width="100" style="font-weight: bold;">${symbol}${shippingFee.toFixed(2)}</td>
+                        </tr>` : ''}
+                        ${kitExtras > 0.01 ? `
+                        <tr>
+                          <td align="right" style="color: #666;">Certification fee${Number(order.certificationKitTraining) > 0 ? ' & hands-on training' : ''}:</td>
+                          <td align="right" width="100" style="font-weight: bold;">${symbol}${kitExtras.toFixed(2)}</td>
                         </tr>` : ''}
                         ${(order.discount || 0) > 0 ? `
                         <tr>

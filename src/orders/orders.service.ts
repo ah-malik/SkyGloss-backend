@@ -932,7 +932,10 @@ export class OrdersService implements OnModuleInit {
       user: currentUser,
       items: resolvedItems,
       shippingAddress,
-      itemsSubtotal,
+      // Kit: the free-shipping threshold uses the kit price, as checkout shows it.
+      itemsSubtotal: includesCertificationKit
+        ? itemsSubtotal - kitResolved.kitDiscount + kitExtrasTotal
+        : itemsSubtotal,
       orderCurrency,
       rateToUsd,
       isPickup,
@@ -4739,7 +4742,12 @@ export class OrdersService implements OnModuleInit {
       currentUser as any,
       items,
     );
-    const itemsSubtotal = getItemsSubtotal(kitResolved.items);
+    // Kit: the free-shipping threshold uses the kit price, as checkout shows it.
+    const itemsSubtotal = kitResolved.includesCertificationKit
+      ? getItemsSubtotal(kitResolved.items) -
+        kitResolved.kitDiscount +
+        getOrderKitExtrasTotal(kitResolved.extras)
+      : getItemsSubtotal(kitResolved.items);
     const rateToUsd = await this.exchangeRatesService.getRateToBase(orderCurrency);
     const quote = await this.quoteCheckoutShipping({
       user: currentUser,
@@ -5358,7 +5366,11 @@ export class OrdersService implements OnModuleInit {
 
       const requestRateToUsd =
         await this.exchangeRatesService.getRateToBase(orderCurrency);
-      let shippingFee = calculateShippingFee(shippingCountry, itemsSubtotal, {
+      // Kit: the free-shipping threshold uses the kit price, as checkout shows it.
+      const shippingBase = includesCertificationKit
+        ? itemsSubtotal - kitResolved.kitDiscount + kitExtrasTotal
+        : itemsSubtotal;
+      let shippingFee = calculateShippingFee(shippingCountry, shippingBase, {
         rateToUsd: requestRateToUsd,
         currency: orderCurrency,
       });
@@ -5372,7 +5384,7 @@ export class OrdersService implements OnModuleInit {
             user: currentUser,
             items: resolvedItems,
             shippingAddress,
-            itemsSubtotal,
+            itemsSubtotal: shippingBase,
             orderCurrency,
             rateToUsd: requestRateToUsd,
             isPickup,
