@@ -12,6 +12,8 @@ import { ChatModule } from '../chat/chat.module';
 import { MailModule } from 'src/mail/mail.module';
 import { ProductGroup, ProductGroupSchema } from '../product-groups/entities/product-group.entity';
 import { Order, OrderSchema } from '../orders/entities/order.entity';
+import { BackblazeModule } from '../backblaze/backblaze.module';
+import { PartnerAgreementFilesService } from './partner-agreement-files.service';
 
 @Module({
   imports: [
@@ -24,9 +26,10 @@ import { Order, OrderSchema } from '../orders/entities/order.entity';
     forwardRef(() => NotificationsModule),
     forwardRef(() => ChatModule),
     MailModule,
+    BackblazeModule,
   ],
   controllers: [UsersController, PublicUsersController],
-  providers: [UsersService, SoftDeleteScheduler],
-  exports: [UsersService, MongooseModule],
+  providers: [UsersService, SoftDeleteScheduler, PartnerAgreementFilesService],
+  exports: [UsersService, MongooseModule, PartnerAgreementFilesService],
 })
 export class UsersModule { }

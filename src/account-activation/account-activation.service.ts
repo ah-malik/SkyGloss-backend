@@ -28,6 +28,7 @@ import { BankDetailsService } from '../payouts/services/bank-details.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/entities/notification.entity';
 import { isTrainingRequirementSatisfied } from '../common/course-completion';
+import { PartnerAgreementFilesService } from '../users/partner-agreement-files.service';
 
 @Injectable()
 export class AccountActivationService implements OnModuleInit {
@@ -39,6 +40,7 @@ export class AccountActivationService implements OnModuleInit {
     private readonly usersService: UsersService,
     private readonly bankDetailsService: BankDetailsService,
     private readonly notificationsService: NotificationsService,
+    private readonly partnerAgreementFiles: PartnerAgreementFilesService,
   ) {}
 
   async onModuleInit() {
@@ -251,6 +253,17 @@ export class AccountActivationService implements OnModuleInit {
       requiresBankDetails: requiresActivationBankDetails(user.role),
       canStartActivation:
         this.coursesComplete(user) && !user.isAccountActivated,
+      // Uploaded by Admin on create: replaces the agreement step.
+      adminAgreement: user.adminAgreementKey
+        ? {
+            // Private B2 file: short-lived signed link (null if B2 is down).
+            url: await this.partnerAgreementFiles.signedUrl(
+              user.adminAgreementKey,
+            ),
+            fileName: user.adminAgreementFileName || null,
+            uploadedAt: user.adminAgreementUploadedAt || null,
+          }
+        : null,
       hub: hub
         ? {
             id: hub._id.toString(),
@@ -364,9 +377,14 @@ export class AccountActivationService implements OnModuleInit {
       assignedHubName: hubName,
       agreementAccepted: true,
       agreementAcceptedAt: now,
-      ...(dto.agreementDetails
-        ? { agreementDetails: dto.agreementDetails }
-        : {}),
+      ...(user.adminAgreementKey
+        ? {
+            adminAgreementKey: user.adminAgreementKey,
+            adminAgreementFileName: user.adminAgreementFileName,
+          }
+        : dto.agreementDetails
+          ? { agreementDetails: dto.agreementDetails }
+          : {}),
       ...(bankDetailsId ? { bankDetailsId } : {}),
       submittedAt: now,
     });
@@ -519,7 +537,16 @@ export class AccountActivationService implements OnModuleInit {
       .populate('adminReviewerId', 'firstName lastName email')
       .lean();
     if (!request) throw new NotFoundException('Activation request not found');
-    return this.formatRequest(request);
+    return {
+      ...this.formatRequest(request),
+      ...(request.adminAgreementKey
+        ? {
+            adminAgreementUrl: await this.partnerAgreementFiles.signedUrl(
+              request.adminAgreementKey,
+            ),
+          }
+        : {}),
+    };
   }
 
   /** Admin approves a pending request; the Hub no longer needs to act on it. */

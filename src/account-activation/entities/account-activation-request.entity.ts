@@ -68,6 +68,13 @@ export class AccountActivationRequest {
   @Prop({ type: Object })
   agreementDetails?: Record<string, string>;
 
+  /** Admin-uploaded agreement (B2 key) used instead of the sign step. */
+  @Prop()
+  adminAgreementKey?: string;
+
+  @Prop()
+  adminAgreementFileName?: string;
+
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'BankDetails' })
   bankDetailsId?: Types.ObjectId;
 

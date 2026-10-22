@@ -75,6 +75,7 @@ import {
   SOFT_DELETE_RETENTION_DAYS,
 } from '../common/soft-delete';
 import { registrationOrderExclusionFilter } from '../common/order-totals';
+import { isPartnerAgreementKey } from './partner-agreement-files.service';
 
 export interface NetworkUsersResult {
   shops: UserDocument[];
@@ -942,6 +943,35 @@ export class UsersService implements OnModuleInit {
     this.normalizeCustomCommissionRate(userData.role, userData);
     this.normalizePartnerIntroRatePercent(userData.role, userData);
     this.normalizePartnerDiscountPercent(userData.role, userData);
+
+    // Optional Admin-uploaded agreement (Rep / Promoter / Distributor only).
+    // Distributor: the upload activates the account right away. Rep /
+    // Promoter: only the sign step is skipped; the Hub still approves.
+    const agreementKey = String(userData.adminAgreementKey || '').trim();
+    if (
+      isPartnerAgreementKey(agreementKey) &&
+      [
+        UserRole.MASTER_PARTNER,
+        UserRole.REGIONAL_PARTNER,
+        UserRole.DISTRIBUTOR,
+      ].includes(userData.role)
+    ) {
+      const now = new Date();
+      userData.adminAgreementKey = agreementKey;
+      userData.adminAgreementFileName =
+        String(userData.adminAgreementFileName || '').trim() || undefined;
+      userData.adminAgreementUploadedAt = now;
+      if (userData.role === UserRole.DISTRIBUTOR) {
+        // Same fields Hub/Admin approval sets (AccountActivationService.markUserActivated).
+        userData.isAccountActivated = true;
+        userData.isTrainingComplete = true;
+        userData.status = UserStatus.ACTIVE;
+        userData.accountActivatedAt = now;
+      }
+    } else {
+      delete userData.adminAgreementKey;
+      delete userData.adminAgreementFileName;
+    }
 
     // Auto-geocode if coordinates are missing
     if (!userData.latitude || !userData.longitude) {
@@ -3011,6 +3041,9 @@ export class UsersService implements OnModuleInit {
     }
 
     const updatePayload: any = { ...updateUserDto };
+    // Admin-uploaded agreement is set on create only.
+    delete updatePayload.adminAgreementKey;
+    delete updatePayload.adminAgreementFileName;
     // Exhibit C size of the Distributor agreement is Admin-only.
     if (currentUser.role !== UserRole.ADMIN) {
       delete updatePayload.performanceYears;

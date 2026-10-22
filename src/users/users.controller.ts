@@ -16,6 +16,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UsersService } from './users.service';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
+import { PartnerAgreementFilesService } from './partner-agreement-files.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
 import { ChatService } from '../chat/chat.service';
@@ -57,6 +58,7 @@ export class UsersController {
     private readonly chatService: ChatService,
     private readonly mailService: MailService,
     private readonly userActivityService: UserActivityService,
+    private readonly partnerAgreementFiles: PartnerAgreementFilesService,
   ) { }
 
   @Post()
@@ -121,6 +123,36 @@ export class UsersController {
     }
 
     return user;
+  }
+
+  /** Optional agreement file for a new Rep / Promoter / Distributor (Add User). */
+  @Post('admin-agreement')
+  @Roles(UserRole.ADMIN)
+  @UseInterceptors(
+    FileInterceptor('agreement', { limits: { fileSize: 15 * 1024 * 1024 } }),
+  )
+  uploadAdminAgreement(@UploadedFile() file: Express.Multer.File) {
+    // Private B2 bucket; returns the key that POST /users stores.
+    return this.partnerAgreementFiles.upload(file);
+  }
+
+  /** Signed link to the Admin-uploaded agreement (Edit User). */
+  @Get(':id/admin-agreement-url')
+  @Roles(UserRole.ADMIN)
+  async getAdminAgreementUrl(@Param('id') id: string) {
+    const user = await this.usersService.findOne(id);
+    if (!user?.adminAgreementKey) {
+      throw new BadRequestException('No uploaded agreement for this user.');
+    }
+    const url = await this.partnerAgreementFiles.signedUrl(
+      user.adminAgreementKey,
+    );
+    if (!url) {
+      throw new BadRequestException(
+        'Could not open the agreement right now. Please try again.',
+      );
+    }
+    return { url, fileName: user.adminAgreementFileName || null };
   }
 
   @Get('stats')

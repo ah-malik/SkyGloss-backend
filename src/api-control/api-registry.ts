@@ -326,6 +326,8 @@ export const ADMIN_APIS: ApiEndpointDef[] = [
   def('admin', 'Users', 'DELETE', '/users/:id', 'Delete user'),
   def('admin', 'Users', 'PATCH', '/users/me/profile', 'Update my profile'),
   def('admin', 'Users', 'POST', '/users/me/profile-image', 'Upload profile image'),
+  def('admin', 'Users', 'POST', '/users/admin-agreement', 'Upload partner agreement (Add User)'),
+  def('admin', 'Users', 'GET', '/users/:id/admin-agreement-url', 'View uploaded partner agreement'),
   def('admin', 'Users', 'PATCH', '/users/:id/transfer-shop', 'Transfer shop'),
   def('admin', 'Users', 'GET', '/users/partners-list', 'Partners list'),
 

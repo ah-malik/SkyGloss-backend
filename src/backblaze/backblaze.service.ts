@@ -6,6 +6,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import axios, { AxiosError } from 'axios';
+import { createHash } from 'crypto';
 
 const B2_AUTH_URL = 'https://api.backblazeb2.com/b2api/v3/b2_authorize_account';
 // B2 auth tokens last 24h; refresh a bit earlier.
@@ -200,6 +201,43 @@ export class BackblazeService {
     return this.callApi<B2UploadTarget>('b2_get_upload_url', {
       bucketId: bucket.bucketId,
     });
+  }
+
+  /** Single-request upload for small files (B2 allows up to 5 GB; meant for a few MB). */
+  async uploadSmallFile(
+    fileName: string,
+    body: Buffer,
+    contentType: string,
+  ): Promise<B2FileInfo> {
+    const sha1 = createHash('sha1').update(body).digest('hex');
+    for (let attempt = 0; attempt < 3; attempt++) {
+      // Upload URLs can go stale; B2 asks clients to fetch a new one and retry.
+      const target = await this.getUploadUrl();
+      try {
+        const res = await axios.post<B2FileInfo>(target.uploadUrl, body, {
+          headers: {
+            Authorization: target.authorizationToken,
+            'X-Bz-File-Name': this.encodePath(fileName),
+            'Content-Type': contentType || 'b2/x-auto',
+            'Content-Length': body.length,
+            'X-Bz-Content-Sha1': sha1,
+          },
+          timeout: 60000,
+          maxBodyLength: Infinity,
+        });
+        this.adjustUsage(body.length, 1);
+        return res.data;
+      } catch (error) {
+        const status = (error as AxiosError).response?.status;
+        if ((status === 401 || status === 408 || status === 429 || (status ?? 0) >= 500 || !status) && attempt < 2) {
+          await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
+          continue;
+        }
+        console.error('[BackblazeService] upload failed:', this.describe(error));
+        throw new BadGatewayException('Backblaze B2 upload failed');
+      }
+    }
+    throw new BadGatewayException('Backblaze B2 upload failed');
   }
 
   async startLargeFile(fileName: string, contentType: string): Promise<string> {

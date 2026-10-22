@@ -343,6 +343,20 @@ export class User {
   @Prop()
   accountActivatedAt?: Date;
 
+  /**
+   * Agreement file Admin uploaded when creating this Rep / Promoter /
+   * Distributor (private B2 file name under partner-agreements/). Shown as
+   * "Your agreement" and replaces the sign step in Account Activation.
+   */
+  @Prop()
+  adminAgreementKey?: string;
+
+  @Prop()
+  adminAgreementFileName?: string;
+
+  @Prop()
+  adminAgreementUploadedAt?: Date;
+
   @Prop({ default: false })
   isCertified: boolean;
 

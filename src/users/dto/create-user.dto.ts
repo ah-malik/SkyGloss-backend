@@ -258,6 +258,20 @@ export class CreateUserDto {
   performanceValues?: Record<string, string>;
 
   /**
+   * Optional agreement file uploaded by Admin on create (Rep / Promoter /
+   * Distributor): the B2 key from POST /users/admin-agreement. Create-only.
+   */
+  @IsString()
+  @MaxLength(500)
+  @IsOptional()
+  adminAgreementKey?: string;
+
+  @IsString()
+  @MaxLength(300)
+  @IsOptional()
+  adminAgreementFileName?: string;
+
+  /**
    * Legacy FO rate field aliases (still accepted).
    * Prefer customCommissionRate / partnerIntroRatePercent.
    */
