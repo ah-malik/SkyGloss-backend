@@ -86,7 +86,9 @@ export class CertificationKitsService {
   }
 
   /**
-   * Saved kit of the shop's current Parent Link (Hub or Distributor), or null.
+   * Saved kit for a shop, or null: its current Parent Link (Hub or Distributor)
+   * first, then the Hub that owns the shop's country (the Hub's Shops list
+   * includes those shops even when their Parent Link points elsewhere).
    * The fee is filled in later, once the shop's catalog currency is known.
    */
   async findSavedKitForShop(shop: {
@@ -94,19 +96,29 @@ export class CertificationKitsService {
     country?: string | null;
   }): Promise<Omit<SavedCertificationKitConfig, 'certificationFee'> | null> {
     try {
+      const owners: Array<{ _id: Types.ObjectId; role: string }> = [];
       const parentCode = await this.usersService.resolveActingParentPartnerCodeForShop(shop);
-      if (!parentCode) return null;
-      const parent = await this.usersService.findByPartnerCode(parentCode);
-      if (
-        !parent ||
-        !(CERTIFICATION_KIT_OWNER_ROLES as readonly string[]).includes(parent.role)
-      ) {
-        return null;
+      const parent = parentCode
+        ? await this.usersService.findByPartnerCode(parentCode)
+        : null;
+      if (parent) owners.push(parent);
+      // A Distributor's shops only get the Distributor's own kit (it fulfils their orders).
+      if (parent?.role !== UserRole.DISTRIBUTOR) {
+        const territoryHub = await this.usersService.findHubByCountry(shop.country);
+        if (territoryHub) owners.push(territoryHub);
       }
-      const kit = await this.kitModel
-        .findOne({ owner: parent._id, status: CERTIFICATION_KIT_STATUS_SAVED })
-        .lean()
-        .exec();
+
+      let kit: CertificationKit | null = null;
+      for (const owner of owners) {
+        if (!(CERTIFICATION_KIT_OWNER_ROLES as readonly string[]).includes(owner.role)) {
+          continue;
+        }
+        kit = await this.kitModel
+          .findOne({ owner: owner._id, status: CERTIFICATION_KIT_STATUS_SAVED })
+          .lean()
+          .exec();
+        if (kit?.items?.length) break;
+      }
       if (!kit || !kit.items?.length) return null;
       return {
         items: kit.items.map((it) => ({
