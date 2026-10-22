@@ -446,7 +446,12 @@ export class ProductsService {
       realProducts.find((p) => p?.currency)?.currency || 'USD',
     ).toUpperCase();
     let certificationFee: number;
+    let assignedFee: { amount: number; currency: string };
     try {
+      assignedFee =
+        await this.certificationKitsService.getCertificationFeeForCountry(
+          user.country,
+        );
       certificationFee =
         await this.certificationKitsService.getCertificationFeeInCurrency(
           user.country,
@@ -456,11 +461,17 @@ export class ProductsService {
       // No exchange rate between fee and catalog currency: never show a wrong price.
       return null;
     }
+    const converted =
+      String(assignedFee.currency).toUpperCase() !== currency;
 
     return {
       components,
       currency,
-      config: { ...saved, certificationFee },
+      config: {
+        ...saved,
+        certificationFee,
+        ...(converted ? { certificationFeeOriginal: assignedFee } : {}),
+      },
     };
   }
 

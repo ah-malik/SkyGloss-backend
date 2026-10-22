@@ -375,6 +375,10 @@ export class User {
   @Prop({ default: false })
   dValueInvoiceEnabled: boolean;
 
+  /** Hub-controlled: shop may choose Hub pickup at checkout. */
+  @Prop({ default: false })
+  pickupEnabled: boolean;
+
   @Prop()
   stripeSessionId?: string;
 

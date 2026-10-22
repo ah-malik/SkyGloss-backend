@@ -80,6 +80,7 @@ const STATE_CODES: Record<string, string> = {
   wisconsin: 'WI',
   wyoming: 'WY',
   'district of columbia': 'DC',
+  'puerto rico': 'PR',
   alberta: 'AB',
   'british columbia': 'BC',
   manitoba: 'MB',
@@ -403,21 +404,28 @@ export class FedexService {
       requestedShipment,
     };
 
-    try {
-      const { data } = await axios.post(
-        `${this.getBaseUrl()}/rate/v1/rates/quotes`,
-        payload,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'X-locale': 'en_US',
-          },
-          timeout: 30_000,
+    const requestQuotes = () =>
+      axios.post(`${this.getBaseUrl()}/rate/v1/rates/quotes`, payload, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'X-locale': 'en_US',
         },
-      );
+        timeout: 30_000,
+      });
 
-      return this.parseRateQuotes(data);
+    try {
+      let response;
+      try {
+        response = await requestQuotes();
+      } catch (err) {
+        // FedEx intermittently answers 5xx; retry once before giving up.
+        const status = (err as AxiosError).response?.status;
+        if (!status || status < 500) throw err;
+        response = await requestQuotes();
+      }
+
+      return this.parseRateQuotes(response.data);
     } catch (err) {
       throw this.toHttpException(err, 'FedEx rate quote failed');
     }

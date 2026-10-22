@@ -76,6 +76,7 @@ import {
 } from '../common/soft-delete';
 import { registrationOrderExclusionFilter } from '../common/order-totals';
 import { isPartnerAgreementKey } from './partner-agreement-files.service';
+import { isFedexShippingDestination } from '../common/fedex-destinations';
 
 export interface NetworkUsersResult {
   shops: UserDocument[];
@@ -4849,13 +4850,57 @@ export class UsersService implements OnModuleInit {
     enabled: boolean,
     viewer: UserDocument,
   ): Promise<{ _id: string; dValueInvoiceEnabled: boolean }> {
+    await this.assertViewerCanManageShopToggle(shopId, viewer, 'D-Value invoices');
+    await this.userModel
+      .updateOne({ _id: shopId }, { $set: { dValueInvoiceEnabled: !!enabled } })
+      .exec();
+    await this.invalidateNetworkAndOrderCaches();
+    return { _id: shopId, dValueInvoiceEnabled: !!enabled };
+  }
+
+  /**
+   * Hub / Distributor (or Admin) allows / blocks Hub pickup at checkout for a
+   * shop. Same Parent Link rules as the D-Value invoice toggle; only shops in
+   * Canada, Hawaii, Alaska or Puerto Rico can be enabled.
+   */
+  async setShopPickupEnabled(
+    shopId: string,
+    enabled: boolean,
+    viewer: UserDocument,
+  ): Promise<{ _id: string; pickupEnabled: boolean }> {
+    await this.assertViewerCanManageShopToggle(shopId, viewer, 'pickup');
+    if (enabled) {
+      const shop = await this.userModel
+        .findById(shopId)
+        .select('country state')
+        .lean()
+        .exec();
+      if (!isFedexShippingDestination(shop?.country, shop?.state)) {
+        throw new BadRequestException(
+          'Pickup is only available for shops in Canada, Hawaii, Alaska and Puerto Rico.',
+        );
+      }
+    }
+    await this.userModel
+      .updateOne({ _id: shopId }, { $set: { pickupEnabled: !!enabled } })
+      .exec();
+    await this.invalidateNetworkAndOrderCaches();
+    return { _id: shopId, pickupEnabled: !!enabled };
+  }
+
+  /** Parent Link (Hub / Distributor) or Admin check for per-shop toggles. */
+  private async assertViewerCanManageShopToggle(
+    shopId: string,
+    viewer: UserDocument,
+    feature: string,
+  ): Promise<void> {
     if (
       viewer.role !== UserRole.ADMIN &&
       viewer.role !== UserRole.PARTNER &&
       viewer.role !== UserRole.DISTRIBUTOR
     ) {
       throw new ForbiddenException(
-        'Only the Hub or Distributor can manage D-Value invoices for shops.',
+        `Only the Hub or Distributor can manage ${feature} for shops.`,
       );
     }
     if (!Types.ObjectId.isValid(shopId)) {
@@ -4879,16 +4924,10 @@ export class UsersService implements OnModuleInit {
         })
       ) {
         throw new ForbiddenException(
-          'You can only manage D-Value invoices for shops linked to you.',
+          `You can only manage ${feature} for shops linked to you.`,
         );
       }
     }
-
-    await this.userModel
-      .updateOne({ _id: shopId }, { $set: { dValueInvoiceEnabled: !!enabled } })
-      .exec();
-    await this.invalidateNetworkAndOrderCaches();
-    return { _id: shopId, dValueInvoiceEnabled: !!enabled };
   }
 
   async findAllPartners() {

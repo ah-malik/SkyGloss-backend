@@ -7,6 +7,7 @@ import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import { toIsoCountryCode } from '../payouts/wise-country-iso';
 import { FedexService } from '../fedex/fedex.service';
+import { isPuertoRicoDestination } from '../common/fedex-destinations';
 import {
   getPostalCodeFormatError,
   isPostalCodeCheckedCountry,
@@ -60,7 +61,10 @@ export class GeoService {
     country?: string | null,
     state?: string | null,
   ): Promise<PostcodeValidation> {
-    const countryCode = toIsoCountryCode(country);
+    // "Puerto Rico" has no entry in the shared ISO map.
+    const countryCode = isPuertoRicoDestination(country)
+      ? 'PR'
+      : toIsoCountryCode(country);
     const value = String(postcode || '').trim();
     if (!countryCode || !isPostalCodeCheckedCountry(countryCode)) {
       return value
@@ -80,8 +84,10 @@ export class GeoService {
     const apiKey = this.getApiKey();
     if (!apiKey) return { valid: true, verified: false };
 
+    // Geoapify files Puerto Rico ZIPs under the US with state PR.
+    const lookupCountry = countryCode === 'PR' ? 'US' : countryCode;
     const normalized = normalizePostalCode(value);
-    const cacheKey = `${countryCode}|${normalized}`;
+    const cacheKey = `${lookupCountry}|${normalized}`;
     let results: any[] = this.postcodeCache.get(cacheKey) ?? [];
     if (!this.postcodeCache.has(cacheKey)) {
       try {
@@ -91,7 +97,7 @@ export class GeoService {
             params: {
               postcode: value,
               type: 'postcode',
-              filter: `countrycode:${countryCode.toLowerCase()}`,
+              filter: `countrycode:${lookupCountry.toLowerCase()}`,
               format: 'json',
               limit: 5,
               lang: 'en',
@@ -112,8 +118,8 @@ export class GeoService {
     }
 
     // US ZIP+4 is checked on its 5-digit ZIP.
-    const target = countryCode === 'US' ? normalized.slice(0, 5) : normalized;
-    const strict = countryCode === 'US' || countryCode === 'CA';
+    const target = lookupCountry === 'US' ? normalized.slice(0, 5) : normalized;
+    const strict = lookupCountry === 'US' || countryCode === 'CA';
     const match = strict
       ? results.find(
           (r) => normalizePostalCode(String(r?.postcode || '')) === target,
@@ -128,13 +134,14 @@ export class GeoService {
     }
 
     const matchStateCode = String(match.state_code || '').toUpperCase();
-    if (strict && state && matchStateCode) {
-      const chosen = this.fedexService.toStateCode(state);
+    const expectedState = countryCode === 'PR' ? 'Puerto Rico' : state;
+    if (strict && expectedState && matchStateCode) {
+      const chosen = this.fedexService.toStateCode(expectedState);
       if (chosen && chosen !== matchStateCode) {
         return {
           valid: false,
           verified: true,
-          message: `ZIP / Postal code ${value} belongs to ${match.state || matchStateCode}, not ${state}.`,
+          message: `ZIP / Postal code ${value} belongs to ${match.state || matchStateCode}, not ${expectedState}.`,
         };
       }
     }

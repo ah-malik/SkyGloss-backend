@@ -12,6 +12,7 @@ import {
   Max,
   MaxLength,
   Min,
+  MinLength,
   ValidateNested,
 } from 'class-validator';
 
@@ -59,4 +60,19 @@ export class SaveCertificationKitDto {
   @Min(0)
   @Max(100, { message: 'The discount can’t be more than 100%.' })
   discountPercent: number;
+}
+
+export class ReviewCertificationKitDto {
+  /** `savedAt` of the version the Admin reviewed (guards against approving a newer edit). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  savedAt?: string;
+}
+
+export class RejectCertificationKitDto extends ReviewCertificationKitDto {
+  @IsString()
+  @MinLength(3, { message: 'Tell the Hub or Distributor what to change.' })
+  @MaxLength(1000)
+  note: string;
 }

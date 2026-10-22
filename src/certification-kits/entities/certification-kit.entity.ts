@@ -3,7 +3,12 @@ import { Document, Schema as MongooseSchema, Types } from 'mongoose';
 
 export type CertificationKitDocument = CertificationKit & Document;
 
-export const CERTIFICATION_KIT_STATUS_SAVED = 'saved';
+/** Sent by the Hub/Distributor, waiting for an Admin. */
+export const CERTIFICATION_KIT_STATUS_PENDING = 'pending';
+export const CERTIFICATION_KIT_STATUS_APPROVED = 'approved';
+export const CERTIFICATION_KIT_STATUS_REJECTED = 'rejected';
+/** Saved before approvals existed: treated as waiting for approval. */
+export const CERTIFICATION_KIT_STATUS_LEGACY_SAVED = 'saved';
 
 @Schema({ _id: false })
 export class CertificationKitItem {
@@ -24,10 +29,43 @@ export class CertificationKitItem {
 export const CertificationKitItemSchema =
   SchemaFactory.createForClass(CertificationKitItem);
 
+/** The recipe an Admin approved. Shops only ever see this version. */
+@Schema({ _id: false })
+export class ApprovedCertificationKit {
+  @Prop({ type: [CertificationKitItemSchema], default: [] })
+  items: CertificationKitItem[];
+
+  @Prop({ type: Boolean, default: true })
+  freeShipping: boolean;
+
+  @Prop({ type: Boolean, default: false })
+  trainingIncluded: boolean;
+
+  @Prop({ type: Number, default: 0, min: 0 })
+  trainingPrice: number;
+
+  @Prop({ type: Number, default: 0, min: 0, max: 100 })
+  discountPercent: number;
+
+  @Prop()
+  approvedAt?: Date;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
+  approvedBy?: Types.ObjectId;
+}
+
+export const ApprovedCertificationKitSchema = SchemaFactory.createForClass(
+  ApprovedCertificationKit,
+);
+
 /**
  * A Hub's or Distributor's Certification Kit for the shops on its Parent Link.
  * Only the recipe is stored — product prices and the certification fee are
  * resolved per viewer (assigned Pricing Group / fee group) every time.
+ *
+ * The top-level fields are the latest version the owner sent; `live` is the
+ * version an Admin approved. A new edit goes back to `pending` while shops keep
+ * seeing the last approved `live` version.
  */
 @Schema({ timestamps: true })
 export class CertificationKit {
@@ -59,11 +97,25 @@ export class CertificationKit {
   @Prop({ type: Number, default: 0, min: 0, max: 100 })
   discountPercent: number;
 
-  @Prop({ default: CERTIFICATION_KIT_STATUS_SAVED })
+  @Prop({ default: CERTIFICATION_KIT_STATUS_PENDING, index: true })
   status: string;
 
+  /** When the owner last sent the kit to SkyGloss. */
   @Prop()
   savedAt?: Date;
+
+  @Prop({ type: ApprovedCertificationKitSchema })
+  live?: ApprovedCertificationKit;
+
+  @Prop()
+  reviewedAt?: Date;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
+  reviewedBy?: Types.ObjectId;
+
+  /** Admin's reason when the kit is rejected. */
+  @Prop()
+  reviewNote?: string;
 
   createdAt?: Date;
   updatedAt?: Date;

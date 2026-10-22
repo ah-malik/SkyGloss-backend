@@ -431,6 +431,19 @@ export class UsersController {
     return this.usersService.setShopDValueInvoiceEnabled(id, enabled, user);
   }
 
+  @Patch('referred-shops/:id/pickup')
+  @Roles(UserRole.PARTNER, UserRole.DISTRIBUTOR, UserRole.ADMIN)
+  updateShopPickup(
+    @Param('id') id: string,
+    @Body('enabled') enabled: boolean,
+    @GetUser() user: UserDocument,
+  ) {
+    if (typeof enabled !== 'boolean') {
+      throw new BadRequestException('enabled must be true or false');
+    }
+    return this.usersService.setShopPickupEnabled(id, enabled, user);
+  }
+
   @Patch(':id/transfer-shop')
   @Roles(UserRole.ADMIN, UserRole.MASTER_PARTNER)
   async transferShop(

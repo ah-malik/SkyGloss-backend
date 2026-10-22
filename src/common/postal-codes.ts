@@ -4,6 +4,7 @@ const POSTAL_CODE_FORMATS: Record<
   { pattern: RegExp; example: string }
 > = {
   US: { pattern: /^\d{5}(-\d{4})?$/, example: '12345 or 12345-6789' },
+  PR: { pattern: /^\d{5}(-\d{4})?$/, example: '00901' },
   CA: {
     pattern:
       /^[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z] ?\d[ABCEGHJ-NPRSTV-Z]\d$/i,

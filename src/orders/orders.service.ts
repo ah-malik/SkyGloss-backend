@@ -35,6 +35,10 @@ import { ProductsService } from '../products/products.service';
 import { ProductInventoryService } from '../inventory/product-inventory.service';
 import { FedexService, FedExAddressInput } from '../fedex/fedex.service';
 import { GeoService } from '../geo/geo.service';
+import {
+  isFedexShippingDestination,
+  isPuertoRicoDestination,
+} from '../common/fedex-destinations';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
 import { NotificationType } from '../notifications/entities/notification.entity';
@@ -156,7 +160,6 @@ import {
 } from '../common/soft-delete';
 import { OrderCommissionTransferService } from '../payouts/services/order-commission-transfer.service';
 import {
-  isCanadaCountryName,
   isEuropeCountryName,
   isUsaShopOrder,
   requiresOnlinePaymentShopOrder,
@@ -1215,7 +1218,8 @@ export class OrdersService implements OnModuleInit {
 
   /**
    * Hub/Distributor a Shop can collect a pickup order from (its acting parent).
-   * Returns null for non-shop accounts or when no active parent can be resolved.
+   * Returns null for non-shop accounts, when the shop's Hub / Distributor has not
+   * allowed pickup, or when no active parent can be resolved.
    */
   async getPickupHubForUser(userId: string): Promise<{
     partnerCode: string;
@@ -1228,7 +1232,17 @@ export class OrdersService implements OnModuleInit {
     country: string;
     phoneNumber: string;
   } | null> {
-    const { actingParentPartnerCode } = await this.actingParentStampForUser(userId);
+    const shop = await this.usersService.findOne(String(userId));
+    if (!shop || shop.role !== UserRole.CERTIFIED_SHOP || !shop.pickupEnabled) {
+      return null;
+    }
+    // Pickup is offered only in the FedEx regions (Canada, Hawaii, Alaska, Puerto Rico).
+    if (!isFedexShippingDestination(shop.country, shop.state)) return null;
+    const actingParentPartnerCode =
+      await this.usersService.resolveActingParentPartnerCodeForShop({
+        hubPartnerCode: shop.hubPartnerCode,
+        country: shop.country,
+      });
     if (!actingParentPartnerCode) return null;
     const hub = await this.usersService.findByPartnerCode(actingParentPartnerCode);
     if (!hub) return null;
@@ -4571,10 +4585,10 @@ export class OrdersService implements OnModuleInit {
   }
 
   /**
-   * Checkout shipping for Canada destinations (FedEx is Canada-only for now):
-   * the free-shipping rule still decides whether shipping is charged; when it
-   * is, the fee is the cheapest FedEx rate from the shop's Hub to the address.
-   * Falls back to the flat fee if FedEx cannot quote.
+   * Checkout shipping. FedEx destinations (Canada, Hawaii, Alaska, Puerto Rico)
+   * pay the cheapest FedEx rate from the shop's Hub with no free-shipping
+   * threshold, falling back to the flat fee if FedEx cannot quote. Everywhere
+   * else keeps the flat rule (free at 500).
    */
   async quoteCheckoutShipping(params: {
     user: UserDocument | null | undefined;
@@ -4603,27 +4617,28 @@ export class OrdersService implements OnModuleInit {
     const currency = String(params.orderCurrency || 'USD').toUpperCase();
     const shippingCountry =
       params.shippingAddress?.country || params.user?.country || '';
+    const shippingState =
+      params.shippingAddress?.state ??
+      (params.shippingAddress?.country ? '' : params.user?.state);
 
     if (params.includesCertificationKit || params.isPickup) {
       return { shippingFee: 0, currency, source: 'free' };
     }
 
-    const flatFee = calculateShippingFee(shippingCountry, params.itemsSubtotal, {
-      rateToUsd: params.rateToUsd,
-      currency,
-    });
-    if (flatFee <= 0) {
-      return { shippingFee: 0, currency, source: 'free' };
-    }
-    if (
-      !params.user ||
-      !isCanadaCountryName(shippingCountry) ||
-      !this.requiresOnlinePaymentDestinationOrder(
-        params.shippingAddress?.country,
-        params.user.country,
-      )
-    ) {
-      return { shippingFee: flatFee, currency, source: 'flat' };
+    const fedexDestination = isFedexShippingDestination(
+      shippingCountry,
+      shippingState,
+    );
+    // FedEx destinations have no free-shipping threshold; their fallback is the flat fee.
+    const flatFee = calculateShippingFee(
+      shippingCountry,
+      fedexDestination ? 0 : params.itemsSubtotal,
+      { rateToUsd: params.rateToUsd, currency },
+    );
+    if (!fedexDestination || !params.user) {
+      return flatFee > 0
+        ? { shippingFee: flatFee, currency, source: 'flat' }
+        : { shippingFee: 0, currency, source: 'free' };
     }
 
     try {
@@ -4632,14 +4647,19 @@ export class OrdersService implements OnModuleInit {
         throw new BadRequestException('Shipping address is required.');
       }
       const { shipper } = await this.resolveFedexHubOrigin(params.user);
+      // FedEx rates Puerto Rico as its own country, also when entered as a US state.
+      const toPuertoRico = isPuertoRicoDestination(
+        shipTo.country,
+        shipTo.state,
+      );
       const recipient = this.fedexService.buildAddress(
         {
           address: shipTo.address,
           address2: shipTo.address2,
           city: shipTo.city,
-          state: shipTo.state,
+          state: toPuertoRico ? undefined : shipTo.state,
           zipCode: shipTo.zipCode,
-          country: shipTo.country,
+          country: toPuertoRico ? 'PR' : shipTo.country,
           residential: true,
         },
         'Shipping address',
@@ -4728,7 +4748,9 @@ export class OrdersService implements OnModuleInit {
       itemsSubtotal,
       orderCurrency,
       rateToUsd,
-      isPickup: dto.isPickup === true,
+      // Free pickup shipping only when the shop is allowed to pick up.
+      isPickup:
+        dto.isPickup === true && !!(await this.getPickupHubForUser(userId)),
       includesCertificationKit:
         kitResolved.includesCertificationKit && kitResolved.freeShipping,
     });
@@ -5334,10 +5356,31 @@ export class OrdersService implements OnModuleInit {
         );
       }
 
+      const requestRateToUsd =
+        await this.exchangeRatesService.getRateToBase(orderCurrency);
       let shippingFee = calculateShippingFee(shippingCountry, itemsSubtotal, {
-        rateToUsd: await this.exchangeRatesService.getRateToBase(orderCurrency),
+        rateToUsd: requestRateToUsd,
         currency: orderCurrency,
       });
+      // FedEx destinations (e.g. Puerto Rico) are quoted like checkout; D-Value keeps the flat rule.
+      if (
+        !wantsDValue &&
+        isFedexShippingDestination(shippingCountry, shippingAddress?.state)
+      ) {
+        shippingFee = (
+          await this.quoteCheckoutShipping({
+            user: currentUser,
+            items: resolvedItems,
+            shippingAddress,
+            itemsSubtotal,
+            orderCurrency,
+            rateToUsd: requestRateToUsd,
+            isPickup,
+            includesCertificationKit:
+              includesCertificationKit && kitResolved.freeShipping,
+          })
+        ).shippingFee;
+      }
       if ((includesCertificationKit && kitResolved.freeShipping) || isPickup) {
         shippingFee = 0;
       }
@@ -6399,7 +6442,12 @@ export class OrdersService implements OnModuleInit {
             currency: orderCurrency,
             product_data: {
               name: 'Shipping',
-              description: `Standard shipping for orders under ${shippingRegion === 'EU' ? '€' : '$'}500`,
+              description: isFedexShippingDestination(
+                shippingCountry,
+                order.shippingAddress?.state,
+              )
+                ? 'FedEx shipping'
+                : `Standard shipping for orders under ${shippingRegion === 'EU' ? '€' : '$'}500`,
             },
             unit_amount: Math.round(shippingFee * 100),
           },
@@ -7488,7 +7536,7 @@ export class OrdersService implements OnModuleInit {
 
     if (!isCertificationKitEligibleUser(user)) {
       throw new BadRequestException(
-        'The Certification Kit Bundle is only available to unpaid self-registered shops.',
+        'The Certification Kit is only available to shops that have not paid their certification fee yet.',
       );
     }
 

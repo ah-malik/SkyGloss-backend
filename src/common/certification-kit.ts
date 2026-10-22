@@ -1,4 +1,4 @@
-import { isUnpaidSelfRegisteredShop } from './unpaid-shop-pricing';
+import { UserRole } from '../users/entities/user.entity';
 import { resolveFusionSizeCode } from './order-type';
 
 /** Virtual catalog product id — not a Mongo ObjectId. */
@@ -10,7 +10,7 @@ export const CERTIFICATION_KIT_SIZE = 'Kit';
 
 /**
  * Kill-switch for the Certification Kit Bundle. The kit is only listed for an
- * unpaid self-registered shop whose Hub/Distributor has saved a kit
+ * unpaid shop (certification fee not paid) whose Hub/Distributor has saved a kit
  * (see certification-kits module).
  */
 export const CERTIFICATION_KIT_ENABLED = true;
@@ -62,10 +62,15 @@ export function isCertificationKitCartItem(item: {
   );
 }
 
-/** Eligible: unpaid self-registered shop (activation fee still owed). */
+/**
+ * Eligible: a shop that has not paid its certification fee yet — self-registered
+ * or added by a Hub/Admin. Paid shops and every other role never see the kit.
+ */
 export function isCertificationKitEligibleUser(user: any): boolean {
-  if (!CERTIFICATION_KIT_ENABLED) return false;
-  return isUnpaidSelfRegisteredShop(user);
+  if (!CERTIFICATION_KIT_ENABLED || !user) return false;
+  const isShop =
+    user.role === UserRole.CERTIFIED_SHOP || user.role === 'certified_shop';
+  return isShop && !user.isPartnerPaid;
 }
 
 export function findFusion2000Size(
@@ -247,6 +252,8 @@ export type SavedCertificationKitConfig = {
   trainingPrice: number;
   /** Viewer's assigned certification fee, in the catalog currency. */
   certificationFee: number;
+  /** The fee as assigned (fee group currency), when it was converted. */
+  certificationFeeOriginal?: { amount: number; currency: string };
 };
 
 export type CertificationKitExtras = {
@@ -430,6 +437,9 @@ function buildSavedCertificationKitCatalogProduct(
       discountAmount: discount,
       productsTotal,
       certificationFee: extras.certificationFee,
+      ...(config.certificationFeeOriginal
+        ? { certificationFeeOriginal: config.certificationFeeOriginal }
+        : {}),
       trainingIncluded: config.trainingIncluded,
       trainingPrice: extras.trainingPrice,
       compareAtTotal,
