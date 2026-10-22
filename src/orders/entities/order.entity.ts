@@ -213,6 +213,14 @@ export class Order {
   @Prop({ default: false })
   includesCertificationKit?: boolean;
 
+  /** Certification Kit: the shop's certification fee, charged in the kit price. */
+  @Prop({ type: Number })
+  certificationKitFee?: number;
+
+  /** Certification Kit: hands-on training price set by the Hub/Distributor. */
+  @Prop({ type: Number })
+  certificationKitTraining?: number;
+
   @Prop()
   stripeSessionId: string;
 

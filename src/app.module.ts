@@ -30,6 +30,7 @@ import { UserActivityModule } from './user-activity/user-activity.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { MediaModule } from './media/media.module';
 import { GeoModule } from './geo/geo.module';
+import { CertificationKitsModule } from './certification-kits/certification-kits.module';
 import { CsrfMiddleware } from './auth/csrf.middleware';
 
 @Module({
@@ -70,6 +71,7 @@ import { CsrfMiddleware } from './auth/csrf.middleware';
     InventoryModule,
     MediaModule,
     GeoModule,
+    CertificationKitsModule,
   ],
   controllers: [AppController],
   providers: [AppService, SeedService],

@@ -28,8 +28,12 @@ import {
   buildCertificationKitCatalogProduct,
   CERTIFICATION_KIT_PRODUCT_ID,
   isCertificationKitEligibleUser,
-  resolveCertificationKitComponents,
+  isCertificationKitProductId,
+  ResolvedKitComponent,
+  resolveSavedCertificationKitComponents,
+  SavedCertificationKitConfig,
 } from '../common/certification-kit';
+import { CertificationKitsService } from '../certification-kits/certification-kits.service';
 
 @Injectable()
 export class ProductsService {
@@ -41,6 +45,8 @@ export class ProductsService {
     private readonly cache: RedisCacheService,
     @Inject(forwardRef(() => ProductInventoryService))
     private readonly productInventoryService: ProductInventoryService,
+    @Inject(forwardRef(() => CertificationKitsService))
+    private readonly certificationKitsService: CertificationKitsService,
   ) { }
 
   async create(createProductDto: CreateProductDto): Promise<ProductDocument> {
@@ -387,17 +393,19 @@ export class ProductsService {
       return products;
     }
 
-    const components = resolveCertificationKitComponents(products);
-    if (!components) {
+    const resolved = await this.resolveSavedCertificationKitForShop(
+      user,
+      products,
+    );
+    if (!resolved) {
       return products;
     }
 
-    const currency =
-      products.find((p) => p?.currency)?.currency || 'USD';
     const kit = buildCertificationKitCatalogProduct({
-      components,
-      currency,
+      components: resolved.components,
+      currency: resolved.currency,
       alreadyPurchased: false,
+      config: resolved.config,
     });
 
     // Pin to top; strip any accidental duplicate virtual id.
@@ -405,6 +413,55 @@ export class ProductsService {
       (p) => String(p?._id) !== String(kit._id),
     );
     return [kit, ...withoutKit];
+  }
+
+  /**
+   * The Certification Kit saved by the shop's Hub/Distributor, priced with the
+   * shop's own catalog (Pricing Group) and certification fee group.
+   * Null when no kit is saved or a kit product is missing from the catalog.
+   */
+  async resolveSavedCertificationKitForShop(
+    user: User,
+    catalog: any[],
+  ): Promise<{
+    components: ResolvedKitComponent[];
+    config: SavedCertificationKitConfig;
+    currency: string;
+  } | null> {
+    const saved = await this.certificationKitsService.findSavedKitForShop(
+      user as any,
+    );
+    if (!saved) return null;
+
+    const realProducts = (catalog || []).filter(
+      (p) => !isCertificationKitProductId(String(p?._id)),
+    );
+    const components = resolveSavedCertificationKitComponents(
+      realProducts,
+      saved.items,
+    );
+    if (!components) return null;
+
+    const currency = String(
+      realProducts.find((p) => p?.currency)?.currency || 'USD',
+    ).toUpperCase();
+    let certificationFee: number;
+    try {
+      certificationFee =
+        await this.certificationKitsService.getCertificationFeeInCurrency(
+          user.country,
+          currency,
+        );
+    } catch {
+      // No exchange rate between fee and catalog currency: never show a wrong price.
+      return null;
+    }
+
+    return {
+      components,
+      currency,
+      config: { ...saved, certificationFee },
+    };
   }
 
   async hasActiveCertificationKitOrder(userId: string): Promise<boolean> {

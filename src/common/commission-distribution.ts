@@ -286,6 +286,8 @@ export function resolveCommissionOrderAmounts(order: {
   originalAmount?: number;
   shippingFee?: number;
   vatAmount?: number;
+  certificationKitFee?: number;
+  certificationKitTraining?: number;
   originalCurrency?: string;
   currency?: string;
   exchangeRateAtOrderTime?: number;
@@ -299,8 +301,16 @@ export function resolveCommissionOrderAmounts(order: {
   const grossAmount = roundMoney(order.originalAmount ?? order.totalAmount ?? 0);
   const shippingFee = roundMoney(Math.max(0, Number(order.shippingFee) || 0));
   const vatAmount = roundMoney(Math.max(0, Number(order.vatAmount) || 0));
+  // Certification Kit: the certification fee goes to SkyGloss in full, and
+  // hands-on training is not a product sale — neither is commissionable.
+  const kitExtras = roundMoney(
+    Math.max(0, Number(order.certificationKitFee) || 0) +
+      Math.max(0, Number(order.certificationKitTraining) || 0),
+  );
   // Commission is on product/subtotal only — never on shipping or VAT.
-  const remainingAmount = roundMoney(Math.max(0, grossAmount - shippingFee - vatAmount));
+  const remainingAmount = roundMoney(
+    Math.max(0, grossAmount - shippingFee - vatAmount - kitExtras),
+  );
   // Then deduct 3.5% from remaining → commissionable base.
   const orderAmount = roundMoney(
     remainingAmount * (1 - COMMISSION_PLATFORM_DEDUCTION_RATE),

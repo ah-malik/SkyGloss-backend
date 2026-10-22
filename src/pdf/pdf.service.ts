@@ -962,8 +962,16 @@ export class PdfService {
       doc.moveDown(0.5);
 
       const userCountry = (snapshot.user as any)?.country;
-      const { subtotal, shippingFee, discount, vatAmount, vatRate, total } =
-        getOrderTotalsBreakdown(snapshot as any, userCountry);
+      const {
+        subtotal,
+        shippingFee,
+        discount,
+        vatAmount,
+        vatRate,
+        total,
+        certificationKitFee,
+        certificationKitTraining,
+      } = getOrderTotalsBreakdown(snapshot as any, userCountry);
 
       const drawTotalsLine = (
         label: string,
@@ -992,6 +1000,24 @@ export class PdfService {
         drawTotalsLine(
           discountLabel,
           `-${this.formatMoney(discount, currencySymbol)}`,
+          fontRegular,
+          12,
+        );
+      }
+
+      if (certificationKitFee > 0.01) {
+        drawTotalsLine(
+          'Certification fee',
+          this.formatMoney(certificationKitFee, currencySymbol),
+          fontRegular,
+          12,
+        );
+      }
+
+      if (certificationKitTraining > 0.01) {
+        drawTotalsLine(
+          'Hands-on training',
+          this.formatMoney(certificationKitTraining, currencySymbol),
           fontRegular,
           12,
         );

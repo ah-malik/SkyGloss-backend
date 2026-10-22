@@ -11,6 +11,7 @@ import { Order, OrderSchema } from '../orders/entities/order.entity';
 import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 import { InventoryModule } from '../inventory/inventory.module';
 import { UsersModule } from '../users/users.module';
+import { CertificationKitsModule } from '../certification-kits/certification-kits.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { UsersModule } from '../users/users.module';
     CloudinaryModule,
     forwardRef(() => InventoryModule),
     forwardRef(() => UsersModule),
+    forwardRef(() => CertificationKitsModule),
   ],
   controllers: [ProductsController],
   providers: [ProductsService],

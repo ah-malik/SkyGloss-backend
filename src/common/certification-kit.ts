@@ -9,13 +9,17 @@ export const CERTIFICATION_KIT_NAME = 'Certification Kit Bundle';
 export const CERTIFICATION_KIT_SIZE = 'Kit';
 
 /**
- * Temporary kill-switch: set to true to show/sell the Certification Kit Bundle
- * again for unpaid self-registered shops.
+ * Kill-switch for the Certification Kit Bundle. The kit is only listed for an
+ * unpaid self-registered shop whose Hub/Distributor has saved a kit
+ * (see certification-kits module).
  */
-export const CERTIFICATION_KIT_ENABLED = false;
+export const CERTIFICATION_KIT_ENABLED = true;
 
-/** Percent off component subtotal (e.g. €1070 → ~€995). */
+/** Percent off component subtotal for the legacy fixed recipe. */
 export const CERTIFICATION_KIT_DISCOUNT_PERCENT = 7;
+
+/** Starting discount for a new Hub/Distributor kit (Europe's kit: €1,070 → €745). */
+export const CERTIFICATION_KIT_STARTER_DISCOUNT_PERCENT = 30.4;
 
 /** Activation / certification fee waived when purchasing the kit (USD messaging). */
 export const CERTIFICATION_KIT_FEE_WAIVED_USD = 250;
@@ -125,13 +129,17 @@ export function roundMoney(amount: number): number {
   return Math.round((Number(amount) || 0) * 100) / 100;
 }
 
-export function applyCertificationKitDiscount(subtotal: number): {
+export function applyCertificationKitDiscount(
+  subtotal: number,
+  discountPercent: number = CERTIFICATION_KIT_DISCOUNT_PERCENT,
+): {
   subtotal: number;
   discount: number;
   total: number;
 } {
   const sub = roundMoney(subtotal);
-  const discount = roundMoney((sub * CERTIFICATION_KIT_DISCOUNT_PERCENT) / 100);
+  const pct = Math.min(100, Math.max(0, Number(discountPercent) || 0));
+  const discount = roundMoney((sub * pct) / 100);
   return {
     subtotal: sub,
     discount,
@@ -230,16 +238,96 @@ export function resolveCertificationKitComponents(
   return components;
 }
 
+/** A Hub's/Distributor's saved kit, with the viewer's certification fee. */
+export type SavedCertificationKitConfig = {
+  items: Array<{ productId: string; size: string; quantity: number; name?: string }>;
+  discountPercent: number;
+  freeShipping: boolean;
+  trainingIncluded: boolean;
+  trainingPrice: number;
+  /** Viewer's assigned certification fee, in the catalog currency. */
+  certificationFee: number;
+};
+
+export type CertificationKitExtras = {
+  certificationFee: number;
+  trainingPrice: number;
+  freeShipping: boolean;
+};
+
+export function getCertificationKitExtras(
+  config: SavedCertificationKitConfig,
+): CertificationKitExtras {
+  return {
+    certificationFee: roundMoney(Math.max(0, Number(config.certificationFee) || 0)),
+    trainingPrice: config.trainingIncluded
+      ? roundMoney(Math.max(0, Number(config.trainingPrice) || 0))
+      : 0,
+    freeShipping: config.freeShipping !== false,
+  };
+}
+
+/**
+ * Resolve a saved kit recipe against the viewer's own priced catalog.
+ * Returns null when any product/size is missing, so a kit is never shown
+ * with a different content or price than the one that was saved.
+ */
+export function resolveSavedCertificationKitComponents(
+  catalog: CatalogProduct[],
+  items: SavedCertificationKitConfig['items'],
+): ResolvedKitComponent[] | null {
+  if (!Array.isArray(catalog) || !Array.isArray(items) || items.length === 0) {
+    return null;
+  }
+
+  const idOf = (p: CatalogProduct) =>
+    typeof p._id === 'string' ? p._id : p._id?.toString?.() || '';
+
+  const components: ResolvedKitComponent[] = [];
+  for (const item of items) {
+    const product = catalog.find((p) => idOf(p) === String(item.productId));
+    const sizeEntry = product?.sizes?.find(
+      (s) => String(s?.size) === String(item.size),
+    );
+    const quantity = Math.floor(Number(item.quantity) || 0);
+    if (!product || !sizeEntry || quantity < 1) return null;
+    const unitPrice = resolveComponentUnitPrice(sizeEntry);
+    if (!(unitPrice >= 0)) return null;
+    const name = String(product.name || item.name || 'Product');
+    components.push({
+      productId: idOf(product),
+      name,
+      size: String(sizeEntry.size),
+      quantity,
+      unitPrice,
+      image: product.shopImages?.[0] || product.images?.[0] || '',
+      label: `${quantity}× ${name}${sizeEntry.size ? ` ${sizeEntry.size}` : ''}`,
+    });
+  }
+  return components;
+}
+
 export function buildCertificationKitCatalogProduct(params: {
   components: ResolvedKitComponent[];
   currency?: string;
   alreadyPurchased?: boolean;
+  /** Saved Hub/Distributor kit. Omitted = legacy fixed recipe pricing. */
+  config?: SavedCertificationKitConfig;
 }): Record<string, unknown> {
-  const { components, currency = 'USD', alreadyPurchased = false } = params;
+  const { components, currency = 'USD', alreadyPurchased = false, config } = params;
   const rawSubtotal = components.reduce(
     (sum, c) => sum + c.unitPrice * c.quantity,
     0,
   );
+  if (config) {
+    return buildSavedCertificationKitCatalogProduct(
+      components,
+      rawSubtotal,
+      currency,
+      alreadyPurchased,
+      config,
+    );
+  }
   const { subtotal, discount, total } =
     applyCertificationKitDiscount(rawSubtotal);
 
@@ -279,6 +367,75 @@ export function buildCertificationKitCatalogProduct(params: {
       total,
       feeWaivedUsd: CERTIFICATION_KIT_FEE_WAIVED_USD,
       freeShipping: true,
+    },
+    certificationKitPurchased: alreadyPurchased,
+  };
+}
+
+function buildSavedCertificationKitCatalogProduct(
+  components: ResolvedKitComponent[],
+  rawSubtotal: number,
+  currency: string,
+  alreadyPurchased: boolean,
+  config: SavedCertificationKitConfig,
+): Record<string, unknown> {
+  const { subtotal, discount, total: productsTotal } =
+    applyCertificationKitDiscount(rawSubtotal, config.discountPercent);
+  const extras = getCertificationKitExtras(config);
+  const total = roundMoney(
+    productsTotal + extras.certificationFee + extras.trainingPrice,
+  );
+  const compareAtTotal = roundMoney(
+    subtotal + extras.certificationFee + extras.trainingPrice,
+  );
+  const discountPercent = Math.min(
+    100,
+    Math.max(0, Number(config.discountPercent) || 0),
+  );
+
+  const features = [
+    ...components.map((c) => c.label),
+    ...(extras.freeShipping ? ['Free Shipping'] : []),
+    ...(config.trainingIncluded ? ['Hands-on training included'] : []),
+    'Certification fee included',
+  ];
+
+  return {
+    _id: CERTIFICATION_KIT_PRODUCT_ID,
+    name: CERTIFICATION_KIT_NAME,
+    description:
+      'One-time Certification Kit: your certification, the products to start with, and everything listed below in one order.',
+    category: 'Bundle',
+    stock: alreadyPurchased ? 0 : 1,
+    images: components.map((c) => c.image).filter(Boolean).slice(0, 4),
+    shopImages: components.map((c) => c.image).filter(Boolean).slice(0, 4),
+    features,
+    sizes: [{ size: CERTIFICATION_KIT_SIZE, price: total }],
+    status: 'published',
+    targetAudience: 'shop',
+    displayOrder: -100,
+    currency,
+    isCertificationKitBundle: true,
+    maxQuantity: 1,
+    kitContents: components.map((c) => ({
+      label: c.label,
+      name: c.name,
+      size: c.size,
+      quantity: c.quantity,
+      unitPrice: c.unitPrice,
+    })),
+    kitPricing: {
+      componentsSubtotal: subtotal,
+      discountPercent,
+      discountAmount: discount,
+      productsTotal,
+      certificationFee: extras.certificationFee,
+      trainingIncluded: config.trainingIncluded,
+      trainingPrice: extras.trainingPrice,
+      compareAtTotal,
+      total,
+      feeIncluded: true,
+      freeShipping: extras.freeShipping,
     },
     certificationKitPurchased: alreadyPurchased,
   };

@@ -99,6 +99,19 @@ export function getDiscountDisplayLabel(order: {
   return 'Discount';
 }
 
+/**
+ * Certification Kit extras charged on top of the products: the shop's
+ * certification fee (paid to SkyGloss) and hands-on training. 0 for other orders.
+ */
+export function getOrderKitExtrasTotal(order: {
+  certificationKitFee?: number | null;
+  certificationKitTraining?: number | null;
+}): number {
+  const fee = Math.max(0, Number(order?.certificationKitFee) || 0);
+  const training = Math.max(0, Number(order?.certificationKitTraining) || 0);
+  return roundMoney(fee + training);
+}
+
 export function getItemsSubtotal(
   items: { price: number; quantity: number }[],
 ): number {
@@ -138,7 +151,11 @@ export function resolveOrderShippingFee(
   const vatAmount = Number(order.vatAmount) || 0;
   const derived = Math.max(
     0,
-    (order.totalAmount || 0) + (order.discount || 0) - subtotal - vatAmount,
+    (order.totalAmount || 0) +
+      (order.discount || 0) -
+      subtotal -
+      vatAmount -
+      getOrderKitExtrasTotal(order as any),
   );
   if (derived > 0) {
     return derived;
@@ -204,10 +221,32 @@ export function getOrderTotalsBreakdown(
   const discount = order.discount || 0;
   const shippingFee = resolveOrderShippingFee(order, countryFallback);
   const { vatAmount, vatRate } = resolveOrderVat(order, countryFallback);
+  const certificationKitFee = roundMoney(
+    Math.max(0, Number((order as any).certificationKitFee) || 0),
+  );
+  const certificationKitTraining = roundMoney(
+    Math.max(0, Number((order as any).certificationKitTraining) || 0),
+  );
   const total =
     order.totalAmount != null && order.totalAmount > 0
       ? order.totalAmount
-      : roundMoney(subtotal - discount + vatAmount + shippingFee);
+      : roundMoney(
+          subtotal -
+            discount +
+            vatAmount +
+            shippingFee +
+            certificationKitFee +
+            certificationKitTraining,
+        );
 
-  return { subtotal, shippingFee, discount, vatAmount, vatRate, total };
+  return {
+    subtotal,
+    shippingFee,
+    discount,
+    vatAmount,
+    vatRate,
+    total,
+    certificationKitFee,
+    certificationKitTraining,
+  };
 }

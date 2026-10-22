@@ -54,6 +54,7 @@ import {
 } from '../common/shipping-config';
 import {
   getItemsSubtotal,
+  getOrderKitExtrasTotal,
   isRegistrationOrder,
   registrationOrderExclusionFilter,
   shouldHideShopRegistrationFromViewer,
@@ -140,9 +141,9 @@ import {
 } from '../common/units-per-case';
 import {
   applyCertificationKitDiscount,
+  getCertificationKitExtras,
   isCertificationKitCartItem,
   isCertificationKitEligibleUser,
-  resolveCertificationKitComponents,
 } from '../common/certification-kit';
 import { CouponsService, ShopRegistrationCouponResult } from '../coupons/coupons.service';
 import { StripeCouponSyncService } from '../coupons/stripe-coupon-sync.service';
@@ -915,6 +916,8 @@ export class OrdersService implements OnModuleInit {
     );
     const resolvedItems = kitResolved.items;
     const includesCertificationKit = kitResolved.includesCertificationKit;
+    const kitExtras = kitResolved.extras;
+    const kitExtrasTotal = getOrderKitExtrasTotal(kitExtras);
 
     // Calculate total amount from items
     // Note: In a real app, we should fetch product prices from DB to secure against client-side manipulation.
@@ -930,7 +933,8 @@ export class OrdersService implements OnModuleInit {
       orderCurrency,
       rateToUsd,
       isPickup,
-      includesCertificationKit,
+      includesCertificationKit:
+        includesCertificationKit && kitResolved.freeShipping,
     });
     const shippingFee = shippingQuote.shippingFee;
 
@@ -955,14 +959,17 @@ export class OrdersService implements OnModuleInit {
     discount = accountDiscount.discount;
 
     const { rate: vatRate, amount: vatAmount } = calculateEuropeOrderVatAmount(
-      getOrderVatTaxableBase(itemsSubtotal, discount),
+      getOrderVatTaxableBase(itemsSubtotal + kitExtrasTotal, discount),
       {
         country: shippingCountry,
         taxId: shippingAddress?.taxId,
         noVatId: shippingAddress?.noVatId,
       },
     );
-    const orderTotal = Math.max(0, itemsSubtotal - discount + vatAmount + shippingFee);
+    const orderTotal = Math.max(
+      0,
+      itemsSubtotal - discount + vatAmount + shippingFee + kitExtrasTotal,
+    );
 
     // Pickup orders keep the buyer's contact details but use the Hub's address,
     // so invoices and emails show where the order will be collected.
@@ -1012,6 +1019,7 @@ export class OrdersService implements OnModuleInit {
             : {}),
           couponCode: appliedCouponCode,
           includesCertificationKit: includesCertificationKit || undefined,
+          ...(includesCertificationKit ? kitExtras : {}),
           ...(await this.actingParentStampForUser(userId)),
           ...monetary,
         });
@@ -4721,7 +4729,8 @@ export class OrdersService implements OnModuleInit {
       orderCurrency,
       rateToUsd,
       isPickup: dto.isPickup === true,
-      includesCertificationKit: kitResolved.includesCertificationKit,
+      includesCertificationKit:
+        kitResolved.includesCertificationKit && kitResolved.freeShipping,
     });
     // Internal FedEx errors stay in server logs.
     const { error: _error, ...publicQuote } = quote;
@@ -4890,15 +4899,19 @@ export class OrdersService implements OnModuleInit {
 
     const itemsSubtotal = getItemsSubtotal(order.items);
     const discount = order.discount ?? 0;
+    const kitExtrasTotal = getOrderKitExtrasTotal(order);
     const { rate: vatRate, amount: vatAmount } = calculateEuropeOrderVatAmount(
-      getOrderVatTaxableBase(itemsSubtotal, discount),
+      getOrderVatTaxableBase(itemsSubtotal + kitExtrasTotal, discount),
       {
         country: order.shippingAddress?.country,
         taxId: order.shippingAddress?.taxId,
         noVatId: (order.shippingAddress as any)?.noVatId,
       },
     );
-    const newTotal = Math.max(0, itemsSubtotal - discount + vatAmount + shippingFee);
+    const newTotal = Math.max(
+      0,
+      itemsSubtotal - discount + vatAmount + shippingFee + kitExtrasTotal,
+    );
     Object.assign(order, this.buildAmountUpdateWithLockedRate(order, newTotal));
     order.shippingFee = shippingFee;
     order.vatAmount = vatAmount;
@@ -5159,15 +5172,19 @@ export class OrdersService implements OnModuleInit {
     const itemsSubtotal = getItemsSubtotal(order.items);
     const shippingFee = Number(order.shippingFee) || 0;
     const discount = Number(order.discount) || 0;
+    const kitExtrasTotal = getOrderKitExtrasTotal(order);
     const { rate: vatRate, amount: vatAmount } = calculateEuropeOrderVatAmount(
-      getOrderVatTaxableBase(itemsSubtotal, discount),
+      getOrderVatTaxableBase(itemsSubtotal + kitExtrasTotal, discount),
       {
         country: order.shippingAddress?.country || shopUser?.country,
         taxId: order.shippingAddress?.taxId,
         noVatId: (order.shippingAddress as any)?.noVatId,
       },
     );
-    const newTotal = Math.max(0, itemsSubtotal - discount + vatAmount + shippingFee);
+    const newTotal = Math.max(
+      0,
+      itemsSubtotal - discount + vatAmount + shippingFee + kitExtrasTotal,
+    );
     Object.assign(order, this.buildAmountUpdateWithLockedRate(order, newTotal));
     order.vatAmount = vatAmount;
     order.vatRate = vatRate;
@@ -5284,6 +5301,8 @@ export class OrdersService implements OnModuleInit {
       );
       const resolvedItems = kitResolved.items;
       const includesCertificationKit = kitResolved.includesCertificationKit;
+      const kitExtras = kitResolved.extras;
+      const kitExtrasTotal = getOrderKitExtrasTotal(kitExtras);
       if (wantsDValue && includesCertificationKit) {
         throw new BadRequestException(
           'D-Value invoices are not available for the Certification Kit Bundle.',
@@ -5319,7 +5338,7 @@ export class OrdersService implements OnModuleInit {
         rateToUsd: await this.exchangeRatesService.getRateToBase(orderCurrency),
         currency: orderCurrency,
       });
-      if (includesCertificationKit || isPickup) {
+      if ((includesCertificationKit && kitResolved.freeShipping) || isPickup) {
         shippingFee = 0;
       }
 
@@ -5344,14 +5363,17 @@ export class OrdersService implements OnModuleInit {
       discount = accountDiscount.discount;
 
       const { rate: vatRate, amount: vatAmount } = calculateEuropeOrderVatAmount(
-        getOrderVatTaxableBase(itemsSubtotal, discount),
+        getOrderVatTaxableBase(itemsSubtotal + kitExtrasTotal, discount),
         {
           country: shippingCountry,
           taxId: shippingAddress?.taxId,
           noVatId: shippingAddress?.noVatId,
         },
       );
-      const finalAmount = Math.max(0, itemsSubtotal - discount + vatAmount + shippingFee);
+      const finalAmount = Math.max(
+        0,
+        itemsSubtotal - discount + vatAmount + shippingFee + kitExtrasTotal,
+      );
 
       // Validate the D-Value split before anything is saved.
       if (wantsDValue) {
@@ -5403,6 +5425,7 @@ export class OrdersService implements OnModuleInit {
               : {}),
             couponCode: appliedCouponCode,
             includesCertificationKit: includesCertificationKit || undefined,
+            ...(includesCertificationKit ? kitExtras : {}),
             ...(wantsDValue ? { isDValueOrder: true } : {}),
             ...(await this.actingParentStampForUser(userId)),
             ...monetary,
@@ -6305,10 +6328,11 @@ export class OrdersService implements OnModuleInit {
       const discountedSubtotal = Math.max(0, itemsSubtotal - discount);
       const priceRatio =
         itemsSubtotal > 0 ? discountedSubtotal / itemsSubtotal : 1;
+      const kitExtrasTotal = getOrderKitExtrasTotal(order);
       const shippingFee =
         order.shippingFee != null && order.shippingFee >= 0
           ? order.shippingFee
-          : Math.max(0, order.totalAmount - itemsSubtotal + discount);
+          : Math.max(0, order.totalAmount - itemsSubtotal + discount - kitExtrasTotal);
       const shippingCountry =
         order.shippingAddress?.country || currentUser?.country || '';
 
@@ -6336,6 +6360,35 @@ export class OrdersService implements OnModuleInit {
           quantity: Math.max(1, Number(item.quantity || 1)),
         };
       });
+
+      const kitFee = Math.max(0, Number(order.certificationKitFee) || 0);
+      if (order.includesCertificationKit && kitFee > 0.001) {
+        line_items.push({
+          price_data: {
+            currency: orderCurrency,
+            product_data: {
+              name: 'Certification fee',
+              description: 'FUSION certification, included in the Certification Kit',
+            },
+            unit_amount: Math.round(kitFee * 100),
+          },
+          quantity: 1,
+        });
+      }
+      const kitTraining = Math.max(0, Number(order.certificationKitTraining) || 0);
+      if (order.includesCertificationKit && kitTraining > 0.001) {
+        line_items.push({
+          price_data: {
+            currency: orderCurrency,
+            product_data: {
+              name: 'Hands-on training',
+              description: 'Included in the Certification Kit',
+            },
+            unit_amount: Math.round(kitTraining * 100),
+          },
+          quantity: 1,
+        });
+      }
 
       if (shippingFee > 0) {
         const shippingRegion = getShippingRegion(
@@ -6380,7 +6433,7 @@ export class OrdersService implements OnModuleInit {
 
     const session = await stripeInstance.checkout.sessions.create({
       payment_method_types: ['card'],
-      // Kit pricing is fixed server-side (7% + free shipping); block Stripe promo stacking.
+      // Kit pricing is fixed server-side (saved kit); block Stripe promo stacking.
       // D-Value orders: Invoice A + B must keep matching the order total.
       allow_promotion_codes:
         !chargeRemainingOnly &&
@@ -7416,13 +7469,21 @@ export class OrdersService implements OnModuleInit {
     items: typeof items;
     includesCertificationKit: boolean;
     kitDiscount: number;
+    freeShipping: boolean;
+    extras: { certificationKitFee?: number; certificationKitTraining?: number };
   }> {
     const kitIndexes = items
       .map((item, index) => (isCertificationKitCartItem(item) ? index : -1))
       .filter((index) => index >= 0);
 
     if (kitIndexes.length === 0) {
-      return { items, includesCertificationKit: false, kitDiscount: 0 };
+      return {
+        items,
+        includesCertificationKit: false,
+        kitDiscount: 0,
+        freeShipping: false,
+        extras: {},
+      };
     }
 
     if (!isCertificationKitEligibleUser(user)) {
@@ -7458,20 +7519,27 @@ export class OrdersService implements OnModuleInit {
       'shop',
       user as any,
     );
-    // findAll may already include the virtual kit — components resolve from real products.
-    const components = resolveCertificationKitComponents(catalog);
-    if (!components) {
+    // The kit saved by the shop's Hub/Distributor, priced from the shop's own catalog.
+    const resolved = await this.productsService.resolveSavedCertificationKitForShop(
+      user as any,
+      catalog,
+    );
+    if (!resolved) {
       throw new BadRequestException(
-        'Certification Kit components are not available in your catalog.',
+        'The Certification Kit is not available for your shop right now.',
       );
     }
+    const { components, config } = resolved;
 
     const componentsSubtotal = components.reduce(
       (sum, c) => sum + c.unitPrice * c.quantity,
       0,
     );
-    const { discount: kitDiscount } =
-      applyCertificationKitDiscount(componentsSubtotal);
+    const { discount: kitDiscount } = applyCertificationKitDiscount(
+      componentsSubtotal,
+      config.discountPercent,
+    );
+    const kitExtras = getCertificationKitExtras(config);
 
     const expanded = components.map((c) => ({
       product: c.productId,
@@ -7488,6 +7556,11 @@ export class OrdersService implements OnModuleInit {
       items: [...withoutKit, ...expanded],
       includesCertificationKit: true,
       kitDiscount,
+      freeShipping: kitExtras.freeShipping,
+      extras: {
+        certificationKitFee: kitExtras.certificationFee,
+        certificationKitTraining: kitExtras.trainingPrice,
+      },
     };
   }
 

@@ -1,22 +1,96 @@
 import {
   applyCertificationKitDiscount,
+  buildCertificationKitCatalogProduct,
   CERTIFICATION_KIT_DISCOUNT_PERCENT,
   CERTIFICATION_KIT_ENABLED,
   isCertificationKitEligibleUser,
   isCertificationKitProductId,
   resolveCertificationKitComponents,
+  resolveSavedCertificationKitComponents,
 } from './certification-kit';
 
 describe('certification-kit', () => {
-  it('is temporarily disabled via CERTIFICATION_KIT_ENABLED', () => {
-    expect(CERTIFICATION_KIT_ENABLED).toBe(false);
+  it('is only for unpaid self-registered shops', () => {
+    expect(CERTIFICATION_KIT_ENABLED).toBe(true);
     expect(
       isCertificationKitEligibleUser({
-        role: 'shop',
-        registrationSource: 'self',
-        isPaid: false,
+        role: 'certified_shop',
+        isSelfRegistered: true,
+        isPartnerPaid: false,
+      }),
+    ).toBe(true);
+    expect(
+      isCertificationKitEligibleUser({
+        role: 'certified_shop',
+        isSelfRegistered: true,
+        isPartnerPaid: true,
       }),
     ).toBe(false);
+    expect(
+      isCertificationKitEligibleUser({
+        role: 'partner',
+        isSelfRegistered: true,
+        isPartnerPaid: false,
+      }),
+    ).toBe(false);
+  });
+
+  it('prices a saved kit: discounted products + fee + training', () => {
+    const catalog = [
+      { _id: 'f1', name: 'FUSION', sizes: [{ size: '2000ml', price: 790 }] },
+      { _id: 'a1', name: 'Applicators (2-Pack)', sizes: [{ size: '2-Pack', price: 12 }] },
+      { _id: 'b1', name: 'Applicator Bottle', sizes: [{ size: '1pc', price: 15 }] },
+      { _id: 's1', name: 'SEAL', sizes: [{ size: '500ml', price: 50 }] },
+    ];
+    const items = [
+      { productId: 'f1', size: '2000ml', quantity: 1 },
+      { productId: 'a1', size: '2-Pack', quantity: 10 },
+      { productId: 'b1', size: '1pc', quantity: 4 },
+      { productId: 's1', size: '500ml', quantity: 2 },
+    ];
+    const components = resolveSavedCertificationKitComponents(catalog, items);
+    expect(components).toHaveLength(4);
+    const kit = buildCertificationKitCatalogProduct({
+      components: components!,
+      currency: 'USD',
+      config: {
+        items,
+        discountPercent: 30.4,
+        freeShipping: true,
+        trainingIncluded: false,
+        trainingPrice: 0,
+        certificationFee: 250,
+      },
+    }) as any;
+    // 1070 products, −325.28 → 744.72, + 250 fee
+    expect(kit.kitPricing.componentsSubtotal).toBe(1070);
+    expect(kit.kitPricing.discountAmount).toBeCloseTo(325.28, 2);
+    expect(kit.kitPricing.compareAtTotal).toBe(1320);
+    expect(kit.sizes[0].price).toBeCloseTo(994.72, 2);
+    expect(kit.kitPricing.freeShipping).toBe(true);
+
+    const withTraining = buildCertificationKitCatalogProduct({
+      components: components!,
+      config: {
+        items,
+        discountPercent: 0,
+        freeShipping: false,
+        trainingIncluded: true,
+        trainingPrice: 100,
+        certificationFee: 250,
+      },
+    }) as any;
+    expect(withTraining.sizes[0].price).toBe(1420);
+    expect(withTraining.kitPricing.discountAmount).toBe(0);
+  });
+
+  it('hides a saved kit when a product is missing from the catalog', () => {
+    expect(
+      resolveSavedCertificationKitComponents(
+        [{ _id: 'f1', name: 'FUSION', sizes: [{ size: '2000ml', price: 790 }] }],
+        [{ productId: 'x9', size: '2000ml', quantity: 1 }],
+      ),
+    ).toBeNull();
   });
 
   it('applies ~7% discount (1070 → 995.1)', () => {
