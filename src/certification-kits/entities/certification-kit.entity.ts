@@ -47,6 +47,10 @@ export class ApprovedCertificationKit {
   @Prop({ type: Number, default: 0, min: 0, max: 100 })
   discountPercent: number;
 
+  /** Currency of trainingPrice (the owner's catalog currency when approved). */
+  @Prop()
+  currency?: string;
+
   @Prop()
   approvedAt?: Date;
 
@@ -96,6 +100,10 @@ export class CertificationKit {
   /** Percent off the products (0–100). */
   @Prop({ type: Number, default: 0, min: 0, max: 100 })
   discountPercent: number;
+
+  /** The owner's catalog currency when sent (the currency of trainingPrice). */
+  @Prop()
+  currency?: string;
 
   @Prop({ default: CERTIFICATION_KIT_STATUS_PENDING, index: true })
   status: string;

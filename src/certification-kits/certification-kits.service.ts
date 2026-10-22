@@ -64,7 +64,12 @@ export class CertificationKitsService {
     owner: { _id: unknown; partnerCode?: string },
     data: Pick<
       CertificationKit,
-      'items' | 'freeShipping' | 'trainingIncluded' | 'trainingPrice' | 'discountPercent'
+      | 'items'
+      | 'freeShipping'
+      | 'trainingIncluded'
+      | 'trainingPrice'
+      | 'discountPercent'
+      | 'currency'
     >,
   ): Promise<CertificationKitDocument> {
     const ownerId = new Types.ObjectId(String(owner._id));
@@ -90,6 +95,14 @@ export class CertificationKitsService {
   /** Admin queue: newest first, optionally by status ("pending" includes legacy "saved"). */
   async listForAdmin(status?: string): Promise<CertificationKitDocument[]> {
     const filter: Record<string, unknown> = {};
+    const allowed = [
+      CERTIFICATION_KIT_STATUS_PENDING,
+      CERTIFICATION_KIT_STATUS_APPROVED,
+      CERTIFICATION_KIT_STATUS_REJECTED,
+    ];
+    if (status && (typeof status !== 'string' || !allowed.includes(status))) {
+      throw new BadRequestException('Unknown status.');
+    }
     if (status === CERTIFICATION_KIT_STATUS_PENDING) {
       filter.status = {
         $in: [CERTIFICATION_KIT_STATUS_PENDING, CERTIFICATION_KIT_STATUS_LEGACY_SAVED],
@@ -115,12 +128,38 @@ export class CertificationKitsService {
   private assertSameVersion(kit: CertificationKitDocument, savedAt?: string) {
     if (!savedAt) return;
     const reviewed = new Date(savedAt).getTime();
+    if (!Number.isFinite(reviewed)) {
+      throw new BadRequestException('Invalid kit version.');
+    }
     const latest = kit.savedAt ? new Date(kit.savedAt).getTime() : 0;
-    if (Number.isFinite(reviewed) && reviewed !== latest) {
+    if (reviewed !== latest) {
       throw new ConflictException(
         'This kit was changed after you opened it. Reload to review the latest version.',
       );
     }
+  }
+
+  /**
+   * Write a review only if the owner has not sent a newer version meanwhile
+   * (atomic: a send between reading and saving is never overwritten).
+   */
+  private async writeReview(
+    kit: CertificationKitDocument,
+    update: Record<string, unknown>,
+  ): Promise<CertificationKitDocument> {
+    const updated = await this.kitModel
+      .findOneAndUpdate(
+        { _id: kit._id, savedAt: kit.savedAt ?? null },
+        update,
+        { new: true },
+      )
+      .exec();
+    if (!updated) {
+      throw new ConflictException(
+        'This kit was changed after you opened it. Reload to review the latest version.',
+      );
+    }
+    return updated;
   }
 
   async approve(
@@ -135,25 +174,29 @@ export class CertificationKitsService {
     }
     const now = new Date();
     const admin = new Types.ObjectId(String(adminId));
-    kit.live = {
-      items: kit.items.map((it) => ({
-        productId: it.productId,
-        name: it.name,
-        size: it.size,
-        quantity: it.quantity,
-      })),
-      freeShipping: kit.freeShipping !== false,
-      trainingIncluded: !!kit.trainingIncluded,
-      trainingPrice: kit.trainingIncluded ? Number(kit.trainingPrice) || 0 : 0,
-      discountPercent: Number(kit.discountPercent) || 0,
-      approvedAt: now,
-      approvedBy: admin,
-    };
-    kit.status = CERTIFICATION_KIT_STATUS_APPROVED;
-    kit.reviewedAt = now;
-    kit.reviewedBy = admin;
-    kit.reviewNote = undefined;
-    return kit.save();
+    return this.writeReview(kit, {
+      $set: {
+        live: {
+          items: kit.items.map((it) => ({
+            productId: it.productId,
+            name: it.name,
+            size: it.size,
+            quantity: it.quantity,
+          })),
+          freeShipping: kit.freeShipping !== false,
+          trainingIncluded: !!kit.trainingIncluded,
+          trainingPrice: kit.trainingIncluded ? Number(kit.trainingPrice) || 0 : 0,
+          discountPercent: Number(kit.discountPercent) || 0,
+          currency: kit.currency,
+          approvedAt: now,
+          approvedBy: admin,
+        },
+        status: CERTIFICATION_KIT_STATUS_APPROVED,
+        reviewedAt: now,
+        reviewedBy: admin,
+      },
+      $unset: { reviewNote: 1 },
+    });
   }
 
   async reject(
@@ -164,11 +207,14 @@ export class CertificationKitsService {
   ): Promise<CertificationKitDocument> {
     const kit = await this.findForReview(id);
     this.assertSameVersion(kit, savedAt);
-    kit.status = CERTIFICATION_KIT_STATUS_REJECTED;
-    kit.reviewedAt = new Date();
-    kit.reviewedBy = new Types.ObjectId(String(adminId));
-    kit.reviewNote = String(note || '').trim();
-    return kit.save();
+    return this.writeReview(kit, {
+      $set: {
+        status: CERTIFICATION_KIT_STATUS_REJECTED,
+        reviewedAt: new Date(),
+        reviewedBy: new Types.ObjectId(String(adminId)),
+        reviewNote: String(note || '').trim(),
+      },
+    });
   }
 
   /** The viewer's assigned certification fee (same fee group as activation checkout). */
@@ -176,6 +222,16 @@ export class CertificationKitsService {
     const group = await this.registrationFeesService.findByCountry(country || '');
     const quote = buildRegistrationFeeQuote(group, country);
     return { amount: quote.feeAmount, currency: quote.currency };
+  }
+
+  /** Convert an amount between currencies with the admin exchange rates (throws when a rate is missing). */
+  async convertAmount(amount: number, fromCurrency: string, toCurrency: string): Promise<number> {
+    const from = normalizeCurrencyCode(fromCurrency);
+    const to = normalizeCurrencyCode(toCurrency || fromCurrency);
+    if (!amount || from === to) return amount;
+    const fromRate = await this.exchangeRatesService.getRateToBase(from);
+    const toRate = await this.exchangeRatesService.getRateToBase(to);
+    return roundMoney((amount * fromRate) / toRate);
   }
 
   /** Fee in the catalog currency (fee groups and Pricing Groups are configured separately). */
@@ -241,6 +297,7 @@ export class CertificationKitsService {
         freeShipping: kit.freeShipping !== false,
         trainingIncluded: !!kit.trainingIncluded,
         trainingPrice: Number(kit.trainingPrice) || 0,
+        trainingCurrency: kit.currency,
       };
     } catch (err) {
       this.logger.warn(

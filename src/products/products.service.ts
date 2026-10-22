@@ -447,7 +447,16 @@ export class ProductsService {
     ).toUpperCase();
     let certificationFee: number;
     let assignedFee: { amount: number; currency: string };
+    let trainingPrice = saved.trainingIncluded ? saved.trainingPrice : 0;
     try {
+      // Training is priced in the owner's currency; convert it like the fee.
+      if (trainingPrice && saved.trainingCurrency) {
+        trainingPrice = await this.certificationKitsService.convertAmount(
+          trainingPrice,
+          saved.trainingCurrency,
+          currency,
+        );
+      }
       assignedFee =
         await this.certificationKitsService.getCertificationFeeForCountry(
           user.country,
@@ -469,6 +478,7 @@ export class ProductsService {
       currency,
       config: {
         ...saved,
+        trainingPrice,
         certificationFee,
         ...(converted ? { certificationFeeOriginal: assignedFee } : {}),
       },

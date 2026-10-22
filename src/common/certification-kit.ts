@@ -252,6 +252,8 @@ export type SavedCertificationKitConfig = {
   trainingPrice: number;
   /** Viewer's assigned certification fee, in the catalog currency. */
   certificationFee: number;
+  /** Currency of trainingPrice as saved by the owner (converted before pricing). */
+  trainingCurrency?: string;
   /** The fee as assigned (fee group currency), when it was converted. */
   certificationFeeOriginal?: { amount: number; currency: string };
 };

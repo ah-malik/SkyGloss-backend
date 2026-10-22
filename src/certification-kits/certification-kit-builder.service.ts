@@ -282,7 +282,7 @@ export class CertificationKitBuilderService {
   }
 
   async saveMine(owner: UserDocument, dto: SaveCertificationKitDto) {
-    const { catalog } = await this.ownerCatalog(owner);
+    const { catalog, currency } = await this.ownerCatalog(owner);
 
     // Merge duplicate product/size lines and keep only products in the owner's catalog.
     const merged = new Map<string, { productId: Types.ObjectId; name: string; size: string; quantity: number }>();
@@ -314,6 +314,7 @@ export class CertificationKitBuilderService {
       trainingIncluded: dto.trainingIncluded,
       trainingPrice: dto.trainingIncluded ? Number(dto.trainingPrice) || 0 : 0,
       discountPercent: Number(dto.discountPercent) || 0,
+      currency,
     });
 
     await this.notifyAdminsOfSubmission(owner);

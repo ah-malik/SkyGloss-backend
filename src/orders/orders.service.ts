@@ -944,6 +944,11 @@ export class OrdersService implements OnModuleInit {
     });
     const shippingFee = shippingQuote.shippingFee;
 
+    if (includesCertificationKit && couponCode?.trim()) {
+      throw new BadRequestException(
+        'Coupons cannot be used with the Certification Kit. Its price is set by SkyGloss.',
+      );
+    }
     let discount = 0;
     let appliedCouponCode: string | undefined;
     if (couponCode?.trim()) {
@@ -5397,6 +5402,11 @@ export class OrdersService implements OnModuleInit {
         shippingFee = 0;
       }
 
+      if (includesCertificationKit && couponCode?.trim()) {
+        throw new BadRequestException(
+          'Coupons cannot be used with the Certification Kit. Its price is set by SkyGloss.',
+        );
+      }
       let discount = 0;
       let appliedCouponCode: string | undefined;
       if (couponCode?.trim()) {
@@ -7232,6 +7242,11 @@ export class OrdersService implements OnModuleInit {
         'Cannot create D-Value invoice for registration orders',
       );
     }
+    if (order.includesCertificationKit) {
+      throw new BadRequestException(
+        'D-Value invoices are not available for the Certification Kit Bundle.',
+      );
+    }
     const status = String(order.status || '').toUpperCase();
     if (status === OrderStatus.CANCELLED || status === OrderStatus.FAILED) {
       throw new BadRequestException(
@@ -7332,6 +7347,11 @@ export class OrdersService implements OnModuleInit {
     if (isRegistrationOrder(order)) {
       throw new BadRequestException(
         'Cannot create D-Value invoice for registration orders',
+      );
+    }
+    if (order.includesCertificationKit) {
+      throw new BadRequestException(
+        'D-Value invoices are not available for the Certification Kit Bundle.',
       );
     }
 
