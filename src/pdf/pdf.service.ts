@@ -29,12 +29,40 @@ export interface PartnerCertificateData {
   title: string;
   /** Certificate holder (person or company). */
   name: string;
-  /** Country / countries printed on the Territory line. */
-  territory: string;
-  /** Partner ID (user.partnerCode) printed on the Partner ID line. */
+  /** Region line (country / countries); null = no Region line (Promoter). */
+  territory: string | null;
+  /** Partner ID (user.partnerCode) printed under the name. */
   partnerId: string;
+  /** Per-role header + accent colours. */
+  theme: PartnerCertificateTheme;
   /** Activation date printed next to the signature. */
   date: Date;
+}
+
+export interface PartnerCertificateTheme {
+  /** Header band + "BORN IN THE USA" pill. */
+  band: string;
+  /** Large "Factory Forever" signature in the header. */
+  signature: string;
+  /** SKYGLOSS logo, header line and "BORN IN THE USA" text. */
+  logo: string;
+  /** Role title and "PARTNER ID" label. */
+  accent: string;
+}
+
+const CERT_NAVY = '#282b71';
+const CERT_BLUE = '#009fdf';
+
+/** Header colours per role (Distributor / Promoter / Representative designs; Hub uses Distributor's). */
+export function partnerCertificateTheme(role?: string | null): PartnerCertificateTheme {
+  switch (role) {
+    case UserRole.MASTER_PARTNER:
+      return { band: CERT_BLUE, signature: '#ffffff', logo: '#000000', accent: CERT_BLUE };
+    case UserRole.REGIONAL_PARTNER:
+      return { band: '#000000', signature: CERT_BLUE, logo: '#ffffff', accent: CERT_BLUE };
+    default:
+      return { band: CERT_NAVY, signature: CERT_BLUE, logo: '#ffffff', accent: CERT_NAVY };
+  }
 }
 
 @Injectable()
@@ -356,14 +384,22 @@ export class PdfService {
   // ───────────────────────────────────────────────────────────────────────────
   // Partner certificate (Assets → Your certificate)
   // Layout matches the "Master Distributor Certificate" design (A4 landscape):
-  // navy header with the Factory Forever signature (vector SVG), role title,
-  // partner name, Skygloss Inc. signature + date, and a Territory line.
+  // role-coloured header with the Factory Forever signature (vector SVG), role
+  // title, partner name + Partner ID, SkyGloss, Inc. signature + date, and a
+  // Region line (none for Promoter).
   // ───────────────────────────────────────────────────────────────────────────
 
-  private resolvePartnerCertificateHeaderSvg(): string | null {
+  private resolvePartnerCertificateHeaderSvg(
+    theme: PartnerCertificateTheme,
+  ): string | null {
     const file = this.resolveAssetPath('partner-certificate-header.svg', '');
     if (!file) return null;
-    return fs.readFileSync(file, 'utf8');
+    // .s0 band/pill, .s1 signature, .s2 logo + line.
+    return fs
+      .readFileSync(file, 'utf8')
+      .replace(/\.s0 \{ fill: [^}]+\}/, `.s0 { fill: ${theme.band} }`)
+      .replace(/\.s1 \{ fill: [^}]+\}/, `.s1 { fill: ${theme.signature} }`)
+      .replace(/\.s2 \{ fill: [^}]+\}/, `.s2 { fill: ${theme.logo} }`);
   }
 
   /** Day with ordinal + month + year, e.g. "27th May 2025" (certificate design). */
@@ -384,7 +420,7 @@ export class PdfService {
     return `${day}${suffix} ${months[date.getMonth()]} ${date.getFullYear()}`;
   }
 
-  /** Certificate title / holder name / territory derived from the user record. */
+  /** Certificate title / holder name / region / Partner ID derived from the user record. */
   getPartnerCertificateData(user: User | any): PartnerCertificateData {
     const role = String(user?.role || '');
     const fullName = `${user?.firstName || ''} ${user?.lastName || ''}`.trim();
@@ -411,9 +447,16 @@ export class PdfService {
       ? user.countries.filter(Boolean)
       : [];
     const territory =
-      (role === UserRole.PARTNER && countries.length > 0
-        ? countries.join(', ')
-        : String(user?.country || '').trim()) || '';
+      role === UserRole.REGIONAL_PARTNER
+        ? null
+        : role === UserRole.PARTNER && countries.length > 0
+          ? countries.join(', ')
+          : [user?.state, user?.country]
+              .map((v) => String(v || '').trim())
+              .filter(Boolean)
+              // Design prints the US as "USA" (e.g. "Arizona, USA").
+              .map((v) => (/^(united states( of america)?|us)$/i.test(v) ? 'USA' : v))
+              .join(', ');
 
     const activatedAt =
       user?.accountActivatedAt ||
@@ -423,11 +466,19 @@ export class PdfService {
 
     const partnerId = String(user?.partnerCode || '').trim();
 
-    return { title, name, territory, partnerId, date: new Date(activatedAt) };
+    return {
+      title,
+      name,
+      territory,
+      partnerId,
+      theme: partnerCertificateTheme(role),
+      date: new Date(activatedAt),
+    };
   }
 
   async generatePartnerCertificate(data: PartnerCertificateData): Promise<Buffer> {
-    const headerSvg = this.resolvePartnerCertificateHeaderSvg();
+    const { theme } = data;
+    const headerSvg = this.resolvePartnerCertificateHeaderSvg(theme);
     const regularPath = this.resolveAssetPath('Mulish-Regular.ttf', 'fonts');
     const boldPath = this.resolveAssetPath('Mulish-Bold.ttf', 'fonts');
     const semiBoldPath =
@@ -452,7 +503,6 @@ export class PdfService {
         const pageH = doc.page.height; // 595.28
         const INK = '#030404';
         const GREY = '#221f20';
-        const NAVY = '#282b71';
         const RULE = '#333131';
 
         const FONT_REG = regularPath ? 'Mulish' : 'Helvetica';
@@ -480,10 +530,10 @@ export class PdfService {
           });
         };
         const rule = (x1: number, x2: number, y: number) => {
-          doc.strokeColor(RULE).lineWidth(0.3).moveTo(x1, y).lineTo(x2, y).stroke();
+          doc.strokeColor(RULE).lineWidth(0.6).moveTo(x1, y).lineTo(x2, y).stroke();
         };
 
-        // ── Header: navy band + Factory Forever signature + SKYGLOSS logo (vector) ──
+        // ── Header: role-coloured band + Factory Forever signature + SKYGLOSS logo (vector) ──
         if (headerSvg) {
           SVGtoPDF(doc, headerSvg, 0, 0, {
             width: pageW,
@@ -492,21 +542,21 @@ export class PdfService {
             assumePt: true,
           });
         } else {
-          doc.rect(0, 0, pageW, 345).fill(NAVY);
+          doc.rect(0, 0, pageW, 345).fill(theme.band);
         }
-        // "BORN IN THE USA" sits inside the navy pill on the header line.
-        textAt('BORN IN THE USA', 633.3, 277.2, FONT_BOLD, 12, '#ffffff', {
+        // "BORN IN THE USA" sits inside the band-coloured pill on the header line.
+        textAt('BORN IN THE USA', 633.3, 277.2, FONT_BOLD, 12, theme.logo, {
           characterSpacing: 1,
         });
 
-        // ── Left: role title + holder name ──
-        textAt(data.title, 101.26, 425, FONT_BOLD, 12, INK, {
+        // ── Left: role title + holder name + Partner ID ──
+        textAt(data.title, 101.26, 425, FONT_BOLD, 12, theme.accent, {
           characterSpacing: 1.2,
         });
 
         // Name: design size 56.41pt on one line; long names shrink, then wrap
-        // onto two lines so they never run into the signature column (x ≥ 472).
-        const nameMaxWidth = 352;
+        // onto two lines so they never run into the Region line (x ≥ 472).
+        const nameMaxWidth = 316;
         const nameBaseline = 518.32;
         const fits = (lines: string[], size: number) => {
           doc.font(FONT_SEMI).fontSize(size);
@@ -557,34 +607,42 @@ export class PdfService {
           doc.image(signaturePath, 479, 417 - sigH / 2, { width: sigW });
         }
         rule(471.92, 667.04, 427.74);
-        textAt('Skygloss Inc.', 471.8, 443.06, FONT_REG, 10, GREY);
+        textAt('SkyGloss, Inc.', 471.8, 443.06, FONT_REG, 10, GREY);
 
         textAt(
           this.formatPartnerCertificateDate(data.date),
           681.68,
           419.06,
-          FONT_SEMI,
+          FONT_BOLD,
           10,
           GREY,
         );
         rule(681.68, 776.72, 427.74);
         textAt('Date', 681.68, 443.06, FONT_REG, 10, GREY);
 
-        // ── Partner ID + Territory (rules/values share one start so they align) ──
-        const fieldLine = (label: string, value: string, baseline: number) => {
-          textAt(label, 471.8, baseline, FONT_REG, 10, GREY);
-          rule(531, 776.72, baseline - 1.27);
-          if (!value) return;
-          let size = 10;
-          doc.font(FONT_SEMI).fontSize(size);
-          while (size > 7 && doc.widthOfString(value) > 237) {
-            size -= 0.5;
-            doc.fontSize(size);
+        if (data.partnerId) {
+          textAt('PARTNER ID', 101.26, 550, FONT_BOLD, 12, theme.accent, {
+            characterSpacing: 1.2,
+          });
+          textAt(data.partnerId, 192.5, 550, FONT_BOLD, 10.5, INK, {
+            characterSpacing: 0.2,
+          });
+        }
+
+        // ── Region (value sits on the line; Promoter has none) ──
+        if (data.territory !== null) {
+          textAt('Region:', 471.8, 518.32, FONT_REG, 11.5, GREY);
+          rule(521, 776.72, 519.2);
+          if (data.territory) {
+            let terrSize = 11.5;
+            doc.font(FONT_BOLD).fontSize(terrSize);
+            while (terrSize > 7 && doc.widthOfString(data.territory) > 254) {
+              terrSize -= 0.5;
+              doc.fontSize(terrSize);
+            }
+            textAt(data.territory, 521, 518.32, FONT_BOLD, terrSize, INK);
           }
-          textAt(value, 536.6, baseline - 4.32, FONT_SEMI, size, GREY);
-        };
-        fieldLine('Partner ID:', data.partnerId, 480.69);
-        fieldLine('Territory:', data.territory, 518.32);
+        }
 
         doc.end();
       } catch (error) {

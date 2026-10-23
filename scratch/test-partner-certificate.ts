@@ -11,20 +11,30 @@ async function main() {
   const service = new PdfService();
   const samples = [
     {
-      role: 'master_partner',
-      firstName: 'Alex',
-      lastName: 'Morgan',
-      country: 'United States',
-      partnerCode: 'SG-REP-10482',
-      accountActivatedAt: new Date('2025-05-27T12:00:00Z'),
+      role: 'distributor',
+      firstName: 'Omar',
+      lastName: 'Khan',
+      companyName: 'Northline Distribution',
+      country: 'Pakistan',
+      partnerCode: 'SG10021',
+      accountActivatedAt: new Date('2026-10-23T12:00:00Z'),
     },
     {
-      role: 'distributor',
-      firstName: 'Maria',
-      lastName: 'Fernandez',
-      companyName: 'Fernandez Automotive Distribution GmbH',
-      country: 'Germany',
-      accountActivatedAt: new Date('2026-10-21T12:00:00Z'),
+      role: 'regional_partner',
+      firstName: 'Sara',
+      lastName: 'Malik',
+      country: 'Pakistan',
+      partnerCode: 'SG10482',
+      accountActivatedAt: new Date('2026-10-23T12:00:00Z'),
+    },
+    {
+      role: 'master_partner',
+      firstName: 'Daniel',
+      lastName: 'Reyes',
+      state: 'Arizona',
+      country: 'United States',
+      partnerCode: 'SG10317',
+      accountActivatedAt: new Date('2026-10-23T12:00:00Z'),
     },
   ];
   const which = Number(process.argv[3] || 0);
