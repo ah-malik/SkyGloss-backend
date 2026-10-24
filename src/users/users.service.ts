@@ -5017,6 +5017,49 @@ export class UsersService implements OnModuleInit {
     return null;
   }
 
+  /** Admin-assigned Operational Support Partner (REP) for a shop, as a full user. */
+  async resolveOperationalSupportPartnerUser(
+    shop?: {
+      role?: string;
+      operationalSupportRepresentativeCode?: string | null;
+    } | null,
+  ): Promise<UserDocument | null> {
+    if (shop?.role !== UserRole.CERTIFIED_SHOP) return null;
+    const osCode = normalizePartnerCode(
+      shop.operationalSupportRepresentativeCode || undefined,
+    );
+    if (!osCode || isGlobalHubPartnerCode(osCode)) return null;
+    const osp = await this.findByPartnerCode(osCode);
+    return osp?.role === UserRole.MASTER_PARTNER ? osp : null;
+  }
+
+  /**
+   * Shop order / registration alerts: Operational Support Partner + territory Hub.
+   * Deduped by user id; GLOBALHUB fallback is skipped.
+   */
+  async resolveShopOrderAlertRecipients(
+    shop?: {
+      role?: string;
+      country?: string | null;
+      hubPartnerCode?: string | null;
+      referredByPartnerCode?: string | null;
+      operationalSupportRepresentativeCode?: string | null;
+    } | null,
+  ): Promise<UserDocument[]> {
+    if (shop?.role !== UserRole.CERTIFIED_SHOP) return [];
+    const recipients: UserDocument[] = [];
+    const push = (candidate: UserDocument | null) => {
+      if (!candidate?._id) return;
+      const id = String(candidate._id);
+      if (!recipients.some((existing) => String(existing._id) === id)) {
+        recipients.push(candidate);
+      }
+    };
+    push(await this.resolveOperationalSupportPartnerUser(shop));
+    push(await this.resolveParentHubForUser(shop));
+    return recipients;
+  }
+
   /**
    * Validates representative network linking:
    * - no self-assignment

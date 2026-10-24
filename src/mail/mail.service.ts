@@ -202,11 +202,16 @@ export class MailService {
   /**
    * User inbox (+ additionalEmail) and, for Shop/REP/Promoter, parent Hub inbox.
    * Password reset should pass includeParentHub: false.
+   * includeOperationalSupport: Shop order / registration emails also go to the
+   * Shop's Operational Support Partner.
    */
   private async withNotificationRecipients(
     primary: string | undefined | null,
     user?: any,
-    options?: { includeParentHub?: boolean },
+    options?: {
+      includeParentHub?: boolean;
+      includeOperationalSupport?: boolean;
+    },
   ): Promise<string> {
     let source = user;
     if (user?._id || user?.id) {
@@ -239,6 +244,28 @@ export class MailService {
       } catch (error) {
         this.logger.warn(
           `Failed to resolve parent Hub for email CC: ${(error as Error)?.message}`,
+        );
+      }
+    }
+
+    if (
+      options?.includeOperationalSupport &&
+      source?.role === UserRole.CERTIFIED_SHOP
+    ) {
+      try {
+        const osp =
+          await this.usersService.resolveOperationalSupportPartnerUser(source);
+        if (osp) {
+          for (const address of this.resolveUserToAddresses(osp.email, osp)) {
+            const key = address.toLowerCase();
+            if (!emails.some((existing) => existing.toLowerCase() === key)) {
+              emails.push(address);
+            }
+          }
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Failed to resolve Operational Support Partner for email CC: ${(error as Error)?.message}`,
         );
       }
     }
@@ -397,7 +424,9 @@ export class MailService {
     const loginLink = this.getPortalLoginLink(userDetails?.role);
     const isActivated = Boolean(invoiceBuffer);
     const userRecipients = (
-      await this.withNotificationRecipients(to, userDetails)
+      await this.withNotificationRecipients(to, userDetails, {
+        includeOperationalSupport: true,
+      })
     )
       .split(',')
       .map((e) => e.trim())
@@ -774,7 +803,11 @@ export class MailService {
     const loginLink = this.getPortalLoginLink(userDetails?.role);
     const recipients = Array.from(
       new Set([
-        ...(await this.withNotificationRecipients(to, userDetails))
+        ...(
+          await this.withNotificationRecipients(to, userDetails, {
+            includeOperationalSupport: true,
+          })
+        )
           .split(',')
           .map((e) => e.trim())
           .filter(Boolean),
@@ -1280,7 +1313,9 @@ export class MailService {
     invoiceBuffer?: Buffer,
     extraAttachments: { filename: string; content: Buffer }[] = [],
   ) {
-    const to = await this.withNotificationRecipients(user.email, user);
+    const to = await this.withNotificationRecipients(user.email, user, {
+      includeOperationalSupport: true,
+    });
     const attachments = this.buildInvoiceAttachments(
       order,
       invoiceBuffer,
@@ -1390,7 +1425,9 @@ export class MailService {
     invoiceBuffer?: Buffer,
   ) {
     const primary = this.resolveCustomerEmail(order, user);
-    const to = await this.withNotificationRecipients(primary, user);
+    const to = await this.withNotificationRecipients(primary, user, {
+      includeOperationalSupport: true,
+    });
     if (!to) {
       this.logger.warn(
         `Order paid confirmation skipped for ${order?.orderNumber}: no customer email.`,

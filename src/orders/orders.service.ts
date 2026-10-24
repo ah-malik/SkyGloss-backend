@@ -3568,6 +3568,15 @@ export class OrdersService implements OnModuleInit {
       );
     }
 
+    if (userDoc?.role === UserRole.CERTIFIED_SHOP) {
+      await this.notifyShopOrderAlertRecipients(
+        order,
+        NotificationType.ORDER_PAID,
+        'Shop Order Paid',
+        (shopName) => `Shop "${shopName}" paid order ${order.orderNumber}.`,
+      );
+    }
+
     let invoiceBuffer: Buffer | undefined;
     try {
       invoiceBuffer = await this.generateInvoicePdf(order);
@@ -5563,6 +5572,18 @@ export class OrdersService implements OnModuleInit {
         console.error('Failed to create/broadcast notification for order request:', notifErr);
       }
 
+      await this.notifyShopOrderAlertRecipients(
+        {
+          _id: savedOrder._id,
+          orderNumber: savedOrder.orderNumber,
+          user: userId,
+        },
+        NotificationType.ORDER_PLACED,
+        'New Shop Order Request',
+        (shopName) =>
+          `Shop "${shopName}" submitted order request ${savedOrder.orderNumber}.`,
+      );
+
       // Send Email to sales@skygloss.com
       if (currentUser) {
         let invoiceBuffer: Buffer | undefined;
@@ -6120,6 +6141,59 @@ export class OrdersService implements OnModuleInit {
     } catch (err) {
       this.logger.error(
         `Failed to notify customer about ${type} for order ${order.orderNumber}`,
+        err,
+      );
+    }
+  }
+
+  /** Shop orders: in-app alert for the Shop's Operational Support Partner + Hub. */
+  private async notifyShopOrderAlertRecipients(
+    order: { _id: unknown; orderNumber?: string; user?: unknown },
+    type: NotificationType,
+    title: string,
+    buildMessage: (shopName: string) => string,
+  ): Promise<void> {
+    const shopId = this.resolveOrderUserId(order.user);
+    if (!shopId) return;
+
+    try {
+      const shop = await this.usersService.findOne(shopId);
+      if (!shop || shop.role !== UserRole.CERTIFIED_SHOP) return;
+
+      const recipients =
+        await this.usersService.resolveShopOrderAlertRecipients(shop);
+      const shopName =
+        shop.shopName?.trim() ||
+        [shop.firstName, shop.lastName].filter(Boolean).join(' ').trim() ||
+        'A shop';
+
+      for (const recipient of recipients) {
+        try {
+          const notification = await this.notificationsService.create({
+            type,
+            title,
+            message: buildMessage(shopName),
+            metadata: {
+              orderId: order._id,
+              orderNumber: order.orderNumber,
+              shopId,
+              shopName,
+            },
+            user: String(recipient._id),
+            triggeredBy: shopId,
+            link: '/dashboard/partner/network?tab=orders',
+          });
+          this.notificationsGateway.broadcastNotification(notification);
+        } catch (err) {
+          this.logger.error(
+            `Failed to notify ${recipient.partnerCode || String(recipient._id)} about ${type} for order ${order.orderNumber}`,
+            err,
+          );
+        }
+      }
+    } catch (err) {
+      this.logger.error(
+        `Failed to resolve OSP / Hub alert recipients for order ${order.orderNumber}`,
         err,
       );
     }
