@@ -296,7 +296,7 @@ export class CommissionsService {
           title: 'Commission Available',
           message: `$${record.amount.toFixed(2)} from order ${record.orderNumber} is now available for withdrawal.`,
           user: record.recipientUserId.toString(),
-          link: '/dashboard/partner/network?tab=earnings',
+          link: '/dashboard/partner/earnings?tab=commission',
           metadata: { commissionRecordId: record._id, orderNumber: record.orderNumber },
         })
         .then((n) => this.notificationsGateway.broadcastNotification(n))

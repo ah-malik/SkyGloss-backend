@@ -1,5 +1,6 @@
 import {
   buildOrderCommissionIdempotencyKey,
+  canManuallyCompleteTransfer,
   convertUsdCommissionToEur,
   extractCommissionLines,
   mapStripePayoutToTransferStatus,
@@ -102,6 +103,59 @@ describe('order-commission-transfer.logic', () => {
 
     it('maps failed stripe payout to failed', () => {
       expect(mapStripePayoutToTransferStatus('failed')).toBe('failed');
+    });
+  });
+
+  describe('canManuallyCompleteTransfer', () => {
+    it('allows Europe failed rows regardless of auto-send', () => {
+      expect(
+        canManuallyCompleteTransfer({
+          stripeAccountKey: 'europe',
+          status: 'failed',
+          europeAutoSendActive: true,
+        }),
+      ).toBe(true);
+    });
+
+    it('allows Europe pending rows only while Europe auto-send is off', () => {
+      expect(
+        canManuallyCompleteTransfer({
+          stripeAccountKey: 'europe',
+          status: 'pending',
+          europeAutoSendActive: false,
+        }),
+      ).toBe(true);
+      expect(
+        canManuallyCompleteTransfer({
+          stripeAccountKey: 'europe',
+          status: 'pending',
+          europeAutoSendActive: true,
+        }),
+      ).toBe(false);
+    });
+
+    it('never allows processing or completed rows', () => {
+      for (const status of ['processing', 'completed'] as const) {
+        expect(
+          canManuallyCompleteTransfer({
+            stripeAccountKey: 'europe',
+            status,
+            europeAutoSendActive: false,
+          }),
+        ).toBe(false);
+      }
+    });
+
+    it('never allows Global or USA rows', () => {
+      for (const key of ['global', 'usa', undefined]) {
+        expect(
+          canManuallyCompleteTransfer({
+            stripeAccountKey: key,
+            status: 'failed',
+            europeAutoSendActive: false,
+          }),
+        ).toBe(false);
+      }
     });
   });
 });

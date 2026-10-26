@@ -609,7 +609,7 @@ export class UsersController {
           title: 'Shop Training Completed',
           message: `${user.firstName} ${user.lastName} has completed all training modules and is awaiting your certification.`,
           user: partner._id.toString() as any,
-          link: '/dashboard/partner/network',
+          link: `/dashboard/partner/shops/${user._id}`,
         });
       }
     }

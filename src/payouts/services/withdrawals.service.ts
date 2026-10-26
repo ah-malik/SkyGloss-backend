@@ -327,7 +327,7 @@ export class WithdrawalsService {
         message: `${label} submitted a withdrawal of $${amount}.${statusNote}`,
         user: hub._id.toString(),
         triggeredBy: user._id.toString(),
-        link: '/dashboard/partner/network?tab=earnings',
+        link: '/dashboard/partner/earnings?tab=payouts',
         metadata: {
           withdrawalRequestId: request._id,
           requestNumber: request.requestNumber,
@@ -623,7 +623,7 @@ export class WithdrawalsService {
         message: `${label} submitted a withdrawal of $${amount}.`,
         user: hubId,
         triggeredBy: requesterId,
-        link: '/dashboard/partner/network?tab=earnings',
+        link: '/dashboard/partner/earnings?tab=payouts',
         metadata: {
           withdrawalRequestId: requestId,
           requestNumber: request.requestNumber,
@@ -731,7 +731,7 @@ export class WithdrawalsService {
         message: `Your withdrawal ${request.requestNumber} was rejected by your Hub.${note ? ` Note: ${note}` : ''}`,
         user: request.userId.toString(),
         triggeredBy: hubId,
-        link: '/dashboard/partner/network?tab=earnings',
+        link: '/dashboard/partner/earnings?tab=payouts',
       });
 
       return this.enrichWithdrawal(request);
@@ -771,7 +771,7 @@ export class WithdrawalsService {
       message: `Your withdrawal ${request.requestNumber} was approved and sent to Admin for payout.`,
       user: request.userId.toString(),
       triggeredBy: hubId,
-      link: '/dashboard/partner/network?tab=earnings',
+      link: '/dashboard/partner/earnings?tab=payouts',
     });
 
     const requester = await this.usersService.findOne(request.userId.toString());
@@ -1013,7 +1013,7 @@ export class WithdrawalsService {
       message: `Your $${locked.requestedAmount.toFixed(2)} payout is being sent via Wise. Fees are deducted from this amount.`,
       user: locked.userId.toString(),
       triggeredBy: adminUserId,
-      link: '/dashboard/partner/network?tab=earnings',
+      link: '/dashboard/partner/earnings?tab=payouts',
     });
 
     void this.finalizeProcessingPayout(locked.wiseTransferId).catch((err) => {
@@ -1128,7 +1128,7 @@ export class WithdrawalsService {
       title: 'Payout Completed',
       message: `Your payout ${locked.requestNumber} has been completed.`,
       user: locked.userId.toString(),
-      link: '/dashboard/partner/network?tab=earnings',
+      link: '/dashboard/partner/earnings?tab=payouts',
     });
     return this.enrichWithdrawal(locked);
   }
@@ -1170,7 +1170,7 @@ export class WithdrawalsService {
       title: 'Payout Failed',
       message: `Your payout ${locked.requestNumber} could not be completed. Commission has been returned.`,
       user: locked.userId.toString(),
-      link: '/dashboard/partner/network?tab=earnings',
+      link: '/dashboard/partner/earnings?tab=payouts',
     });
     return this.enrichWithdrawal(locked);
   }

@@ -10,6 +10,15 @@ export type OrderCommissionTransferLine = {
   percentage?: number;
 };
 
+/** Set when an admin marks a Stripe Europe transfer complete by hand. */
+export type OrderCommissionTransferManualCompletion = {
+  completedBy: Types.ObjectId;
+  completedByName?: string;
+  completedAt: Date;
+  previousStatus: string;
+  note?: string;
+};
+
 export const ORDER_COMMISSION_TRANSFER_STATUSES = [
   'pending',
   'processing',
@@ -100,6 +109,9 @@ export class OrderCommissionTransfer {
 
   @Prop({ type: Object })
   snapshot?: Record<string, unknown>;
+
+  @Prop({ type: Object })
+  manualCompletion?: OrderCommissionTransferManualCompletion;
 
   createdAt?: Date;
   updatedAt?: Date;

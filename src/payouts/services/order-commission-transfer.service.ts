@@ -21,6 +21,7 @@ import {
 } from '../entities/stripe-wise-payout.entity';
 import {
   buildOrderCommissionIdempotencyKey,
+  canManuallyCompleteTransfer,
   convertUsdCommissionToEur,
   extractCommissionLines,
   isRetryableTransferStatus,
@@ -240,11 +241,13 @@ export class OrderCommissionTransferService implements OnModuleInit {
     page?: number;
     limit?: number;
     status?: OrderCommissionTransferStatus;
+    stripeAccountKey?: StripeAccountKey;
   }) {
     const page = Math.max(1, params?.page ?? 1);
     const limit = Math.min(100, Math.max(1, params?.limit ?? 30));
     const filter: Record<string, unknown> = {};
     if (params?.status) filter.status = params.status;
+    if (params?.stripeAccountKey) filter.stripeAccountKey = params.stripeAccountKey;
 
     const [items, total] = await Promise.all([
       this.transferModel
@@ -296,6 +299,92 @@ export class OrderCommissionTransferService implements OnModuleInit {
     await item.save();
     await this.processTransfer(item, { manual: true });
     return this.toPublicTransfer(item);
+  }
+
+  /**
+   * Stripe Europe only: admin marks a pending/failed transfer as completed by hand
+   * (commission settled outside the auto Stripe→Wise flow). No money is moved.
+   */
+  async manuallyCompleteEuropeTransfer(
+    id: string,
+    adminId: string,
+    note?: string,
+  ) {
+    const item = Types.ObjectId.isValid(id)
+      ? await this.transferModel.findById(id).exec()
+      : null;
+    if (!item) {
+      throw new BadRequestException('Commission transfer not found.');
+    }
+    const europeAutoSendActive = this.shouldAutoSend('europe');
+    if (
+      !canManuallyCompleteTransfer({
+        stripeAccountKey: item.stripeAccountKey,
+        status: item.status,
+        europeAutoSendActive,
+      })
+    ) {
+      if (String(item.stripeAccountKey || '').toLowerCase() !== 'europe') {
+        throw new BadRequestException(
+          'Only Stripe Europe commission transfers can be completed manually.',
+        );
+      }
+      if (item.status === 'pending' && europeAutoSendActive) {
+        throw new BadRequestException(
+          'Europe auto-send is on, so this pending transfer may be sending. Pause Europe auto-send first.',
+        );
+      }
+      throw new BadRequestException(
+        `Transfer is ${transferStatusLabel(item.status)} and cannot be completed manually.`,
+      );
+    }
+
+    const admin = Types.ObjectId.isValid(adminId)
+      ? await this.userModel
+          .findById(adminId)
+          .select('firstName lastName email')
+          .lean()
+          .exec()
+      : null;
+    const completedByName =
+      [admin?.firstName, admin?.lastName].filter(Boolean).join(' ').trim() ||
+      admin?.email ||
+      undefined;
+    const now = new Date();
+    const trimmedNote = note?.trim() || undefined;
+
+    // Compare-and-set on the status we validated so a concurrent retry/cron wins cleanly.
+    const updated = await this.transferModel
+      .findOneAndUpdate(
+        { _id: item._id, stripeAccountKey: 'europe', status: item.status },
+        {
+          $set: {
+            status: 'completed',
+            transferDate: now,
+            manualCompletion: {
+              completedBy: new Types.ObjectId(adminId),
+              completedByName,
+              completedAt: now,
+              previousStatus: item.status,
+              note: trimmedNote,
+            },
+          },
+          $unset: { errorReason: 1 },
+        },
+        { new: true },
+      )
+      .exec();
+    if (!updated) {
+      throw new BadRequestException(
+        'Transfer status changed in the meantime. Refresh and try again.',
+      );
+    }
+    this.logger.log(
+      `Europe commission transfer ${updated.orderNumber} manually completed by ${
+        completedByName || adminId
+      } (was ${item.status}).`,
+    );
+    return this.toPublicTransfer(updated);
   }
 
   @Cron('*/2 * * * *')
@@ -492,6 +581,8 @@ export class OrderCommissionTransferService implements OnModuleInit {
     transfer: OrderCommissionTransferDocument,
   ): Promise<void> {
     if (!transfer.stripeWisePayoutId) return;
+    // Admin closed this by hand; an old failed payout must not flip it back.
+    if (transfer.manualCompletion) return;
     const payout = await this.payoutModel
       .findById(transfer.stripeWisePayoutId)
       .exec();
@@ -604,6 +695,20 @@ export class OrderCommissionTransferService implements OnModuleInit {
       statusLabel: transferStatusLabel(item.status),
       errorReason: item.errorReason,
       transferDate: item.transferDate,
+      canManualComplete: canManuallyCompleteTransfer({
+        stripeAccountKey: item.stripeAccountKey,
+        status: item.status,
+        europeAutoSendActive: this.shouldAutoSend('europe'),
+      }),
+      manualCompletion: item.manualCompletion
+        ? {
+            completedBy: String(item.manualCompletion.completedBy),
+            completedByName: item.manualCompletion.completedByName || null,
+            completedAt: item.manualCompletion.completedAt,
+            previousStatus: item.manualCompletion.previousStatus,
+            note: item.manualCompletion.note || null,
+          }
+        : null,
       retryCount: item.retryCount || 0,
       createdAt: item.createdAt,
       updatedAt: item.updatedAt,

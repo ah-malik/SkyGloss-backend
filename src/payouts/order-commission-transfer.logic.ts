@@ -151,3 +151,20 @@ export function isRetryableTransferStatus(
 ): boolean {
   return status === 'failed' || status === 'pending';
 }
+
+/**
+ * Admin "Mark complete" is Stripe Europe only. Failed rows can always be closed;
+ * pending rows only while Europe auto-send is off (else the cron may be sending it).
+ */
+export function canManuallyCompleteTransfer(params: {
+  stripeAccountKey?: string | null;
+  status: OrderCommissionTransferStatus;
+  europeAutoSendActive: boolean;
+}): boolean {
+  if (String(params.stripeAccountKey || '').toLowerCase() !== 'europe') {
+    return false;
+  }
+  if (params.status === 'failed') return true;
+  if (params.status === 'pending') return !params.europeAutoSendActive;
+  return false;
+}

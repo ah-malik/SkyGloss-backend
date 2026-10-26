@@ -1999,7 +1999,7 @@ export class OrdersService implements OnModuleInit {
               metadata: { shopId: updatedUser._id, shopName: `${updatedUser.firstName} ${updatedUser.lastName}` },
               user: partner._id,
               triggeredBy: userId,
-              link: `/dashboard/partner/network`,
+              link: `/dashboard/partner/shops/${updatedUser._id}`,
             });
             this.notificationsGateway.broadcastNotification(partnerNotification);
           }
@@ -2250,7 +2250,7 @@ export class OrdersService implements OnModuleInit {
               },
               user: partner._id,
               triggeredBy: updatedUser._id as any,
-              link: `/dashboard/partner/network`,
+              link: `/dashboard/partner/shops/${updatedUser._id}`,
             });
             this.notificationsGateway.broadcastNotification(partnerNotification);
           }
@@ -2507,7 +2507,7 @@ export class OrdersService implements OnModuleInit {
               },
               user: partner._id,
               triggeredBy: updatedUser._id as any,
-              link: `/dashboard/partner/network`,
+              link: `/dashboard/partner/shops/${updatedUser._id}`,
             });
             this.notificationsGateway.broadcastNotification(partnerNotification);
           }
@@ -2704,7 +2704,7 @@ export class OrdersService implements OnModuleInit {
                 metadata: { shopId: updatedUser._id, shopName: `${updatedUser.firstName} ${updatedUser.lastName}` },
                 user: partner._id,
                 triggeredBy: updatedUser._id as any,
-                link: `/dashboard/partner/network`,
+                link: `/dashboard/partner/shops/${updatedUser._id}`,
               });
               this.notificationsGateway.broadcastNotification(partnerNotification);
             }
@@ -6181,7 +6181,7 @@ export class OrdersService implements OnModuleInit {
             },
             user: String(recipient._id),
             triggeredBy: shopId,
-            link: '/dashboard/partner/network?tab=orders',
+            link: '/dashboard/partner/earnings?tab=orders',
           });
           this.notificationsGateway.broadcastNotification(notification);
         } catch (err) {

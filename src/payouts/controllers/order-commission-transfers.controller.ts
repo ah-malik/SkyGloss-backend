@@ -1,4 +1,5 @@
 import {
+  Body,
   Controller,
   Get,
   Param,
@@ -10,8 +11,11 @@ import { OrderCommissionTransferService } from '../services/order-commission-tra
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { GetUser } from '../../common/decorators/get-user.decorator';
 import { UserRole } from '../../users/entities/user.entity';
 import { ORDER_COMMISSION_TRANSFER_STATUSES } from '../entities/order-commission-transfer.entity';
+import { ManualCompleteCommissionTransferDto } from '../dto/manual-complete-commission-transfer.dto';
+import { isStripeAccountKey } from '../stripe-wise-payouts.logic';
 
 @Controller('order-commission-transfers')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -24,6 +28,7 @@ export class OrderCommissionTransfersController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('status') status?: string,
+    @Query('stripeAccountKey') stripeAccountKey?: string,
   ) {
     const normalized = ORDER_COMMISSION_TRANSFER_STATUSES.includes(
       status as (typeof ORDER_COMMISSION_TRANSFER_STATUSES)[number],
@@ -34,6 +39,9 @@ export class OrderCommissionTransfersController {
       page: page ? parseInt(page, 10) : 1,
       limit: limit ? parseInt(limit, 10) : 30,
       status: normalized,
+      stripeAccountKey: isStripeAccountKey(stripeAccountKey)
+        ? stripeAccountKey
+        : undefined,
     });
   }
 
@@ -45,5 +53,19 @@ export class OrderCommissionTransfersController {
   @Post(':id/retry')
   retry(@Param('id') id: string) {
     return this.transfers.retryTransfer(id);
+  }
+
+  /** Stripe Europe only — mark a pending/failed transfer completed (no money moves). */
+  @Post(':id/manual-complete')
+  manualComplete(
+    @Param('id') id: string,
+    @GetUser('_id') adminId: string,
+    @Body() dto: ManualCompleteCommissionTransferDto,
+  ) {
+    return this.transfers.manuallyCompleteEuropeTransfer(
+      id,
+      String(adminId),
+      dto.note,
+    );
   }
 }

@@ -865,7 +865,7 @@ export class AuthService {
             },
             user: partner._id.toString(),
             triggeredBy: user._id.toString(),
-            link: '/dashboard/partner/network?tab=shops',
+            link: `/dashboard/partner/shops/${user._id.toString()}`,
           });
           this.notificationsGateway.broadcastNotification(partnerNotification);
         } catch (err) {
@@ -893,7 +893,7 @@ export class AuthService {
             },
             user: recipient._id.toString(),
             triggeredBy: user._id.toString(),
-            link: '/dashboard/partner/network?tab=shops',
+            link: `/dashboard/partner/shops/${user._id.toString()}`,
           });
           this.notificationsGateway.broadcastNotification(supportNotification);
         }
