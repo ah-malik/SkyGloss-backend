@@ -98,7 +98,24 @@ describe('certification-kit', () => {
     expect(withTraining.kitPricing.discountAmount).toBe(0);
   });
 
-  it('hides a saved kit when a product is missing from the catalog', () => {
+  it('leaves out kit products missing from the viewer Pricing Group', () => {
+    const catalog = [
+      { _id: 'f1', name: 'FUSION', sizes: [{ size: '2000ml', price: 790 }] },
+      { _id: 's1', name: 'SEAL', sizes: [{ size: '500ml', price: 50 }] },
+    ];
+    const components = resolveSavedCertificationKitComponents(catalog, [
+      { productId: 'f1', size: '2000ml', quantity: 1 },
+      { productId: 'x9', size: '1pc', quantity: 4 },
+      { productId: 's1', size: '250ml', quantity: 2 },
+      { productId: 's1', size: '500ml', quantity: 2 },
+    ]);
+    expect(components!.map((c) => `${c.productId}:${c.size}:${c.quantity}`)).toEqual([
+      'f1:2000ml:1',
+      's1:500ml:2',
+    ]);
+  });
+
+  it('hides the kit only when none of its products are in the catalog', () => {
     expect(
       resolveSavedCertificationKitComponents(
         [{ _id: 'f1', name: 'FUSION', sizes: [{ size: '2000ml', price: 790 }] }],

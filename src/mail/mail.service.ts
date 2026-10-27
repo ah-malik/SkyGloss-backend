@@ -2305,6 +2305,8 @@ export class MailService {
       role?: string;
       companyName?: string;
     },
+    /** Admin account inboxes, added next to it@skygloss.com. */
+    adminEmails: string[] = [],
   ) {
     const currency = (request.currency || 'USD').toUpperCase();
     const currencySymbols: Record<string, string> = {
@@ -2326,9 +2328,20 @@ export class MailService {
       ? new Date(request.createdAt).toLocaleString('en-US', { timeZone: 'America/Phoenix' })
       : new Date().toLocaleString('en-US', { timeZone: 'America/Phoenix' });
 
+    const adminTo = ['it@skygloss.com'];
+    for (const raw of adminEmails) {
+      const email = String(raw || '').trim();
+      if (
+        email.includes('@') &&
+        !adminTo.some((existing) => existing.toLowerCase() === email.toLowerCase())
+      ) {
+        adminTo.push(email);
+      }
+    }
+
     const mailOptions = {
       from: '"SkyGloss IT" <it@skygloss.com>',
-      to: 'it@skygloss.com',
+      to: adminTo.join(', '),
       subject: `NEW WITHDRAWAL REQUEST: ${request.requestNumber} - ${requesterName}`,
       html: `
         <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
@@ -2386,6 +2399,180 @@ export class MailService {
         error.stack,
       );
       throw error;
+    }
+  }
+
+  private escapeHtml(value: unknown): string {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  private withdrawalEmailShell(title: string, body: string): string {
+    return `
+        <body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f6f8">
+            <tr>
+              <td align="center">
+                <table width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="margin:20px 0; border-radius:8px; overflow:hidden; border: 1px solid #e0e0e0;">
+                  <tr><td align="center" bgcolor="#0ea0dc" style="padding:20px; color:#ffffff; font-size:24px; font-weight:bold;">${title}</td></tr>
+                  <tr>
+                    <td style="padding:30px; color:#333333; font-size:14px; line-height:1.6;">
+                      ${body}
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+      `;
+  }
+
+  /**
+   * Hub (or acting Distributor) that must review a new withdrawal.
+   * Failures are logged, never thrown: the request is already saved.
+   */
+  async sendWithdrawalHubReviewEmail(
+    hub: {
+      email?: string;
+      additionalEmail?: string | null;
+      firstName?: string;
+      lastName?: string;
+      role?: string;
+    },
+    request: { requestNumber: string; requestedAmount: number; createdAt?: Date },
+    requester: {
+      firstName?: string;
+      lastName?: string;
+      partnerCode?: string;
+      role?: string;
+    },
+  ) {
+    const to = this.resolveUserToAddresses(hub.email, hub);
+    if (!to.length) return;
+    const requesterName =
+      `${requester.firstName || ''} ${requester.lastName || ''}`.trim() ||
+      requester.partnerCode ||
+      'A network member';
+    const hubName = `${hub.firstName || ''} ${hub.lastName || ''}`.trim();
+    const amount = `$${Number(request.requestedAmount || 0).toFixed(2)}`;
+    const submittedAt = (
+      request.createdAt ? new Date(request.createdAt) : new Date()
+    ).toLocaleString('en-US', { timeZone: 'America/Phoenix' });
+    const roleNote = requester.role
+      ? ` (${this.escapeHtml(formatRoleLabel(requester.role))})`
+      : '';
+
+    const body = `
+                      <p>Hello ${this.escapeHtml(hubName || 'there')},</p>
+                      <p><strong>${this.escapeHtml(requesterName)}</strong> requested a commission withdrawal from your network. Please review it in your SkyGloss portal.</p>
+                      <table width="100%" cellpadding="10" cellspacing="0" style="background:#f0f8fc; border-left:4px solid #0ea0dc; margin:20px 0;">
+                        <tr>
+                          <td>
+                            Request Number: <strong>${this.escapeHtml(request.requestNumber)}</strong><br>
+                            Amount: <strong>${amount}</strong><br>
+                            Requested by: ${this.escapeHtml(requesterName)}${roleNote}<br>
+                            Partner ID: ${this.escapeHtml(requester.partnerCode || 'N/A')}<br>
+                            Submitted: ${submittedAt} (Arizona)
+                          </td>
+                        </tr>
+                      </table>
+                      <p>Open <strong>Earnings &rarr; Payouts</strong> to approve or reject the request.</p>
+                      ${this.buildPortalAccessButton(this.getPortalLoginLink(hub.role))}`;
+
+    try {
+      await this.salesTransporter.sendMail({
+        from: '"SkyGloss Support" <sales@skygloss.com>',
+        to: to.join(', '),
+        subject: `Withdrawal review needed: ${request.requestNumber} - ${requesterName}`,
+        html: this.withdrawalEmailShell('Withdrawal Review Required', body),
+      });
+      this.logger.log(`Withdrawal hub review email sent for ${request.requestNumber}`);
+    } catch (error) {
+      this.logger.error(
+        `Failed to send withdrawal hub review email for ${request.requestNumber}`,
+        (error as Error)?.stack,
+      );
+    }
+  }
+
+  /**
+   * Requester: Admin approved the withdrawal (payout sent via Wise), with the
+   * payout invoice attached. Failures are logged, never thrown.
+   */
+  async sendWithdrawalApprovedEmail(
+    requester: {
+      email?: string;
+      additionalEmail?: string | null;
+      firstName?: string;
+      lastName?: string;
+      role?: string;
+    },
+    request: {
+      requestNumber: string;
+      requestedAmount: number;
+      wiseTargetAmount?: number;
+      wiseTargetCurrency?: string;
+    },
+    invoicePdf?: Buffer | null,
+  ) {
+    const to = this.resolveUserToAddresses(requester.email, requester);
+    if (!to.length) return;
+    const name =
+      `${requester.firstName || ''} ${requester.lastName || ''}`.trim() || 'Partner';
+    const amount = `$${Number(request.requestedAmount || 0).toFixed(2)}`;
+    const target =
+      request.wiseTargetAmount && request.wiseTargetCurrency
+        ? `${request.wiseTargetCurrency.toUpperCase()} ${Number(request.wiseTargetAmount).toFixed(2)}`
+        : '';
+    const targetLine = target
+      ? `<br>Amount sent to your bank: <strong>${this.escapeHtml(target)}</strong>`
+      : '';
+    const invoiceNote = invoicePdf
+      ? '<p>Your payout invoice is attached to this email. You can also download it any time from <strong>Earnings &rarr; Payouts</strong>.</p>'
+      : '<p>You can download your payout invoice from <strong>Earnings &rarr; Payouts</strong>.</p>';
+
+    const body = `
+                      <p>Hello ${this.escapeHtml(name)},</p>
+                      <p>Good news: your withdrawal request has been <strong>approved</strong> and the payout is on its way to your bank account via Wise.</p>
+                      <table width="100%" cellpadding="10" cellspacing="0" style="background:#f0f8fc; border-left:4px solid #0ea0dc; margin:20px 0;">
+                        <tr>
+                          <td>
+                            Request Number: <strong>${this.escapeHtml(request.requestNumber)}</strong><br>
+                            Approved Amount: <strong>${amount}</strong>${targetLine}
+                          </td>
+                        </tr>
+                      </table>
+                      <p>Transfer fees and any applicable taxes are deducted from the approved amount. Arrival time depends on your bank.</p>
+                      ${invoiceNote}
+                      ${this.buildPortalAccessButton(this.getPortalLoginLink(requester.role))}`;
+
+    try {
+      await this.salesTransporter.sendMail({
+        from: '"SkyGloss Support" <sales@skygloss.com>',
+        to: to.join(', '),
+        subject: `Withdrawal approved: ${request.requestNumber} - ${amount}`,
+        html: this.withdrawalEmailShell('Withdrawal Approved', body),
+        ...(invoicePdf
+          ? {
+              attachments: [
+                {
+                  filename: `SkyGloss-Payout-Invoice-${request.requestNumber}.pdf`,
+                  content: invoicePdf,
+                },
+              ],
+            }
+          : {}),
+      });
+      this.logger.log(`Withdrawal approved email sent for ${request.requestNumber}`);
+    } catch (error) {
+      this.logger.error(
+        `Failed to send withdrawal approved email for ${request.requestNumber}`,
+        (error as Error)?.stack,
+      );
     }
   }
 

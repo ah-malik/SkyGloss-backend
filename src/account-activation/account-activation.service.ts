@@ -264,6 +264,8 @@ export class AccountActivationService implements OnModuleInit {
             uploadedAt: user.adminAgreementUploadedAt || null,
           }
         : null,
+      // Admin chose "Update later": no agreement yet, the sign step is skipped.
+      agreementPending: !user.adminAgreementKey && !!user.adminAgreementPending,
       hub: hub
         ? {
             id: hub._id.toString(),
@@ -382,9 +384,11 @@ export class AccountActivationService implements OnModuleInit {
             adminAgreementKey: user.adminAgreementKey,
             adminAgreementFileName: user.adminAgreementFileName,
           }
-        : dto.agreementDetails
-          ? { agreementDetails: dto.agreementDetails }
-          : {}),
+        : user.adminAgreementPending
+          ? { agreementPending: true }
+          : dto.agreementDetails
+            ? { agreementDetails: dto.agreementDetails }
+            : {}),
       ...(bankDetailsId ? { bankDetailsId } : {}),
       submittedAt: now,
     });

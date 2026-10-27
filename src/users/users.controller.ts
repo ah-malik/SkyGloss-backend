@@ -23,6 +23,10 @@ import { ChatService } from '../chat/chat.service';
 import { NotificationType } from '../notifications/entities/notification.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import {
+  CreateHubNetworkMemberDto,
+  UpdateHubNetworkMemberDto,
+} from './dto/hub-network-member.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -46,6 +50,7 @@ import {
   isTrainingRequirementSatisfied,
 } from '../common/course-completion';
 import * as crypto from 'crypto';
+import { Types } from 'mongoose';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -69,28 +74,91 @@ export class UsersController {
     @GetUser() admin: UserDocument,
   ) {
     const user = await this.usersService.create(createUserDto);
+    await this.afterManagedCreate(user, createUserDto, req, admin, 'admin');
+    return user;
+  }
+
+  /**
+   * Hub "Add user": Distributor / Representative / Promoter under the Hub's
+   * own Partner ID. Gets the same onboarding email as an Admin-created partner.
+   */
+  @Post('hub/network-members')
+  @Roles(UserRole.PARTNER)
+  async createHubNetworkMember(
+    @Body() dto: CreateHubNetworkMemberDto,
+    @Req() req: Request,
+    @GetUser() hub: UserDocument,
+  ) {
+    const user = await this.usersService.createHubNetworkMember(hub, dto);
+    await this.afterManagedCreate(user, dto, req, hub, 'partner');
+    return this.hubMemberView(user);
+  }
+
+  /** Hub edits / blocks its own Distributor / Representative / Promoter. */
+  @Patch('hub/network-members/:id')
+  @Roles(UserRole.PARTNER)
+  async updateHubNetworkMember(
+    @Param('id') id: string,
+    @Body() dto: UpdateHubNetworkMemberDto,
+    @GetUser() hub: UserDocument,
+  ) {
+    const user = await this.usersService.updateHubNetworkMember(hub, id, dto);
+    return user ? this.hubMemberView(user) : null;
+  }
+
+  /** No password / token fields in Hub responses. */
+  private hubMemberView(user: UserDocument) {
+    const u: any = (user as any).toObject?.() ?? user;
+    return {
+      _id: String(u._id),
+      role: u.role,
+      partnerCode: u.partnerCode,
+      referredByPartnerCode: u.referredByPartnerCode,
+      email: u.email,
+      firstName: u.firstName,
+      lastName: u.lastName,
+      phoneNumber: u.phoneNumber,
+      companyName: u.companyName,
+      address: u.address,
+      city: u.city,
+      country: u.country,
+      state: u.state,
+      zipCode: u.zipCode,
+      status: u.status,
+      createdAt: u.createdAt,
+    };
+  }
+
+  /** Activity log + onboarding email for an Admin- or Hub-created account. */
+  private async afterManagedCreate(
+    user: UserDocument,
+    createUserDto: { password?: string; country?: string },
+    req: Request,
+    actor: UserDocument,
+    portal: 'admin' | 'partner',
+  ) {
     const meta = getRequestMeta(req);
     await this.userActivityService.log({
       userId: (user as any)._id.toString(),
       action: UserActivityAction.REGISTER,
-      actorId: admin?._id?.toString(),
-      portal: 'admin',
+      actorId: actor?._id?.toString(),
+      portal,
       country: (user as any).country || createUserDto.country,
       ...meta,
       metadata: {
-        method: 'admin_create',
-        registrationType: 'admin',
+        method: portal === 'admin' ? 'admin_create' : 'hub_create',
+        registrationType: portal === 'admin' ? 'admin' : 'hub',
         role: (user as any).role,
         email: (user as any).email,
         country: (user as any).country || createUserDto.country,
         partnerCode: (user as any).partnerCode,
         status: (user as any).status,
-        actorEmail: admin?.email,
-        actorRole: admin?.role,
+        actorEmail: actor?.email,
+        actorRole: actor?.role,
       },
     });
 
-    // Admin-created partner network accounts: bind Access Now token + send email.
+    // Admin/Hub-created partner network accounts: bind Access Now token + send email.
     // Soft-fail so a mail outage never blocks account creation.
     if (
       isPartnerNetworkRole((user as any).role) &&
@@ -121,8 +189,6 @@ export class UsersController {
           ),
         );
     }
-
-    return user;
   }
 
   /** Optional agreement file for a new Rep / Promoter / Distributor (Add User). */
@@ -173,14 +239,10 @@ export class UsersController {
     return this.usersService.findSoftDeletedUsers();
   }
 
+  // Full user list: Admin only. Portals read their own network via
+  // GET /users/referred-shops.
   @Get()
-  @Roles(
-    UserRole.ADMIN,
-    UserRole.MASTER_PARTNER,
-    UserRole.REGIONAL_PARTNER,
-    UserRole.DISTRIBUTOR,
-    UserRole.PARTNER,
-  )
+  @Roles(UserRole.ADMIN)
   findAll() {
     return this.usersService.findAll();
   }
@@ -461,14 +523,60 @@ export class UsersController {
     return this.usersService.assignPartner(id, partnerCode);
   }
 
+  /**
+   * Fields a non-Admin may send on PATCH /users/:id: shop actions from the
+   * partner portal (certify, block, map, shop network & commission rates).
+   * Own profile → PATCH /users/me/profile; Hub members →
+   * PATCH /users/hub/network-members/:id. Everything else is Admin-only.
+   */
+  private static readonly NETWORK_SHOP_UPDATE_FIELDS = [
+    'isCertified',
+    'isVisibleOnMap',
+    'status',
+    'referredByPartnerCode',
+    'shopIntroductionFirstOrderRatePercent',
+    'operationalSupportRepresentativeCode',
+    'operationalSupportRatePercent',
+  ] as const;
+
   @Patch(':id')
   @Roles(UserRole.ADMIN, UserRole.MASTER_PARTNER, UserRole.REGIONAL_PARTNER, UserRole.DISTRIBUTOR, UserRole.PARTNER, UserRole.CERTIFIED_SHOP)
-  update(
+  async update(
     @Param('id') id: string,
     @Body() updateUserDto: UpdateUserDto,
     @GetUser() currentUser: UserDocument,
   ) {
-    return this.usersService.update(id, updateUserDto, currentUser);
+    if (currentUser.role === UserRole.ADMIN) {
+      return this.usersService.update(id, updateUserDto, currentUser);
+    }
+
+    // Non-Admin: another user's shop only (network permission checks run in
+    // UsersService.update), and only the shop-action fields.
+    const target = Types.ObjectId.isValid(id)
+      ? await this.usersService.findOne(id)
+      : null;
+    if (
+      !target ||
+      target.role !== UserRole.CERTIFIED_SHOP ||
+      target._id.toString() === currentUser._id.toString()
+    ) {
+      throw new ForbiddenException('You do not have permission to update this user');
+    }
+    const payload: Record<string, unknown> = {};
+    for (const field of UsersController.NETWORK_SHOP_UPDATE_FIELDS) {
+      if (updateUserDto[field] !== undefined) payload[field] = updateUserDto[field];
+    }
+    if (
+      payload.status !== undefined &&
+      payload.status !== UserStatus.ACTIVE &&
+      payload.status !== UserStatus.BLOCKED
+    ) {
+      throw new BadRequestException('Status must be active or blocked.');
+    }
+    if (Object.keys(payload).length === 0) {
+      throw new BadRequestException('Nothing to update.');
+    }
+    return this.usersService.update(id, payload as UpdateUserDto, currentUser);
   }
 
   @Delete(':id')

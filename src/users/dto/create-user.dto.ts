@@ -271,6 +271,11 @@ export class CreateUserDto {
   @IsOptional()
   adminAgreementFileName?: string;
 
+  /** Add User "Update later": agreement follows later (Rep / Promoter / Distributor). Create-only. */
+  @IsBoolean()
+  @IsOptional()
+  adminAgreementPending?: boolean;
+
   /**
    * Legacy FO rate field aliases (still accepted).
    * Prefer customCommissionRate / partnerIntroRatePercent.

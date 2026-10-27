@@ -75,6 +75,10 @@ export class AccountActivationRequest {
   @Prop()
   adminAgreementFileName?: string;
 
+  /** Submitted while Admin's agreement was still "Update later" (no sign step). */
+  @Prop()
+  agreementPending?: boolean;
+
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'BankDetails' })
   bankDetailsId?: Types.ObjectId;
 

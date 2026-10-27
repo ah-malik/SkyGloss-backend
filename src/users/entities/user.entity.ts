@@ -357,6 +357,14 @@ export class User {
   @Prop()
   adminAgreementUploadedAt?: Date;
 
+  /**
+   * Admin chose "Update later" on create: no agreement yet. The sign step is
+   * skipped and "Your agreement" says it is not ready until Admin uploads it
+   * (Edit User), which clears this flag.
+   */
+  @Prop({ default: false })
+  adminAgreementPending?: boolean;
+
   @Prop({ default: false })
   isCertified: boolean;
 

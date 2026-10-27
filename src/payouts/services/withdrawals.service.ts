@@ -28,6 +28,8 @@ import { isShopParentLinkRole } from '../../common/user-hierarchy';
 import { WisePayoutError, WisePayoutResult, WiseService } from './wise.service';
 import { randomUUID } from 'crypto';
 import { MailService } from '../../mail/mail.service';
+import { formatRoleLabel } from '../../common/role-labels';
+import { buildPayoutInvoicePdf } from '../payout-invoice.pdf';
 
 @Injectable()
 export class WithdrawalsService {
@@ -274,7 +276,12 @@ export class WithdrawalsService {
     });
 
     try {
-      await this.mailService.sendWithdrawalRequestNotification(request, user);
+      const admins = await this.usersService.findAdminUsers();
+      await this.mailService.sendWithdrawalRequestNotification(
+        request,
+        user,
+        admins.map((admin) => admin.email || '').filter(Boolean),
+      );
     } catch (err) {
       console.error(
         '[WithdrawalsService] Withdrawal request email failed',
@@ -333,6 +340,8 @@ export class WithdrawalsService {
           requestNumber: request.requestNumber,
         },
       });
+      // Logged, never thrown (MailService).
+      await this.mailService.sendWithdrawalHubReviewEmail(hub, request, user);
     }
 
     await this.notifyAllAdmins({
@@ -1016,6 +1025,14 @@ export class WithdrawalsService {
       link: '/dashboard/partner/earnings?tab=payouts',
     });
 
+    void this.sendApprovedEmail(locked, requester).catch((err) => {
+      console.error(
+        '[WithdrawalsService] Withdrawal approved email failed',
+        locked.requestNumber,
+        err,
+      );
+    });
+
     void this.finalizeProcessingPayout(locked.wiseTransferId).catch((err) => {
       console.error(
         '[WithdrawalsService] Post-pay Wise finalize failed',
@@ -1025,6 +1042,116 @@ export class WithdrawalsService {
     });
 
     return this.enrichWithdrawal(locked);
+  }
+
+  /** Statuses after Admin approval: the payout invoice exists. */
+  private static readonly INVOICE_STATUSES = [
+    WithdrawalStatus.ADMIN_APPROVED,
+    WithdrawalStatus.PAYMENT_PROCESSING,
+    WithdrawalStatus.COMPLETED,
+  ];
+
+  private async buildInvoicePdf(
+    request: WithdrawalRequestDocument,
+    requester: {
+      firstName?: string;
+      lastName?: string;
+      companyName?: string;
+      email?: string;
+      partnerCode?: string;
+      role?: string;
+      address?: string;
+      city?: string;
+      country?: string;
+    },
+  ): Promise<Buffer> {
+    const records = await this.commissionModel
+      .find({ _id: { $in: request.commissionRecordIds || [] } })
+      .select('orderNumber earningType percentage amount shippedAt')
+      .sort({ shippedAt: 1 })
+      .lean();
+    const sourceCurrency = (request.wiseSourceCurrency || 'USD').toUpperCase();
+    return buildPayoutInvoicePdf({
+      requestNumber: request.requestNumber,
+      requestedAt: (request as any).createdAt,
+      approvedAt: request.adminReviewedAt,
+      amount: request.requestedAmount,
+      currency: request.currency || 'USD',
+      payee: {
+        name:
+          `${requester.firstName || ''} ${requester.lastName || ''}`.trim() ||
+          requester.partnerCode ||
+          'Partner',
+        companyName: requester.companyName,
+        partnerCode: requester.partnerCode || request.userPartnerCode,
+        role: requester.role ? formatRoleLabel(requester.role) : undefined,
+        email: requester.email,
+        address: requester.address,
+        city: requester.city,
+        country: requester.country,
+      },
+      hubPartnerCode: request.sourceHubPartnerCode,
+      lines: records.map((r) => ({
+        orderNumber: r.orderNumber,
+        earningType: r.earningType,
+        percentage: r.percentage,
+        amount: r.amount,
+      })),
+      wise: {
+        reference: request.wiseTransferReference,
+        fee: request.wiseFee,
+        feeCurrency: sourceCurrency,
+        targetAmount: request.wiseTargetAmount,
+        targetCurrency: request.wiseTargetCurrency,
+      },
+    });
+  }
+
+  /** Approval email to the requester with the payout invoice attached. */
+  private async sendApprovedEmail(
+    request: WithdrawalRequestDocument,
+    requester: Parameters<WithdrawalsService['buildInvoicePdf']>[1] & {
+      additionalEmail?: string | null;
+    },
+  ) {
+    let invoice: Buffer | null = null;
+    try {
+      invoice = await this.buildInvoicePdf(request, requester);
+    } catch (err) {
+      // Still send the approval email without the attachment.
+      console.error(
+        '[WithdrawalsService] Payout invoice PDF failed',
+        request.requestNumber,
+        err,
+      );
+    }
+    await this.mailService.sendWithdrawalApprovedEmail(requester, request, invoice);
+  }
+
+  /** GET /withdrawals/:id/invoice — the requester, after Admin approval. */
+  async getInvoicePdf(
+    id: string,
+    viewerId: string,
+  ): Promise<{ fileName: string; pdf: Buffer }> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new NotFoundException('Withdrawal not found');
+    }
+    const request = await this.withdrawalModel.findById(id);
+    if (!request) throw new NotFoundException('Withdrawal not found');
+    if (request.userId.toString() !== String(viewerId)) {
+      throw new ForbiddenException();
+    }
+    if (!WithdrawalsService.INVOICE_STATUSES.includes(request.status)) {
+      throw new BadRequestException(
+        'The invoice is available once Admin approves the withdrawal.',
+      );
+    }
+    const requester = await this.usersService.findOne(request.userId.toString());
+    const pdf = await this.buildInvoicePdf(request, (requester || {}) as any);
+    return {
+      fileName: `SkyGloss-Payout-Invoice-${request.requestNumber}.pdf`,
+      pdf,
+    };
   }
 
   async applyWiseTransferState(transferId: string, wiseStatus: string) {

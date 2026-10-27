@@ -151,6 +151,8 @@ export const FRONTEND_APIS: ApiEndpointDef[] = [
   ),
   def('frontend', 'Users', 'PATCH', '/users/:id/transfer-shop', 'Transfer shop'),
   def('frontend', 'Users', 'PATCH', '/users/:id', 'Update user'),
+  def('frontend', 'Users', 'POST', '/users/hub/network-members', 'Hub: add Distributor / Representative / Promoter'),
+  def('frontend', 'Users', 'PATCH', '/users/hub/network-members/:id', 'Hub: edit / block own network member'),
   def('frontend', 'Users', 'GET', '/users', 'List users (network)'),
 
   // Access codes (partner)
@@ -276,6 +278,7 @@ export const FRONTEND_APIS: ApiEndpointDef[] = [
   def('frontend', 'Withdrawals', 'GET', '/withdrawals/my', 'My withdrawals'),
   def('frontend', 'Withdrawals', 'GET', '/withdrawals/hub/pending', 'Hub pending withdrawals'),
   def('frontend', 'Withdrawals', 'GET', '/withdrawals/:id', 'Withdrawal detail'),
+  def('frontend', 'Withdrawals', 'GET', '/withdrawals/:id/invoice', 'Download payout invoice'),
   def('frontend', 'Withdrawals', 'PATCH', '/withdrawals/:id/hub-review', 'Hub review withdrawal'),
   def(
     'frontend',

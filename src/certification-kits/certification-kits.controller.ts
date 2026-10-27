@@ -5,7 +5,10 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { GetUser } from '../common/decorators/get-user.decorator';
 import { UserDocument, UserRole } from '../users/entities/user.entity';
 import { CertificationKitBuilderService } from './certification-kit-builder.service';
-import { CERTIFICATION_KIT_OWNER_ROLES } from './certification-kits.service';
+import {
+  CERTIFICATION_KIT_OWNER_ROLES,
+  CERTIFICATION_KIT_VIEWER_ROLES,
+} from './certification-kits.service';
 import {
   RejectCertificationKitDto,
   ReviewCertificationKitDto,
@@ -17,8 +20,9 @@ import {
 export class CertificationKitsController {
   constructor(private readonly builder: CertificationKitBuilderService) {}
 
+  /** HUB: its own kit to edit. Other partners: their HUB's approved kit, view only. */
   @Get('me')
-  @Roles(...CERTIFICATION_KIT_OWNER_ROLES)
+  @Roles(...CERTIFICATION_KIT_VIEWER_ROLES)
   getMine(@GetUser() user: UserDocument) {
     return this.builder.getMine(user);
   }

@@ -6,8 +6,10 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { WithdrawalsService } from '../services/withdrawals.service';
 import { CreateWithdrawalDto } from '../dto/create-withdrawal.dto';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
@@ -91,6 +93,29 @@ export class WithdrawalsController {
   @Roles(UserRole.ADMIN)
   revealAmounts(@Param('id') id: string) {
     return this.withdrawalsService.revealAdminAmounts(id);
+  }
+
+  /**
+   * Payout invoice PDF once Admin approved — the requester only (Admin amounts
+   * stay behind reveal-amounts).
+   */
+  @Get(':id/invoice')
+  @Roles(...WITHDRAWAL_ELIGIBLE_ROLES)
+  async downloadInvoice(
+    @Param('id') id: string,
+    @GetUser('_id') userId: string,
+    @Res() res: Response,
+  ) {
+    const { fileName, pdf } = await this.withdrawalsService.getInvoicePdf(
+      id,
+      String(userId),
+    );
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${fileName}"`,
+      'Content-Length': pdf.length,
+    });
+    res.end(pdf);
   }
 
   @Get(':id')

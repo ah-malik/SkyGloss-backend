@@ -12,6 +12,11 @@ import * as bcrypt from 'bcrypt';
 import { User, UserDocument, UserRole, UserStatus } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import {
+  CreateHubNetworkMemberDto,
+  HUB_MANAGED_ROLES,
+  UpdateHubNetworkMemberDto,
+} from './dto/hub-network-member.dto';
 import axios from 'axios';
 import { ProductGroup, ProductGroupDocument } from '../product-groups/entities/product-group.entity';
 import {
@@ -973,6 +978,15 @@ export class UsersService implements OnModuleInit {
       delete userData.adminAgreementKey;
       delete userData.adminAgreementFileName;
     }
+    // "Update later": no agreement yet; Admin uploads it via Edit User.
+    userData.adminAgreementPending =
+      userData.adminAgreementPending === true &&
+      !userData.adminAgreementKey &&
+      [
+        UserRole.MASTER_PARTNER,
+        UserRole.REGIONAL_PARTNER,
+        UserRole.DISTRIBUTOR,
+      ].includes(userData.role);
 
     // Auto-geocode if coordinates are missing
     if (!userData.latitude || !userData.longitude) {
@@ -3042,9 +3056,15 @@ export class UsersService implements OnModuleInit {
     }
 
     const updatePayload: any = { ...updateUserDto };
-    // Admin-uploaded agreement is set on create only.
+    // Admin-uploaded agreement is set on create, or later by Admin for an
+    // "Update later" user (applied below once the target user is loaded).
+    const laterAgreementKey = String(updatePayload.adminAgreementKey || '').trim();
+    const laterAgreementFileName = String(
+      updatePayload.adminAgreementFileName || '',
+    ).trim();
     delete updatePayload.adminAgreementKey;
     delete updatePayload.adminAgreementFileName;
+    delete updatePayload.adminAgreementPending;
     // Exhibit C size of the Distributor agreement is Admin-only.
     if (currentUser.role !== UserRole.ADMIN) {
       delete updatePayload.performanceYears;
@@ -3068,6 +3088,27 @@ export class UsersService implements OnModuleInit {
     const targetUserForHierarchy = await this.userModel.findById(id);
     if (!targetUserForHierarchy) {
       throw new BadRequestException('User not found');
+    }
+
+    // "Update later" agreement: Admin uploads it later; it then shows as
+    // "Your agreement" (activation state is left as it is).
+    if (
+      currentUser.role === UserRole.ADMIN &&
+      isPartnerAgreementKey(laterAgreementKey) &&
+      targetUserForHierarchy.adminAgreementPending &&
+      !targetUserForHierarchy.adminAgreementKey &&
+      [
+        UserRole.MASTER_PARTNER,
+        UserRole.REGIONAL_PARTNER,
+        UserRole.DISTRIBUTOR,
+      ].includes(updatePayload.role ?? targetUserForHierarchy.role)
+    ) {
+      updatePayload.adminAgreementKey = laterAgreementKey;
+      if (laterAgreementFileName) {
+        updatePayload.adminAgreementFileName = laterAgreementFileName;
+      }
+      updatePayload.adminAgreementUploadedAt = new Date();
+      updatePayload.adminAgreementPending = false;
     }
 
     // Handle Blocking/Unblocking Logic and Overrides
@@ -4173,6 +4214,97 @@ export class UsersService implements OnModuleInit {
   async invalidateNetworkAndOrderCaches(): Promise<void> {
     await this.cache.delByPrefix(CacheKeys.usersPrefix);
     await this.cache.delByPrefix(CacheKeys.ordersPrefix);
+  }
+
+  /**
+   * Hub "Add user": a Distributor / Representative / Promoter created under the
+   * Hub's own Partner ID (never another Hub). Same rules as Admin create.
+   */
+  async createHubNetworkMember(
+    hub: UserDocument,
+    dto: CreateHubNetworkMemberDto,
+  ): Promise<UserDocument> {
+    const hubCode = normalizePartnerCode(hub.partnerCode);
+    if (hub.role !== UserRole.PARTNER || !hubCode) {
+      throw new ForbiddenException('Only a Hub can add network members.');
+    }
+    if (!(HUB_MANAGED_ROLES as readonly UserRole[]).includes(dto.role)) {
+      throw new BadRequestException(
+        'A Hub can only add Distributors, Representatives and Promoters.',
+      );
+    }
+    return this.create({
+      role: dto.role,
+      email: dto.email,
+      password: dto.password,
+      partnerCode: dto.partnerCode,
+      firstName: dto.firstName,
+      lastName: dto.lastName,
+      phoneNumber: dto.phoneNumber,
+      companyName: dto.companyName,
+      address: dto.address || '',
+      city: dto.city,
+      country: dto.country,
+      state: dto.state,
+      zipCode: dto.zipCode,
+      referredByPartnerCode: hubCode,
+    } as CreateUserDto);
+  }
+
+  /** Distributor / Representative / Promoter directly under this Hub, or 403. */
+  private async findHubManagedMember(
+    hub: UserDocument,
+    id: string,
+  ): Promise<UserDocument> {
+    const hubCode = normalizePartnerCode(hub.partnerCode);
+    if (hub.role !== UserRole.PARTNER || !hubCode) {
+      throw new ForbiddenException('Only a Hub can manage network members.');
+    }
+    if (!Types.ObjectId.isValid(id)) {
+      throw new NotFoundException('User not found');
+    }
+    const member = await this.userModel.findById(id);
+    if (!member || member.deletedAt) {
+      throw new NotFoundException('User not found');
+    }
+    if (
+      !(HUB_MANAGED_ROLES as readonly UserRole[]).includes(member.role) ||
+      normalizePartnerCode(member.referredByPartnerCode) !== hubCode
+    ) {
+      throw new ForbiddenException(
+        'You can only manage Distributors, Representatives and Promoters under your Hub.',
+      );
+    }
+    return member;
+  }
+
+  /** Hub edits / blocks its own Distributor / Representative / Promoter. */
+  async updateHubNetworkMember(
+    hub: UserDocument,
+    id: string,
+    dto: UpdateHubNetworkMemberDto,
+  ): Promise<UserDocument | null> {
+    await this.findHubManagedMember(hub, id);
+    const payload: Partial<UpdateUserDto> = {};
+    const fields = [
+      'firstName',
+      'lastName',
+      'phoneNumber',
+      'companyName',
+      'address',
+      'city',
+      'country',
+      'state',
+      'zipCode',
+      'status',
+    ] as const;
+    for (const field of fields) {
+      if (dto[field] !== undefined) (payload as any)[field] = dto[field];
+    }
+    if (Object.keys(payload).length === 0) {
+      throw new BadRequestException('Nothing to update.');
+    }
+    return this.update(id, payload as UpdateUserDto, hub);
   }
 
   async findNetworkUsersForViewer(

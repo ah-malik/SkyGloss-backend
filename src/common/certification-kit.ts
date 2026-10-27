@@ -277,9 +277,9 @@ export function getCertificationKitExtras(
 }
 
 /**
- * Resolve a saved kit recipe against the viewer's own priced catalog.
- * Returns null when any product/size is missing, so a kit is never shown
- * with a different content or price than the one that was saved.
+ * Resolve a saved kit recipe against the viewer's own priced catalog
+ * (their Pricing Group). A product/size that is not in that catalog is left
+ * out of this viewer's kit; null only when nothing of the kit is left.
  */
 export function resolveSavedCertificationKitComponents(
   catalog: CatalogProduct[],
@@ -299,9 +299,9 @@ export function resolveSavedCertificationKitComponents(
       (s) => String(s?.size) === String(item.size),
     );
     const quantity = Math.floor(Number(item.quantity) || 0);
-    if (!product || !sizeEntry || quantity < 1) return null;
+    if (!product || !sizeEntry || quantity < 1) continue;
     const unitPrice = resolveComponentUnitPrice(sizeEntry);
-    if (!(unitPrice >= 0)) return null;
+    if (!(unitPrice >= 0)) continue;
     const name = String(product.name || item.name || 'Product');
     components.push({
       productId: idOf(product),
@@ -313,7 +313,7 @@ export function resolveSavedCertificationKitComponents(
       label: `${quantity}× ${name}${sizeEntry.size ? ` ${sizeEntry.size}` : ''}`,
     });
   }
-  return components;
+  return components.length ? components : null;
 }
 
 export function buildCertificationKitCatalogProduct(params: {

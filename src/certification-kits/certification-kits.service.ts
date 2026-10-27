@@ -22,12 +22,20 @@ import { ExchangeRatesService } from '../exchange-rates/exchange-rates.service';
 import { buildRegistrationFeeQuote } from '../common/registration-pricing';
 import { roundMoney, SavedCertificationKitConfig } from '../common/certification-kit';
 import { normalizeCurrencyCode } from '../common/currency-codes';
+import { GLOBAL_HUB_PARTNER_CODE } from '../common/global-hub';
 
-/** Roles that build a Certification Kit for the shops on their Parent Link. */
-export const CERTIFICATION_KIT_OWNER_ROLES = [
+/** Only a HUB builds, edits and sends the Certification Kit for the shops under it. */
+export const CERTIFICATION_KIT_OWNER_ROLES = [UserRole.PARTNER] as const;
+
+/** Every partner role can open the kit page; non-HUB partners see their HUB's kit, view only. */
+export const CERTIFICATION_KIT_VIEWER_ROLES = [
   UserRole.PARTNER,
   UserRole.DISTRIBUTOR,
+  UserRole.MASTER_PARTNER,
+  UserRole.REGIONAL_PARTNER,
 ] as const;
+
+export type LiveCertificationKitRecipe = Omit<SavedCertificationKitConfig, 'certificationFee'>;
 
 export type CertificationKitFee = { amount: number; currency: string };
 
@@ -110,17 +118,23 @@ export class CertificationKitsService {
     } else if (status) {
       filter.status = status;
     }
-    return this.kitModel
+    const kits = await this.kitModel
       .find(filter)
       .sort({ savedAt: -1, updatedAt: -1 })
       .populate('owner', 'firstName lastName email role country countries partnerCode companyName productGroup')
       .exec();
+    // Only HUB kits are offered to shops, so only those are reviewed.
+    return kits.filter((k) => (k.owner as any)?.role === UserRole.PARTNER);
   }
 
   private async findForReview(id: string): Promise<CertificationKitDocument> {
     if (!Types.ObjectId.isValid(id)) throw new NotFoundException('Certification Kit not found');
     const kit = await this.kitModel.findById(id).exec();
     if (!kit) throw new NotFoundException('Certification Kit not found');
+    const owner = await this.usersService.findOne(String(kit.owner));
+    if (owner?.role !== UserRole.PARTNER) {
+      throw new BadRequestException('Only a HUB’s Certification Kit can be reviewed.');
+    }
     return kit;
   }
 
@@ -248,62 +262,97 @@ export class CertificationKitsService {
     return roundMoney((fee.amount * fromRate) / toRate);
   }
 
+  /** Approved (`live`) recipe of the first HUB in the list that has one. */
+  private async findLiveKitOfHubs(
+    hubs: Array<{ _id: unknown; role?: string } | null | undefined>,
+  ): Promise<{ hubId: string; recipe: LiveCertificationKitRecipe } | null> {
+    const seen = new Set<string>();
+    for (const hub of hubs) {
+      if (!hub || hub.role !== UserRole.PARTNER) continue;
+      const id = String(hub._id);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const doc = await this.kitModel
+        .findOne({ owner: new Types.ObjectId(id), 'live.items.0': { $exists: true } })
+        .select('live')
+        .lean()
+        .exec();
+      const live = doc?.live;
+      if (!live?.items?.length) continue;
+      return {
+        hubId: id,
+        recipe: {
+          items: live.items.map((it) => ({
+            productId: String(it.productId),
+            size: it.size,
+            quantity: it.quantity,
+            name: it.name,
+          })),
+          discountPercent: Number(live.discountPercent) || 0,
+          freeShipping: live.freeShipping !== false,
+          trainingIncluded: !!live.trainingIncluded,
+          trainingPrice: Number(live.trainingPrice) || 0,
+          trainingCurrency: live.currency,
+        },
+      };
+    }
+    return null;
+  }
+
   /**
-   * Approved kit for a shop, or null: its current Parent Link (Hub or Distributor)
-   * first, then the Hub that owns the shop's country (the Hub's Shops list
-   * includes those shops even when their Parent Link points elsewhere).
+   * Approved kit for a shop, or null. The kit comes from the HUB the shop is
+   * under: its Parent Link when that is a HUB, else the HUB of its country
+   * (the HUB's Shops list includes those shops), else GLOBALHUB.
    * The fee is filled in later, once the shop's catalog currency is known.
    */
   async findSavedKitForShop(shop: {
     hubPartnerCode?: string | null;
     country?: string | null;
-  }): Promise<Omit<SavedCertificationKitConfig, 'certificationFee'> | null> {
+  }): Promise<LiveCertificationKitRecipe | null> {
     try {
-      const owners: Array<{ _id: Types.ObjectId; role: string }> = [];
       const parentCode = await this.usersService.resolveActingParentPartnerCodeForShop(shop);
       const parent = parentCode
         ? await this.usersService.findByPartnerCode(parentCode)
         : null;
-      if (parent) owners.push(parent);
-      // A Distributor's shops only get the Distributor's own kit (it fulfils their orders).
-      if (parent?.role !== UserRole.DISTRIBUTOR) {
-        const territoryHub = await this.usersService.findHubByCountry(shop.country);
-        if (territoryHub) owners.push(territoryHub);
-      }
-
-      // Shops only ever see the version an Admin approved (`live`).
-      let kit: CertificationKit['live'] | null = null;
-      for (const owner of owners) {
-        if (!(CERTIFICATION_KIT_OWNER_ROLES as readonly string[]).includes(owner.role)) {
-          continue;
-        }
-        const doc = await this.kitModel
-          .findOne({ owner: owner._id, 'live.items.0': { $exists: true } })
-          .select('live')
-          .lean()
-          .exec();
-        kit = doc?.live || null;
-        if (kit?.items?.length) break;
-      }
-      if (!kit || !kit.items?.length) return null;
-      return {
-        items: kit.items.map((it) => ({
-          productId: String(it.productId),
-          size: it.size,
-          quantity: it.quantity,
-          name: it.name,
-        })),
-        discountPercent: Number(kit.discountPercent) || 0,
-        freeShipping: kit.freeShipping !== false,
-        trainingIncluded: !!kit.trainingIncluded,
-        trainingPrice: Number(kit.trainingPrice) || 0,
-        trainingCurrency: kit.currency,
-      };
+      const territoryHub = await this.usersService.findHubByCountry(shop.country);
+      const globalHub = await this.usersService.findByPartnerCode(GLOBAL_HUB_PARTNER_CODE);
+      // GLOBALHUB is the fallback owner: a real HUB (Parent Link, then country) comes first.
+      const parentIsGlobal =
+        String(parent?.partnerCode || '').toUpperCase() === GLOBAL_HUB_PARTNER_CODE;
+      const found = await this.findLiveKitOfHubs([
+        parentIsGlobal ? null : parent,
+        territoryHub,
+        globalHub,
+      ]);
+      return found?.recipe || null;
     } catch (err) {
       this.logger.warn(
         `Could not resolve Certification Kit for shop: ${(err as Error)?.message || err}`,
       );
       return null;
     }
+  }
+
+  /** The HUB a non-HUB partner works under, and that HUB's approved kit (if any). */
+  async findHubKitForPartner(partnerId: string): Promise<{
+    hub: { _id: string; name: string; partnerCode?: string } | null;
+    recipe: LiveCertificationKitRecipe | null;
+  }> {
+    const hubs = await this.usersService.findOwningHubPartners(partnerId);
+    const hub = hubs.find((h) => h?.role === UserRole.PARTNER) || null;
+    const found = hub ? await this.findLiveKitOfHubs([hub]) : null;
+    return {
+      hub: hub
+        ? {
+            _id: String(hub._id),
+            name:
+              [hub.firstName, hub.lastName].filter(Boolean).join(' ') ||
+              (hub as any).companyName ||
+              hub.email,
+            partnerCode: hub.partnerCode,
+          }
+        : null,
+      recipe: found?.recipe || null,
+    };
   }
 }

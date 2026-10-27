@@ -18,7 +18,7 @@ import {
   resolveCertificationKitComponents,
   resolveComponentUnitPrice,
 } from '../common/certification-kit';
-import { UserDocument } from '../users/entities/user.entity';
+import { UserDocument, UserRole } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/entities/notification.entity';
@@ -105,7 +105,74 @@ export class CertificationKitBuilderService {
     return { catalog, currency, raw };
   }
 
-  async getMine(owner: UserDocument) {
+  /**
+   * The kit page: a HUB gets its own kit to edit; any other partner gets its
+   * HUB's approved kit to view, priced with the partner's own assigned prices.
+   */
+  async getMine(user: UserDocument) {
+    if (user.role !== UserRole.PARTNER) return this.viewForPartner(user);
+    return { mode: 'edit' as const, hub: null, ...(await this.editForHub(user)) };
+  }
+
+  private async viewForPartner(viewer: UserDocument) {
+    const [{ catalog, currency }, { hub, recipe }] = await Promise.all([
+      this.ownerCatalog(viewer),
+      this.kitsService.findHubKitForPartner(String(viewer._id)),
+    ]);
+    const certificationFee = await this.kitsService.getCertificationFeeInCurrency(
+      viewer.country,
+      currency,
+    );
+    // Same rule as shops: products this partner's Pricing Group does not have are left out.
+    const items = (recipe?.items || []).filter((it) =>
+      catalog.some((c) => c.productId === String(it.productId) && c.size === String(it.size)),
+    );
+    let trainingPrice = recipe?.trainingIncluded ? Number(recipe.trainingPrice) || 0 : 0;
+    if (trainingPrice && recipe?.trainingCurrency) {
+      trainingPrice = await this.kitsService.convertAmount(
+        trainingPrice,
+        recipe.trainingCurrency,
+        currency,
+      );
+    }
+    const kit =
+      recipe && items.length
+        ? {
+            items: items.map((it) => ({
+              productId: String(it.productId),
+              name: it.name,
+              size: it.size,
+              quantity: it.quantity,
+            })),
+            freeShipping: recipe.freeShipping !== false,
+            trainingIncluded: !!recipe.trainingIncluded,
+            trainingPrice,
+            discountPercent: Number(recipe.discountPercent) || 0,
+          }
+        : null;
+    return {
+      mode: 'view' as const,
+      hub,
+      status: kit ? 'approved' : 'none',
+      savedAt: null,
+      reviewNote: null,
+      reviewedAt: null,
+      liveApprovedAt: null,
+      kit,
+      starter: kit || {
+        items: [],
+        freeShipping: true,
+        trainingIncluded: false,
+        trainingPrice: 0,
+        discountPercent: 0,
+      },
+      currency,
+      certificationFee,
+      catalog,
+    };
+  }
+
+  private async editForHub(owner: UserDocument) {
     const [{ catalog, currency, raw }, saved] = await Promise.all([
       this.ownerCatalog(owner),
       this.kitsService.findByOwner(String(owner._id)),
@@ -282,6 +349,9 @@ export class CertificationKitBuilderService {
   }
 
   async saveMine(owner: UserDocument, dto: SaveCertificationKitDto) {
+    if (owner.role !== UserRole.PARTNER) {
+      throw new BadRequestException('Only a HUB can change the Certification Kit.');
+    }
     const { catalog, currency } = await this.ownerCatalog(owner);
 
     // Merge duplicate product/size lines and keep only products in the owner's catalog.
