@@ -171,7 +171,7 @@ export class WithdrawalsService {
     }
     if (hubsWithBalance.length > 1 && !dto.hubId) {
       throw new BadRequestException(
-        'Please select a Hub or Distributor. Withdrawals cannot combine commissions earned under different Parent Links.',
+        'Please select your parent Hub before withdrawing.',
       );
     }
 
@@ -185,7 +185,7 @@ export class WithdrawalsService {
       const selected = hubBalances.hubs.find((h) => h.hubId === dto.hubId);
       if (!selected || selected.available <= 0) {
         throw new BadRequestException(
-          'Selected Hub or Distributor has no available commission from that Parent Link.',
+          'Selected Hub has no available commission to withdraw.',
         );
       }
       sourceHub = {

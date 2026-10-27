@@ -11,14 +11,15 @@ import {
 
 describe('certification-kit', () => {
   it('is only for shops that have not paid the certification fee', () => {
-    expect(CERTIFICATION_KIT_ENABLED).toBe(true);
+    // Kill-switch: kit is hidden from everyone while CERTIFICATION_KIT_ENABLED is false.
+    expect(CERTIFICATION_KIT_ENABLED).toBe(false);
     expect(
       isCertificationKitEligibleUser({
         role: 'certified_shop',
         isSelfRegistered: true,
         isPartnerPaid: false,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isCertificationKitEligibleUser({
         role: 'certified_shop',
@@ -32,7 +33,7 @@ describe('certification-kit', () => {
         isSelfRegistered: false,
         isPartnerPaid: false,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isCertificationKitEligibleUser({
         role: 'certified_shop',

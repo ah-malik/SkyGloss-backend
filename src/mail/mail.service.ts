@@ -386,7 +386,7 @@ export class MailService {
           <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:16px; margin:20px 0;">
             <p style="margin:0 0 10px 0;"><strong>Portal Login URL:</strong><br/><a href="${escapeHtml(loginLink)}" style="color:#0EA0DC; word-break:break-all;">${escapeHtml(loginLink)}</a></p>
             <p style="margin:0 0 10px 0;"><strong>Username / Email:</strong><br/>${escapeHtml(loginEmail)}</p>
-            <p style="margin:0;"><strong>Password:</strong><br/>${escapeHtml(plainPassword)}</p>
+            <p style="margin:0;"><strong>Temporary Password:</strong><br/>${escapeHtml(plainPassword)}</p>
           </div>
           ${accessNowButton}
           <p style="color:#64748b; font-size:14px;">Click <strong>Access Now</strong> to set your personal password. After updating, log in with your email and new password. This link is unique to your account and expires in 7 days.</p>

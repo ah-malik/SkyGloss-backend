@@ -13,7 +13,7 @@ export const CERTIFICATION_KIT_SIZE = 'Kit';
  * unpaid shop (certification fee not paid) whose Hub/Distributor has saved a kit
  * (see certification-kits module).
  */
-export const CERTIFICATION_KIT_ENABLED = true;
+export const CERTIFICATION_KIT_ENABLED = false;
 
 /** Percent off component subtotal for the legacy fixed recipe. */
 export const CERTIFICATION_KIT_DISCOUNT_PERCENT = 7;

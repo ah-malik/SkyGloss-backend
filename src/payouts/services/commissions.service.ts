@@ -15,12 +15,11 @@ import { ApprovalAction, AuditService } from './audit.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { NotificationsGateway } from '../../notifications/notifications.gateway';
 import { NotificationType } from '../../notifications/entities/notification.entity';
-import { User, UserDocument } from '../../users/entities/user.entity';
+import { User, UserDocument, UserRole } from '../../users/entities/user.entity';
 import { UsersService } from '../../users/users.service';
 import { normalizePartnerCode } from '../../common/partner-code';
 import { GLOBAL_HUB_PARTNER_CODE } from '../../common/global-hub';
 import { normalizeHubCountries } from '../../common/hub-countries';
-import { isShopParentLinkRole } from '../../common/user-hierarchy';
 import {
   canonicalEarningType,
   missingCommissionAmount,
@@ -376,9 +375,9 @@ export class CommissionsService {
   }
 
   /**
-   * Withdraw Funds picker: group available commissions by the Parent Link
-   * that owned the shop when that commission was earned — never the shop's
-   * current Parent Link. Existing balances are not moved on Parent Link change.
+   * Withdraw Funds: all available commissions withdraw under the member's
+   * current parent Hub (referredBy upline → Hub). Historical actingParent
+   * stamps no longer split balances or route review to old hubs.
    */
   async getAvailableByHub(userId: string): Promise<{
     hubs: WithdrawalHubBalance[];
@@ -393,61 +392,54 @@ export class CommissionsService {
         recipientUserId: uid,
         status: CommissionLifecycleStatus.AVAILABLE,
       })
-      .select('_id amount shopUserId orderId actingParentPartnerCode')
+      .select('amount')
       .lean();
 
-    const recordHubMap = await this.resolveHubCodesForRecords(availableRecords);
-    const availableByHub = new Map<string, number>();
-    for (const record of availableRecords) {
-      const code =
-        recordHubMap.get(String(record._id)) || GLOBAL_HUB_PARTNER_CODE;
-      availableByHub.set(
-        code,
-        Math.round(((availableByHub.get(code) || 0) + record.amount) * 100) /
-          100,
-      );
+    const available =
+      Math.round(
+        availableRecords.reduce(
+          (sum, record) => sum + (Number(record.amount) || 0),
+          0,
+        ) * 100,
+      ) / 100;
+
+    if (available <= 0) {
+      return { hubs: [], currency: 'USD' };
     }
 
-    const hubsById = new Map<string, WithdrawalHubBalance>();
-    for (const [code, amount] of availableByHub.entries()) {
-      if (amount <= 0) continue;
-      const hub = await this.usersService.findByPartnerCode(code);
-      if (!hub || !isShopParentLinkRole(hub.role)) continue;
-      const hubId = hub._id.toString();
-      const existing = hubsById.get(hubId);
-      if (existing) {
-        existing.available =
-          Math.round((existing.available + amount) * 100) / 100;
-        continue;
-      }
-      const countries = normalizeHubCountries(
-        hub.countries?.length
-          ? hub.countries
-          : hub.country
-            ? [hub.country]
-            : [],
-      );
-      hubsById.set(hubId, {
-        hubId,
-        hubPartnerCode: normalizePartnerCode(hub.partnerCode) || code,
-        email: hub.email || '',
-        firstName: hub.firstName || '',
-        lastName: hub.lastName || '',
-        countries,
-        available: Math.round(amount * 100) / 100,
-        role: hub.role,
-      });
+    const parents = await this.usersService.findOwningHubPartners(userId);
+    let hub = parents[0] || null;
+    if (!hub) {
+      hub = await this.usersService.findByPartnerCode(GLOBAL_HUB_PARTNER_CODE);
+    }
+    if (!hub || hub.role !== UserRole.PARTNER) {
+      return { hubs: [], currency: 'USD' };
     }
 
-    const hubs = Array.from(hubsById.values());
-    hubs.sort((a, b) => {
-      if (b.available !== a.available) return b.available - a.available;
-      return (a.email || a.hubPartnerCode).localeCompare(
-        b.email || b.hubPartnerCode,
-      );
-    });
+    const countries = normalizeHubCountries(
+      hub.countries?.length
+        ? hub.countries
+        : hub.country
+          ? [hub.country]
+          : [],
+    );
 
-    return { hubs, currency: 'USD' };
+    return {
+      hubs: [
+        {
+          hubId: hub._id.toString(),
+          hubPartnerCode:
+            normalizePartnerCode(hub.partnerCode) || GLOBAL_HUB_PARTNER_CODE,
+          email: hub.email || '',
+          firstName: hub.firstName || '',
+          lastName: hub.lastName || '',
+          countries,
+          available,
+          role: hub.role,
+        },
+      ],
+      currency: 'USD',
+    };
   }
 
   async resolveActingParentCodesForRecords(
@@ -606,7 +598,8 @@ export class CommissionsService {
   async lockCommissionsForWithdrawal(
     userId: string,
     amount: number,
-    hubPartnerCode?: string,
+    // Kept for call-site compatibility; locking no longer filters by historical hub stamp.
+    _hubPartnerCode?: string,
   ): Promise<{ recordIds: Types.ObjectId[]; total: number }> {
     await this.repairOrphanedPartialAmounts(userId);
     const available = await this.commissionModel
@@ -616,14 +609,10 @@ export class CommissionsService {
       })
       .sort({ availableAt: 1 });
 
-    let eligible = available;
+    // All available commissions can withdraw via the current parent Hub.
+    // Do not filter by historical actingParentPartnerCode stamps.
+    const eligible = available;
     const hubMap = await this.resolveHubCodesForRecords(available);
-    const targetHub = normalizePartnerCode(hubPartnerCode);
-    if (targetHub) {
-      eligible = available.filter(
-        (record) => hubMap.get(record._id.toString()) === targetHub,
-      );
-    }
 
     for (const record of eligible) {
       const resolved = hubMap.get(record._id.toString());

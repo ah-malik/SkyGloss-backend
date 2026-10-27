@@ -6,7 +6,7 @@ export class CreateWithdrawalDto {
   @Min(1)
   amount: number;
 
-  /** Hub whose shop commissions should be withdrawn (required when earnings span multiple hubs). */
+  /** Parent Hub that will review this withdrawal (usually auto-selected). */
   @IsOptional()
   @IsMongoId()
   hubId?: string;
