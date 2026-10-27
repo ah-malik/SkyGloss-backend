@@ -1,6 +1,14 @@
 import { PartialType } from '@nestjs/mapped-types';
 import { CreateUserDto } from './create-user.dto';
-import { IsString, IsOptional, IsNumber, Min, Max } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsNumber,
+  Min,
+  Max,
+  IsArray,
+  IsMongoId,
+} from 'class-validator';
 
 export class UpdateUserDto extends PartialType(CreateUserDto) {
   /**
@@ -28,4 +36,24 @@ export class UpdateUserDto extends PartialType(CreateUserDto) {
   @IsString()
   @IsOptional()
   blockedReason?: string;
+
+  /**
+   * Admin-only: when newly assigning Operational Support, only these order IDs
+   * receive the OSP commission line. Presence of this array (including empty)
+   * suppresses automatic stamp-all-empty-orders recalculation for this update.
+   */
+  @IsArray()
+  @IsMongoId({ each: true })
+  @IsOptional()
+  linkOperationalSupportOrderIds?: string[];
+
+  /**
+   * Admin-only: when newly assigning Shop Introduction Partner, only these
+   * order IDs receive the Shop Introduction commission line. Presence of this
+   * array (including empty) suppresses automatic stamp-all-empty-orders.
+   */
+  @IsArray()
+  @IsMongoId({ each: true })
+  @IsOptional()
+  linkShopIntroductionOrderIds?: string[];
 }

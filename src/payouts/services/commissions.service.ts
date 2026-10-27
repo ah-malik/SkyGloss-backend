@@ -408,7 +408,7 @@ export class CommissionsService {
     }
 
     const parents = await this.usersService.findOwningHubPartners(userId);
-    let hub = parents[0] || null;
+    let hub: UserDocument | null = parents[0] ?? null;
     if (!hub) {
       hub = await this.usersService.findByPartnerCode(GLOBAL_HUB_PARTNER_CODE);
     }

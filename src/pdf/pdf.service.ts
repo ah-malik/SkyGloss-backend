@@ -549,7 +549,7 @@ export class PdfService {
           characterSpacing: 1,
         });
 
-        // ── Left: role title + holder name + Partner ID ──
+        // ── Left: role title + holder name ──
         textAt(data.title, 101.26, 425, FONT_BOLD, 12, theme.accent, {
           characterSpacing: 1.2,
         });
@@ -557,7 +557,8 @@ export class PdfService {
         // Name: design size 56.41pt on one line; long names shrink, then wrap
         // onto two lines so they never run into the Region line (x ≥ 472).
         const nameMaxWidth = 316;
-        const nameBaseline = 518.32;
+        // Name sits just under the role title (role baseline 425).
+        const nameBaseline = 470;
         const fits = (lines: string[], size: number) => {
           doc.font(FONT_SEMI).fontSize(size);
           return lines.every((l) => doc.widthOfString(l) <= nameMaxWidth);
@@ -620,28 +621,30 @@ export class PdfService {
         rule(681.68, 776.72, 427.74);
         textAt('Date', 681.68, 443.06, FONT_REG, 10, GREY);
 
-        if (data.partnerId) {
-          textAt('PARTNER ID', 101.26, 550, FONT_BOLD, 12, theme.accent, {
-            characterSpacing: 1.2,
-          });
-          textAt(data.partnerId, 192.5, 550, FONT_BOLD, 10.5, INK, {
-            characterSpacing: 0.2,
-          });
-        }
-
         // ── Region (value sits on the line; Promoter has none) ──
         if (data.territory !== null) {
           textAt('Region:', 471.8, 518.32, FONT_REG, 11.5, GREY);
           rule(521, 776.72, 519.2);
           if (data.territory) {
-            let terrSize = 11.5;
+            let terrSize = 18;
             doc.font(FONT_BOLD).fontSize(terrSize);
-            while (terrSize > 7 && doc.widthOfString(data.territory) > 254) {
+            while (terrSize > 10 && doc.widthOfString(data.territory) > 254) {
               terrSize -= 0.5;
               doc.fontSize(terrSize);
             }
             textAt(data.territory, 521, 518.32, FONT_BOLD, terrSize, INK);
           }
+        }
+
+        // ── Partner ID under Region (right column) ──
+        if (data.partnerId) {
+          const partnerIdY = data.territory !== null ? 560 : 518.32;
+          textAt('PARTNER ID', 471.8, partnerIdY, FONT_BOLD, 12, theme.accent, {
+            characterSpacing: 1.2,
+          });
+          textAt(data.partnerId, 563, partnerIdY, FONT_BOLD, 10.5, INK, {
+            characterSpacing: 0.2,
+          });
         }
 
         doc.end();

@@ -456,6 +456,50 @@ export class OrdersController {
     return this.ordersService.getDashboardStats();
   }
 
+  /**
+   * Preview existing shop orders + role commission when Admin is about to
+   * assign Operational Support or Shop Introduction Partner.
+   */
+  @Get('admin/shops/:shopId/partner-assignment-preview')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  previewPartnerAssignmentOrders(
+    @Param('shopId') shopId: string,
+    @Query('earningType') earningType: string,
+    @Query('partnerCode') partnerCode: string,
+    @Query('ratePercent') ratePercent?: string,
+  ) {
+    const normalizedType =
+      earningType === 'Operational Support' ||
+      earningType === 'operational_support'
+        ? 'Operational Support'
+        : earningType === 'Shop Introduction' ||
+            earningType === 'shop_introduction'
+          ? 'Shop Introduction'
+          : null;
+    if (!normalizedType) {
+      throw new BadRequestException(
+        'earningType must be Operational Support or Shop Introduction',
+      );
+    }
+    if (!partnerCode?.trim()) {
+      throw new BadRequestException('partnerCode is required');
+    }
+    let parsedRate: number | null = null;
+    if (ratePercent != null && String(ratePercent).trim() !== '') {
+      const n = Number(ratePercent);
+      if (!Number.isFinite(n) || n < 0 || n > 100) {
+        throw new BadRequestException('ratePercent must be between 0 and 100');
+      }
+      parsedRate = n;
+    }
+    return this.ordersService.previewPartnerAssignmentOrders(shopId, {
+      earningType: normalizedType,
+      partnerCode,
+      ratePercent: parsedRate,
+    });
+  }
+
   @Get('admin/exchange-rates')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)

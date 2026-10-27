@@ -65,7 +65,10 @@ import { RedisCacheService } from '../redis/redis-cache.service';
 import { CacheKeys, CacheTtl } from '../redis/redis.constants';
 import { UserActivityService } from '../user-activity/user-activity.service';
 import { UserActivityAction } from '../user-activity/entities/user-activity-log.entity';
-import { queueShopCommissionRecalculation } from '../common/shop-commission-recalculation';
+import {
+  queueSelectiveShopCommissionLink,
+  queueShopCommissionRecalculation,
+} from '../common/shop-commission-recalculation';
 import {
   requiresOnlinePaymentShopOrder,
   resolveShopOrderStripeAccountKey,
@@ -3080,10 +3083,26 @@ export class UsersService implements OnModuleInit {
     const partnerIntroCode = normalizePartnerCode(updateUserDto.partnerIntroCode);
     const operationalSupportCodeRaw =
       updateUserDto.operationalSupportRepresentativeCode;
+    // Admin selective existing-order link (not persisted on the user doc).
+    const linkOperationalSupportOrderIds = Array.isArray(
+      updateUserDto.linkOperationalSupportOrderIds,
+    )
+      ? updateUserDto.linkOperationalSupportOrderIds
+      : undefined;
+    const linkShopIntroductionOrderIds = Array.isArray(
+      updateUserDto.linkShopIntroductionOrderIds,
+    )
+      ? updateUserDto.linkShopIntroductionOrderIds
+      : undefined;
+    const hasSelectiveOrderLink =
+      linkOperationalSupportOrderIds !== undefined ||
+      linkShopIntroductionOrderIds !== undefined;
     delete updatePayload.firstOrderShopIntroductionRate;
     delete updatePayload.firstOrderPartnerDevelopmentRate;
     delete updatePayload.partnerIntroCode;
     delete updatePayload.operationalSupportRepresentativeCode;
+    delete updatePayload.linkOperationalSupportOrderIds;
+    delete updatePayload.linkShopIntroductionOrderIds;
 
     const targetUserForHierarchy = await this.userModel.findById(id);
     if (!targetUserForHierarchy) {
@@ -3703,7 +3722,27 @@ export class UsersService implements OnModuleInit {
       shopForRecalc = shop;
     }
 
-    if (
+    if (shopForRecalc && hasSelectiveOrderLink) {
+      // Admin chose which existing orders to link — do not stamp every empty order.
+      // Only Admin may send these fields; strip for everyone else above.
+      if (currentUser.role === UserRole.ADMIN) {
+        const shopId = shopForRecalc._id.toString();
+        if (linkOperationalSupportOrderIds?.length) {
+          queueSelectiveShopCommissionLink({
+            shopUserId: shopId,
+            earningType: 'Operational Support',
+            orderIds: linkOperationalSupportOrderIds,
+          });
+        }
+        if (linkShopIntroductionOrderIds?.length) {
+          queueSelectiveShopCommissionLink({
+            shopUserId: shopId,
+            earningType: 'Shop Introduction',
+            orderIds: linkShopIntroductionOrderIds,
+          });
+        }
+      }
+    } else if (
       shopForRecalc &&
       this.shouldRecalculateShopCommissions(
         targetUserForHierarchy,

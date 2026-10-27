@@ -152,7 +152,12 @@ import {
 import { CouponsService, ShopRegistrationCouponResult } from '../coupons/coupons.service';
 import { StripeCouponSyncService } from '../coupons/stripe-coupon-sync.service';
 import { CommissionsService } from '../payouts/services/commissions.service';
-import { registerShopCommissionRecalculationHandler } from '../common/shop-commission-recalculation';
+import {
+  PartnerAssignmentEarningType,
+  registerSelectiveShopCommissionLinkHandler,
+  registerShopCommissionRecalculationHandler,
+  SelectiveShopCommissionLinkParams,
+} from '../common/shop-commission-recalculation';
 import {
   softDeleteSetPayload,
   softDeleteUnsetPayload,
@@ -252,6 +257,9 @@ export class OrdersService implements OnModuleInit {
   async onModuleInit() {
     registerShopCommissionRecalculationHandler((shopUserId) =>
       this.recalculateCommissionsForShop(shopUserId),
+    );
+    registerSelectiveShopCommissionLinkHandler((params) =>
+      this.linkSelectedOrdersToPartnerEarning(params),
     );
     await this.exchangeRatesService.refreshRatesFromMarket();
     await this.repairBrokenFxOrders();
@@ -3495,6 +3503,587 @@ export class OrdersService implements OnModuleInit {
     }
 
     return { processed, updated };
+  }
+
+  /**
+   * Admin preview: list shop orders with eligibility + role-specific commission
+   * for a proposed OSP or Shop Introduction Partner assignment.
+   *
+   * Does not mutate orders or shop assignments. Commission amounts follow the
+   * same base/rate rules as applyOrderCommissions for that earning type only.
+   */
+  async previewPartnerAssignmentOrders(
+    shopUserId: string,
+    opts: {
+      earningType: PartnerAssignmentEarningType;
+      partnerCode: string;
+      ratePercent?: number | null;
+    },
+  ): Promise<{
+    earningType: PartnerAssignmentEarningType;
+    partnerCode: string;
+    partnerName: string;
+    ratePercent: number;
+    orders: Array<{
+      orderId: string;
+      orderNumber: string;
+      orderDate: string | null;
+      orderAmount: number;
+      currency: string;
+      convertedUsdAmount: number;
+      status: string;
+      partnerRole: PartnerAssignmentEarningType;
+      commissionAmount: number;
+      commissionPercent: number;
+      eligible: boolean;
+      eligibilityStatus: 'eligible' | 'pending' | 'not_eligible';
+      ineligibleReason: string | null;
+      alreadyAssigned: boolean;
+      shippedAt: string | null;
+    }>;
+    summary: {
+      totalOrders: number;
+      eligibleCount: number;
+      pendingCount: number;
+      notEligibleCount: number;
+      totalEligibleOrderAmountUsd: number;
+      totalEligibleCommissionUsd: number;
+    };
+  }> {
+    const shop = await this.usersService.findOne(shopUserId);
+    if (!shop || shop.role !== UserRole.CERTIFIED_SHOP) {
+      throw new BadRequestException('Shop not found');
+    }
+
+    const partnerCode = normalizePartnerCode(opts.partnerCode);
+    if (!partnerCode) {
+      throw new BadRequestException('Partner code is required');
+    }
+
+    const partnerUser = await this.usersService.findByPartnerCode(partnerCode);
+    if (!partnerUser?.partnerCode) {
+      throw new BadRequestException('Partner not found');
+    }
+
+    if (opts.earningType === 'Operational Support') {
+      if (partnerUser.role !== UserRole.MASTER_PARTNER) {
+        throw new BadRequestException(
+          'Operational Support must be a Representative.',
+        );
+      }
+    } else if (
+      partnerUser.role !== UserRole.MASTER_PARTNER &&
+      partnerUser.role !== UserRole.REGIONAL_PARTNER
+    ) {
+      throw new BadRequestException(
+        'Shop Introduction Partner must be a Representative or Promoter.',
+      );
+    }
+
+    const ratePercent = this.resolvePreviewRatePercent(
+      opts.earningType,
+      shop,
+      partnerUser,
+      opts.ratePercent,
+    );
+
+    const partnerName = [partnerUser.firstName, partnerUser.lastName]
+      .filter(Boolean)
+      .join(' ')
+      .trim() || partnerUser.partnerCode;
+
+    const orders = await this.orderModel
+      .find({
+        user: shopUserId,
+        status: {
+          $in: [
+            OrderStatus.PENDING,
+            OrderStatus.PENDING_PAYMENT,
+            OrderStatus.PAID,
+            OrderStatus.SHIPPED,
+            OrderStatus.DELIVERED,
+            OrderStatus.CANCELLED,
+          ],
+        },
+      } as any)
+      .sort({ createdAt: -1 })
+      .exec();
+
+    type PreviewOrderRow = {
+      orderId: string;
+      orderNumber: string;
+      orderDate: string | null;
+      orderAmount: number;
+      currency: string;
+      convertedUsdAmount: number;
+      status: string;
+      partnerRole: PartnerAssignmentEarningType;
+      commissionAmount: number;
+      commissionPercent: number;
+      eligible: boolean;
+      eligibilityStatus: 'eligible' | 'pending' | 'not_eligible';
+      ineligibleReason: string | null;
+      alreadyAssigned: boolean;
+      shippedAt: string | null;
+    };
+
+    const rows: PreviewOrderRow[] = [];
+    for (const order of orders) {
+      const monetary = resolveCommissionOrderAmounts(order);
+      const createdAt =
+        (order as Order & { createdAt?: Date }).createdAt || null;
+      const shippedAt = order.shippedAt || null;
+      const existing = (order.commissions || []).find(
+        (c) =>
+          String(c.earningType || '')
+            .replace(/\s*\(partial[^)]*\)\s*$/i, '')
+            .trim() === opts.earningType,
+      );
+      const alreadyAssigned = !!existing;
+      const commissionAmount = roundMoney(
+        monetary.convertedUsdAmount * (ratePercent / 100),
+      );
+
+      let eligible = false;
+      let eligibilityStatus: 'eligible' | 'pending' | 'not_eligible' =
+        'not_eligible';
+      let ineligibleReason: string | null = null;
+
+      if (isRegistrationOrder(order)) {
+        ineligibleReason = 'Registration orders are not commissionable';
+      } else if (order.status === OrderStatus.CANCELLED) {
+        ineligibleReason = 'Order is cancelled';
+      } else if (alreadyAssigned) {
+        ineligibleReason = `${opts.earningType} commission already assigned on this order`;
+      } else if (
+        order.status !== OrderStatus.PENDING &&
+        order.status !== OrderStatus.PENDING_PAYMENT &&
+        order.status !== OrderStatus.PAID &&
+        order.status !== OrderStatus.SHIPPED &&
+        order.status !== OrderStatus.DELIVERED
+      ) {
+        ineligibleReason = `Order status ${order.status} is not commissionable`;
+      } else if (monetary.convertedUsdAmount <= 0) {
+        ineligibleReason = 'Order has no commissionable amount';
+      } else {
+        eligible = true;
+        // Payable / available still follow shipping + holding period after link.
+        if (
+          order.status === OrderStatus.SHIPPED ||
+          order.status === OrderStatus.DELIVERED
+        ) {
+          eligibilityStatus = 'eligible';
+        } else {
+          eligibilityStatus = 'pending';
+        }
+      }
+
+      rows.push({
+        orderId: order._id.toString(),
+        orderNumber: order.orderNumber,
+        orderDate: createdAt ? new Date(createdAt).toISOString() : null,
+        orderAmount: roundMoney(
+          Number(order.originalAmount ?? order.totalAmount) || 0,
+        ),
+        currency: String(
+          order.originalCurrency || order.currency || SYSTEM_BASE_CURRENCY,
+        ).toUpperCase(),
+        convertedUsdAmount: monetary.convertedUsdAmount,
+        status: String(order.status),
+        partnerRole: opts.earningType,
+        commissionAmount: eligible ? commissionAmount : 0,
+        commissionPercent: ratePercent,
+        eligible,
+        eligibilityStatus,
+        ineligibleReason,
+        alreadyAssigned,
+        shippedAt: shippedAt ? new Date(shippedAt).toISOString() : null,
+      });
+    }
+
+    const eligibleRows = rows.filter((r) => r.eligible);
+    const summary = {
+      totalOrders: rows.length,
+      eligibleCount: eligibleRows.length,
+      pendingCount: rows.filter((r) => r.eligibilityStatus === 'pending')
+        .length,
+      notEligibleCount: rows.filter(
+        (r) => r.eligibilityStatus === 'not_eligible',
+      ).length,
+      totalEligibleOrderAmountUsd: roundMoney(
+        eligibleRows.reduce((sum, r) => sum + r.convertedUsdAmount, 0),
+      ),
+      totalEligibleCommissionUsd: roundMoney(
+        eligibleRows.reduce((sum, r) => sum + r.commissionAmount, 0),
+      ),
+    };
+
+    return {
+      earningType: opts.earningType,
+      partnerCode,
+      partnerName,
+      ratePercent,
+      orders: rows,
+      summary,
+    };
+  }
+
+  private resolvePreviewRatePercent(
+    earningType: PartnerAssignmentEarningType,
+    shop: {
+      shopIntroductionFirstOrderRatePercent?: number | null;
+      operationalSupportRatePercent?: number | null;
+    },
+    partnerUser: {
+      role?: string;
+      customCommissionRate?: number | null;
+    },
+    explicitRate?: number | null,
+  ): number {
+    if (
+      explicitRate != null &&
+      !Number.isNaN(Number(explicitRate))
+    ) {
+      return Math.max(0, Math.min(100, Number(explicitRate)));
+    }
+
+    if (earningType === 'Operational Support') {
+      const shopOs = shop.operationalSupportRatePercent;
+      if (shopOs != null && !Number.isNaN(Number(shopOs))) {
+        return Math.max(0, Math.min(100, Number(shopOs)));
+      }
+      return 10;
+    }
+
+    const foRates = this.resolveCommissionRatesForShop(
+      {
+        shopIntroductionFirstOrderRatePercent:
+          shop.shopIntroductionFirstOrderRatePercent ?? undefined,
+      },
+      partnerUser,
+    );
+    return foRates.shopIntroductionRate;
+  }
+
+  /**
+   * After Admin assigns OSP or Shop Intro and selects existing orders, link
+   * only those orders to the new earning type. Never rewrites an earning type
+   * that already exists on the order (snapshot / duplicate protection).
+   */
+  async linkSelectedOrdersToPartnerEarning(
+    params: SelectiveShopCommissionLinkParams,
+  ): Promise<{ linked: number; skipped: number }> {
+    const { shopUserId, earningType, orderIds } = params;
+    const uniqueIds = [
+      ...new Set(
+        (orderIds || [])
+          .map((id) => String(id || '').trim())
+          .filter((id) => Types.ObjectId.isValid(id)),
+      ),
+    ];
+    if (!uniqueIds.length) {
+      return { linked: 0, skipped: 0 };
+    }
+
+    const shop = await this.usersService.findOne(shopUserId);
+    if (!shop || shop.role !== UserRole.CERTIFIED_SHOP) {
+      return { linked: 0, skipped: uniqueIds.length };
+    }
+
+    let linked = 0;
+    let skipped = 0;
+
+    for (const orderId of uniqueIds) {
+      const order = await this.orderModel.findById(orderId).exec();
+      if (!order) {
+        skipped += 1;
+        continue;
+      }
+
+      const orderShopId =
+        typeof order.user === 'object' &&
+        order.user !== null &&
+        '_id' in (order.user as object)
+          ? String((order.user as any)._id)
+          : String(order.user);
+      if (orderShopId !== String(shopUserId)) {
+        skipped += 1;
+        continue;
+      }
+
+      if (isRegistrationOrder(order)) {
+        skipped += 1;
+        continue;
+      }
+
+      if (
+        order.status !== OrderStatus.PENDING &&
+        order.status !== OrderStatus.PENDING_PAYMENT &&
+        order.status !== OrderStatus.PAID &&
+        order.status !== OrderStatus.SHIPPED &&
+        order.status !== OrderStatus.DELIVERED
+      ) {
+        skipped += 1;
+        continue;
+      }
+
+      const hasEarningType = (order.commissions || []).some(
+        (c) =>
+          String(c.earningType || '')
+            .replace(/\s*\(partial[^)]*\)\s*$/i, '')
+            .trim() === earningType,
+      );
+      if (hasEarningType) {
+        skipped += 1;
+        continue;
+      }
+
+      // Always append only the requested earning type (and Partner Development
+      // when linking Shop Introduction). Do not call full applyOrderCommissions
+      // — that would also stamp the other role if both were just assigned.
+      const appended = await this.appendMissingEarningTypeToOrder(
+        order._id.toString(),
+        earningType,
+        { allowEmptyCommissions: true },
+      );
+      if (!appended) {
+        skipped += 1;
+        continue;
+      }
+
+      const refreshed = await this.orderModel.findById(order._id).exec();
+      if (!refreshed) {
+        skipped += 1;
+        continue;
+      }
+
+      const nowHasType = (refreshed.commissions || []).some(
+        (c) =>
+          String(c.earningType || '')
+            .replace(/\s*\(partial[^)]*\)\s*$/i, '')
+            .trim() === earningType,
+      );
+      if (!nowHasType) {
+        skipped += 1;
+        continue;
+      }
+
+      linked += 1;
+
+      if (
+        refreshed.status === OrderStatus.SHIPPED ||
+        refreshed.status === OrderStatus.DELIVERED
+      ) {
+        const shippedAt =
+          refreshed.shippedAt ||
+          (refreshed as Order & { updatedAt?: Date }).updatedAt ||
+          new Date();
+        await this.commissionsService
+          .syncFromShippedOrder(refreshed._id.toString(), shippedAt)
+          .catch((err) =>
+            this.logger.error(
+              `Failed to sync commission records after selective link for order ${refreshed.orderNumber}`,
+              err,
+            ),
+          );
+      }
+    }
+
+    this.logger.log(
+      `[Commission] Shop ${shopUserId}: selective ${earningType} link — ${linked} linked, ${skipped} skipped`,
+    );
+
+    return { linked, skipped };
+  }
+
+  /**
+   * Append a missing earning type onto an order without changing existing
+   * recipients. When allowEmptyCommissions is true, also works for orders
+   * that never received a commission snapshot (selective late assignment).
+   */
+  private async appendMissingEarningTypeToOrder(
+    orderId: string,
+    earningType: PartnerAssignmentEarningType,
+    options?: { allowEmptyCommissions?: boolean },
+  ): Promise<boolean> {
+    const order = await this.orderModel.findById(orderId);
+    if (!order || isRegistrationOrder(order)) return false;
+    if (!order.commissions?.length && !options?.allowEmptyCommissions) {
+      return false;
+    }
+
+    const already = (order.commissions || []).some(
+      (c) =>
+        String(c.earningType || '')
+          .replace(/\s*\(partial[^)]*\)\s*$/i, '')
+          .trim() === earningType,
+    );
+    if (already) return false;
+
+    const shopUserId =
+      typeof order.user === 'object' &&
+      order.user !== null &&
+      '_id' in (order.user as object)
+        ? String((order.user as any)._id)
+        : String(order.user);
+
+    let shopUser = await this.usersService.findOne(shopUserId);
+    if (!shopUser || shopUser.role !== UserRole.CERTIFIED_SHOP) return false;
+
+    shopUser = await this.usersService.assignShopPromoterNetworkEarnings(shopUser);
+    const promoterFoReady =
+      shopUser.partnerDevelopmentPromoterEligible === true &&
+      normalizePartnerCode(shopUser.shopIntroductionRepresentativeCode) ===
+        normalizePartnerCode(shopUser.referredByPartnerCode);
+    if (!promoterFoReady) {
+      if (!shopUser.shopIntroductionRepresentativeCode) {
+        shopUser = await this.usersService.assignShopEarningRepresentatives(shopUser);
+      } else if (
+        shopUser.partnerDevelopmentEligible !== true ||
+        !shopUser.partnerDevelopmentRepresentativeCode
+      ) {
+        shopUser = await this.usersService.assignShopEarningRepresentatives(shopUser);
+      }
+      shopUser = await this.usersService.ensureShopPartnerDevelopmentAssignment(
+        shopUser,
+      );
+      shopUser = await this.usersService.assignShopPromoterNetworkEarnings(shopUser);
+    }
+
+    const monetary = resolveCommissionOrderAmounts(order);
+    if (monetary.convertedUsdAmount <= 0) return false;
+
+    const shopIntroUserForMode = shopUser.shopIntroductionRepresentativeCode
+      ? await this.usersService.findByPartnerCode(
+          shopUser.shopIntroductionRepresentativeCode,
+        )
+      : null;
+
+    let livePartnerIntroCode = normalizePartnerCode(
+      shopUser.partnerDevelopmentRepresentativeCode,
+    );
+    if (shopIntroUserForMode) {
+      const fromSiUser =
+        normalizePartnerCode(
+          shopIntroUserForMode.partnerDevelopmentRepresentativeCode,
+        ) ||
+        normalizePartnerCode(
+          shopIntroUserForMode.partnerDevelopmentPromoterCode,
+        );
+      if (fromSiUser) {
+        livePartnerIntroCode = fromSiUser;
+      } else if (shopIntroUserForMode.role === UserRole.REGIONAL_PARTNER) {
+        const parentCode = normalizePartnerCode(
+          shopIntroUserForMode.referredByPartnerCode,
+        );
+        const parent = parentCode
+          ? await this.usersService.findByPartnerCode(parentCode)
+          : null;
+        if (parent?.role === UserRole.MASTER_PARTNER && parentCode) {
+          livePartnerIntroCode = parentCode;
+        }
+      }
+    }
+    if (
+      livePartnerIntroCode &&
+      livePartnerIntroCode ===
+        normalizePartnerCode(shopUser.shopIntroductionRepresentativeCode)
+    ) {
+      livePartnerIntroCode = '';
+    }
+
+    const introPartnerCode = normalizePartnerCode(
+      shopUser.shopIntroductionRepresentativeCode,
+    );
+    const shopIntroduction = introPartnerCode
+      ? await this.resolveCommissionRecipient(introPartnerCode)
+      : null;
+    const partnerDevelopment = livePartnerIntroCode
+      ? await this.resolveCommissionRecipient(livePartnerIntroCode)
+      : null;
+
+    const operationalSupportUser = shopUser.operationalSupportRepresentativeCode
+      ? await this.usersService.findByPartnerCode(
+          shopUser.operationalSupportRepresentativeCode,
+        )
+      : null;
+    const operationalSupport =
+      operationalSupportUser?.partnerCode &&
+      operationalSupportUser.role === UserRole.MASTER_PARTNER
+        ? {
+            _id: operationalSupportUser._id.toString(),
+            partnerCode: operationalSupportUser.partnerCode,
+            role: operationalSupportUser.role,
+          }
+        : null;
+
+    const foRates = this.resolveCommissionRatesForShop(
+      shopUser,
+      shopIntroUserForMode,
+    );
+    const operationalSupportRatePercent =
+      shopUser.operationalSupportRatePercent != null &&
+      !Number.isNaN(Number(shopUser.operationalSupportRatePercent))
+        ? Math.max(
+            0,
+            Math.min(100, Number(shopUser.operationalSupportRatePercent)),
+          )
+        : 10;
+
+    const allEntries = calculateRepresentativeCommissionEntries({
+      shopId: shopUserId,
+      assignments: {
+        shopIntroductionRepresentativeCode:
+          shopUser.shopIntroductionRepresentativeCode,
+        partnerDevelopmentRepresentativeCode: livePartnerIntroCode,
+        partnerDevelopmentCommissionPaid: false,
+        partnerDevelopmentEligible: !!partnerDevelopment,
+        partnerDevelopmentRatePercent: foRates.partnerDevelopmentRate,
+        shopIntroductionFirstOrderRatePercent: foRates.shopIntroductionRate,
+      },
+      recipients: {
+        shopIntroduction,
+        partnerDevelopment,
+        operationalSupport,
+      },
+      monetary,
+      isFirstSuccessfulOrder: false,
+      defaultShopIntroductionRatePercent: foRates.shopIntroductionRate,
+      operationalSupportRatePercent,
+    });
+
+    const existingTypes = new Set(
+      (order.commissions || []).map((c) =>
+        String(c.earningType || '')
+          .replace(/\s*\(partial[^)]*\)\s*$/i, '')
+          .trim(),
+      ),
+    );
+
+    const toAppend = allEntries.filter((entry) => {
+      const type = String(entry.earningType || '').trim();
+      if (existingTypes.has(type)) return false;
+      if (earningType === 'Operational Support') {
+        return type === 'Operational Support';
+      }
+      // Shop Introduction assignment may also add Partner Development under
+      // existing rules when that type is not already on the order.
+      return type === 'Shop Introduction' || type === 'Partner Development';
+    });
+
+    if (!toAppend.length) return false;
+
+    order.commissions = [
+      ...(order.commissions || []),
+      ...toAppend.map((entry) => ({
+        ...entry,
+        status: 'pending' as const,
+      })),
+    ];
+    order.markModified('commissions');
+    await order.save();
+    await this.invalidateOrderReadCaches();
+    return true;
   }
 
   /** Queue Stripe→Wise transfer using commissions already saved on the order. */
