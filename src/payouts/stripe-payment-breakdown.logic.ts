@@ -1,4 +1,5 @@
 import { isRegistrationOrder } from '../common/order-totals';
+import { getEffectiveBaseAmount, roundMoney } from '../common/order-monetary';
 import {
   resolveShopOrderStripeAccountKey,
   StripeAccountKey,
@@ -14,6 +15,8 @@ export type StripeAccountPaymentBreakdown = {
   registration: PaymentBreakdownBucket;
   shopOrder: PaymentBreakdownBucket;
   total: PaymentBreakdownBucket;
+  /** Amounts as charged on Stripe, per currency (e.g. EUR on Stripe Europe). */
+  chargedByCurrency: Record<string, number>;
 };
 
 export type StripePaymentBreakdown = {
@@ -37,6 +40,7 @@ function emptyAccount(key: StripeAccountKey): StripeAccountPaymentBreakdown {
     registration: emptyBucket(),
     shopOrder: emptyBucket(),
     total: emptyBucket(),
+    chargedByCurrency: {},
   };
 }
 
@@ -48,12 +52,20 @@ function addBucket(
   target.amount = Math.round((target.amount + amount) * 100) / 100;
 }
 
+/**
+ * Bucket paid Stripe checkouts by Stripe account. Amounts are the locked USD
+ * base value (orders are charged in EUR, USD, … so raw totals can't be added);
+ * chargedByCurrency keeps the original charged amounts per account.
+ */
 export function buildStripePaymentBreakdown(
   orders: Array<{
     orderNumber?: string;
     items?: { product?: string }[];
     totalAmount?: number;
     baseCurrencyAmount?: number;
+    currency?: string;
+    originalCurrency?: string;
+    originalAmount?: number;
     shippingAddress?: { country?: string };
     user?: { country?: string } | string;
   }>,
@@ -66,22 +78,40 @@ export function buildStripePaymentBreakdown(
   };
 
   for (const order of orders) {
-    const amount = Number(order.totalAmount ?? order.baseCurrencyAmount ?? 0);
+    const amount = Number(getEffectiveBaseAmount(order));
     if (!Number.isFinite(amount) || amount <= 0) continue;
 
     const userCountry =
       typeof order.user === 'object' && order.user !== null
         ? order.user.country
         : undefined;
-    const stripeAccountKey = resolveShopOrderStripeAccountKey(
-      order.shippingAddress?.country,
-      userCountry,
-    );
+    const isRegistration = isRegistrationOrder(order);
+    // Same routing as checkout: registration by the user's country,
+    // product orders by shipping country (then user country).
+    const stripeAccountKey = isRegistration
+      ? resolveShopOrderStripeAccountKey(
+          undefined,
+          userCountry || order.shippingAddress?.country,
+        )
+      : resolveShopOrderStripeAccountKey(
+          order.shippingAddress?.country,
+          userCountry,
+        );
     const bucket = accounts[stripeAccountKey];
-    const category = isRegistrationOrder(order) ? 'registration' : 'shopOrder';
+    const category = isRegistration ? 'registration' : 'shopOrder';
 
     addBucket(bucket[category], amount);
     addBucket(bucket.total, amount);
+
+    const chargedCurrency = String(
+      order.originalCurrency || order.currency || currency,
+    ).toUpperCase();
+    const chargedAmount = Number(order.originalAmount ?? order.totalAmount ?? 0);
+    if (Number.isFinite(chargedAmount) && chargedAmount > 0) {
+      bucket.chargedByCurrency[chargedCurrency] = roundMoney(
+        (bucket.chargedByCurrency[chargedCurrency] || 0) + chargedAmount,
+      );
+    }
   }
 
   const combined = {
@@ -107,7 +137,7 @@ export function buildStripePaymentBreakdown(
   return {
     currency,
     note:
-      'Paid orders with Stripe checkout in SkyGloss. Stripe balance may differ after payouts, refunds, or fees.',
+      'Paid, shipped and delivered orders with Stripe checkout, in USD at the rate locked on each order. Stripe balance may differ after payouts, refunds, or fees.',
     accounts,
     combined,
   };

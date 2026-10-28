@@ -13,12 +13,15 @@ export class StripePaymentBreakdownService {
   async getBreakdown(currency = 'USD') {
     const orders = await this.orderModel
       .find({
-        status: OrderStatus.PAID,
+        // Shipped / delivered orders were paid too (not only status PAID).
+        status: {
+          $in: [OrderStatus.PAID, OrderStatus.SHIPPED, OrderStatus.DELIVERED],
+        },
         stripeSessionId: { $exists: true, $nin: [null, ''] },
       })
       .populate('user', 'country')
       .select(
-        'orderNumber items totalAmount baseCurrencyAmount shippingAddress stripeSessionId user',
+        'orderNumber items totalAmount baseCurrencyAmount currency originalCurrency originalAmount shippingAddress stripeSessionId user',
       )
       .lean()
       .exec();
