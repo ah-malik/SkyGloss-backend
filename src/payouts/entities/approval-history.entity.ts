@@ -11,6 +11,8 @@ export enum ApprovalAction {
   BANK_VERIFIED = 'bank_verified',
   HUB_APPROVE = 'hub_approve',
   HUB_REJECT = 'hub_reject',
+  /** Hub approval removed: request forwarded straight to Admin. */
+  SENT_TO_ADMIN = 'sent_to_admin',
   ADMIN_APPROVE = 'admin_approve',
   ADMIN_REJECT = 'admin_reject',
   PAYMENT_COMPLETED = 'payment_completed',

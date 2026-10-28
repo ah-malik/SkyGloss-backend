@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  OnApplicationBootstrap,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -32,7 +33,7 @@ import { formatRoleLabel } from '../../common/role-labels';
 import { buildPayoutInvoicePdf } from '../payout-invoice.pdf';
 
 @Injectable()
-export class WithdrawalsService {
+export class WithdrawalsService implements OnApplicationBootstrap {
   constructor(
     @InjectModel(WithdrawalRequest.name)
     private withdrawalModel: Model<WithdrawalRequestDocument>,
@@ -209,6 +210,8 @@ export class WithdrawalsService {
     }
 
     const bank = await this.bankDetailsService.getVerifiedPrimaryOrThrow(userId);
+    // No Hub approval step: with bank details the request goes straight to
+    // Admin (sendToAdmin below); without, it waits for bank details first.
     const initialStatus = bank
       ? WithdrawalStatus.WAITING_HUB_APPROVAL
       : WithdrawalStatus.WAITING_BANK_DETAILS;
@@ -263,6 +266,12 @@ export class WithdrawalsService {
       metadata: { amount: lockedTotal, recordIds },
     });
 
+    const current =
+      initialStatus === WithdrawalStatus.WAITING_HUB_APPROVAL
+        ? (await this.sendToAdmin(request._id as Types.ObjectId, initialStatus)) ??
+          request
+        : request;
+
     await this.auditService.logTransaction({
       userId: new Types.ObjectId(userId),
       category: 'withdrawal',
@@ -272,7 +281,7 @@ export class WithdrawalsService {
       referenceId: request.requestNumber,
       sourceDocumentId: request._id as Types.ObjectId,
       sourceCollection: 'WithdrawalRequest',
-      snapshot: { status: initialStatus },
+      snapshot: { status: current.status },
     });
 
     try {
@@ -290,11 +299,103 @@ export class WithdrawalsService {
       );
     }
 
-    if (initialStatus !== WithdrawalStatus.WAITING_BANK_DETAILS) {
-      await this.notifyStakeholdersOnSubmit(user, request);
+    if (current.status !== WithdrawalStatus.WAITING_BANK_DETAILS) {
+      await this.notifyStakeholdersOnSubmit(user, current);
     }
 
-    return this.enrichWithdrawal(request);
+    return this.enrichWithdrawal(current);
+  }
+
+  /**
+   * Hub approval is no longer part of the flow: move a request to Admin.
+   * Does the wallet credit Hub approval used to do, so Admin reject (reversal)
+   * and payout (debit) bookkeeping stay the same. The status-guarded update
+   * makes it safe to call twice (concurrent requests / multiple instances).
+   */
+  private async sendToAdmin(
+    requestId: Types.ObjectId,
+    fromStatus: WithdrawalStatus,
+    extraSet: Record<string, unknown> = {},
+  ): Promise<WithdrawalRequestDocument | null> {
+    const previous = await this.withdrawalModel.findOneAndUpdate(
+      { _id: requestId, status: fromStatus },
+      {
+        $set: {
+          ...extraSet,
+          status: WithdrawalStatus.SENT_TO_ADMIN,
+          walletCreditedAt: new Date(),
+        },
+      },
+      { new: false },
+    );
+    if (!previous) return null;
+
+    if (!previous.walletCreditedAt) {
+      await this.walletsService.creditFromHubApproval(
+        previous.userId.toString(),
+        previous.requestedAmount,
+        previous._id.toString(),
+      );
+    }
+    await this.auditService.logApproval({
+      withdrawalRequestId: previous._id as Types.ObjectId,
+      action: ApprovalAction.SENT_TO_ADMIN,
+      actorUserId: previous.userId,
+      actorRole: previous.userRole as UserRole,
+      previousStatus: fromStatus,
+      newStatus: WithdrawalStatus.SENT_TO_ADMIN,
+      note: 'Sent directly to Admin (Hub approval not required)',
+    });
+    return this.withdrawalModel.findById(requestId);
+  }
+
+  /**
+   * Requests still waiting on Hub approval (submitted before the Hub step was
+   * removed) are forwarded to Admin. Idempotent; runs on startup and when
+   * withdrawal lists load.
+   */
+  async forwardHubPendingToAdmin(): Promise<number> {
+    const pending = await this.withdrawalModel
+      .find({ status: WithdrawalStatus.WAITING_HUB_APPROVAL })
+      .select('_id')
+      .lean();
+    let forwarded = 0;
+    for (const { _id } of pending) {
+      try {
+        const updated = await this.sendToAdmin(
+          _id as Types.ObjectId,
+          WithdrawalStatus.WAITING_HUB_APPROVAL,
+        );
+        if (!updated) continue;
+        forwarded += 1;
+        const requester = await this.usersService.findOne(
+          updated.userId.toString(),
+        );
+        if (requester) {
+          await this.notifyAdminsPendingPayout(requester as any, updated);
+        }
+      } catch (err) {
+        console.error(
+          '[WithdrawalsService] Forward to Admin failed',
+          String(_id),
+          err,
+        );
+      }
+    }
+    return forwarded;
+  }
+
+  async onApplicationBootstrap() {
+    try {
+      const forwarded = await this.forwardHubPendingToAdmin();
+      if (forwarded > 0) {
+        console.log(
+          `[WithdrawalsService] Forwarded ${forwarded} Hub-pending withdrawal(s) to Admin`,
+        );
+      }
+    } catch (err) {
+      console.error('[WithdrawalsService] Startup forward to Admin failed', err);
+    }
   }
 
   private requesterLabel(user: {
@@ -323,27 +424,7 @@ export class WithdrawalsService {
         ? ' (awaiting bank details from requester)'
         : '';
 
-    const hubUsers = await this.resolveReviewHubs(
-      user._id.toString(),
-      request.sourceHubId?.toString(),
-    );
-    for (const hub of hubUsers) {
-      await this.pushNotification({
-        type: NotificationType.WITHDRAWAL_SUBMITTED,
-        title: 'Withdrawal Review Required',
-        message: `${label} submitted a withdrawal of $${amount}.${statusNote}`,
-        user: hub._id.toString(),
-        triggeredBy: user._id.toString(),
-        link: '/dashboard/partner/earnings?tab=payouts',
-        metadata: {
-          withdrawalRequestId: request._id,
-          requestNumber: request.requestNumber,
-        },
-      });
-      // Logged, never thrown (MailService).
-      await this.mailService.sendWithdrawalHubReviewEmail(hub, request, user);
-    }
-
+    // Hub no longer reviews withdrawals; only Admin is notified.
     await this.notifyAllAdmins({
       type: NotificationType.WITHDRAWAL_SUBMITTED,
       title: 'New Withdrawal Request',
@@ -370,7 +451,7 @@ export class WithdrawalsService {
     await this.notifyAllAdmins({
       type: NotificationType.WITHDRAWAL_HUB_APPROVED,
       title: 'Withdrawal Ready for Admin Review',
-      message: `${label}'s withdrawal ${request.requestNumber} ($${request.requestedAmount.toFixed(2)}) was approved by Hub and needs payout.`,
+      message: `${label}'s withdrawal ${request.requestNumber} ($${request.requestedAmount.toFixed(2)}) is waiting for Admin review.`,
       triggeredBy: request.hubReviewerId?.toString(),
       link: '/withdrawals',
       metadata: {
@@ -382,6 +463,7 @@ export class WithdrawalsService {
 
   async listMyWithdrawals(userId: string) {
     await this.resumeWaitingWithdrawalsForUser(userId);
+    await this.forwardHubPendingToAdmin();
     const items = await this.withdrawalModel
       .find({ userId: new Types.ObjectId(userId) })
       .sort({ createdAt: -1 })
@@ -551,6 +633,7 @@ export class WithdrawalsService {
     }
 
     await this.resumeAllStuckWaitingBankDetails();
+    await this.forwardHubPendingToAdmin();
 
     const all = await this.withdrawalModel
       .find({})
@@ -578,70 +661,12 @@ export class WithdrawalsService {
       throw new ForbiddenException('Hub access only');
     }
 
-    await this.resumeAllStuckWaitingBankDetails();
-
-    const allPending = await this.withdrawalModel
-      .find({ status: WithdrawalStatus.WAITING_HUB_APPROVAL })
-      .sort({ createdAt: 1 })
-      .populate('userId', 'firstName lastName email partnerCode role')
-      .lean();
-
-    const items =
-      hub.role === UserRole.DISTRIBUTOR
-        ? await this.filterWithdrawalsForActingDistributor(hubId, allPending)
-        : await this.filterWithdrawalsForHub(hubId, allPending);
-    for (const w of items) {
-      await this.ensureHubNotifiedForPending(
-        w,
-        w.userId as { _id?: Types.ObjectId | string; firstName?: string; lastName?: string; partnerCode?: string },
-      );
-    }
-
-    return Promise.all(
-      items.map((w) => this.formatWithdrawalWithReviewAccess(w, hub)),
-    );
-  }
-
-  private async ensureHubNotifiedForPending(
-    request: Record<string, any>,
-    requester: { _id?: Types.ObjectId | string; firstName?: string; lastName?: string; partnerCode?: string },
-  ) {
-    const requestId = request._id?.toString?.();
-    if (!requestId) return;
-
-    const requesterId = requester?._id?.toString?.() || String(request.userId || '');
-    const owners = await this.resolveReviewHubs(
-      requesterId,
-      this.resolveSourceHubId(request),
-    );
-    const recipients = [...owners];
-    const label = this.requesterLabel(requester as any);
-    const amount = Number(request.requestedAmount || 0).toFixed(2);
-
-    for (const hub of recipients) {
-      const hubId = hub._id.toString();
-      const exists = await this.notificationsService.existsWithdrawalNotification(
-        requestId,
-        hubId,
-      );
-      if (exists) continue;
-
-      await this.pushNotification({
-        type: NotificationType.WITHDRAWAL_SUBMITTED,
-        title: 'Withdrawal Review Required',
-        message: `${label} submitted a withdrawal of $${amount}.`,
-        user: hubId,
-        triggeredBy: requesterId,
-        link: '/dashboard/partner/earnings?tab=payouts',
-        metadata: {
-          withdrawalRequestId: requestId,
-          requestNumber: request.requestNumber,
-        },
-      });
-    }
+    // Hub approval removed: nothing waits on a Hub any more.
+    return [];
   }
 
   async listAdminPending() {
+    await this.forwardHubPendingToAdmin();
     const items = await this.withdrawalModel
       .find({ status: WithdrawalStatus.SENT_TO_ADMIN })
       .sort({ createdAt: 1 })
@@ -652,6 +677,7 @@ export class WithdrawalsService {
   }
 
   async listAdminAll(status?: string) {
+    await this.forwardHubPendingToAdmin();
     const query: Record<string, unknown> = {};
     if (status === 'pending') {
       query.status = WithdrawalStatus.SENT_TO_ADMIN;
@@ -669,126 +695,16 @@ export class WithdrawalsService {
     return items.map((w) => this.stripAdminFinancials(this.formatWithdrawal(w)));
   }
 
+  /** Hub approval removed: withdrawals go directly to Admin. */
   async hubReview(
-    withdrawalId: string,
-    hubUserId: string,
-    action: 'approve' | 'reject',
-    note?: string,
-  ) {
-    const hubId = String(hubUserId?.toString?.() ?? hubUserId);
-    const request = await this.withdrawalModel.findById(withdrawalId);
-    if (!request) throw new NotFoundException('Withdrawal not found');
-
-    if (request.status !== WithdrawalStatus.WAITING_HUB_APPROVAL) {
-      throw new BadRequestException('Withdrawal is not awaiting hub approval');
-    }
-
-    const hub = await this.usersService.findOne(hubId);
-    if (
-      !hub ||
-      (hub.role !== UserRole.PARTNER && hub.role !== UserRole.DISTRIBUTOR)
-    ) {
-      throw new ForbiddenException();
-    }
-
-    const sourceHubId = request.sourceHubId?.toString();
-    if (hub.role === UserRole.DISTRIBUTOR) {
-      const canReview = await this.canDistributorReviewWithdrawal(hubId, request);
-      if (!canReview) {
-        throw new ForbiddenException('This withdrawal is not assigned to you as Parent Link.');
-      }
-    } else if (sourceHubId) {
-      if (sourceHubId !== hubId) {
-        throw new ForbiddenException('This withdrawal belongs to a different hub');
-      }
-    } else {
-      const inNetwork = await this.isHubOwnerOfRequester(
-        hubId,
-        request.userId.toString(),
-      );
-      if (!inNetwork && request.userId.toString() !== hubId) {
-        throw new ForbiddenException('User is not in your network');
-      }
-      if (!(await this.canViewerReviewWithdrawal(hubId, request))) {
-        throw new ForbiddenException(
-          'This withdrawal was created after Parent Link moved. Hub access is view-only.',
-        );
-      }
-    }
-
-    if (action === 'reject') {
-      request.status = WithdrawalStatus.REJECTED_BY_HUB;
-      request.hubReviewerId = new Types.ObjectId(hubId);
-      request.hubReviewedAt = new Date();
-      request.hubReviewNote = note;
-      await request.save();
-
-      await this.commissionsService.unlockCommissions(request.commissionRecordIds);
-      await this.auditService.logApproval({
-        withdrawalRequestId: request._id as Types.ObjectId,
-        action: ApprovalAction.HUB_REJECT,
-        actorUserId: new Types.ObjectId(hubId),
-        actorRole: hub.role,
-        previousStatus: WithdrawalStatus.WAITING_HUB_APPROVAL,
-        newStatus: WithdrawalStatus.REJECTED_BY_HUB,
-        note,
-      });
-
-      await this.pushNotification({
-        type: NotificationType.WITHDRAWAL_HUB_REJECTED,
-        title: 'Withdrawal Rejected',
-        message: `Your withdrawal ${request.requestNumber} was rejected by your Hub.${note ? ` Note: ${note}` : ''}`,
-        user: request.userId.toString(),
-        triggeredBy: hubId,
-        link: '/dashboard/partner/earnings?tab=payouts',
-      });
-
-      return this.enrichWithdrawal(request);
-    }
-
-    // Approve
-    request.status = WithdrawalStatus.HUB_APPROVED;
-    request.hubReviewerId = new Types.ObjectId(hubId);
-    request.hubReviewedAt = new Date();
-    request.hubReviewNote = note;
-    request.walletCreditedAt = new Date();
-    await request.save();
-
-    await this.walletsService.creditFromHubApproval(
-      request.userId.toString(),
-      request.requestedAmount,
-      request._id.toString(),
-      hubId,
+    _withdrawalId: string,
+    _hubUserId: string,
+    _action: 'approve' | 'reject',
+    _note?: string,
+  ): Promise<never> {
+    throw new BadRequestException(
+      'Hub approval is no longer required. Withdrawals go directly to Admin.',
     );
-
-    request.status = WithdrawalStatus.SENT_TO_ADMIN;
-    await request.save();
-
-    await this.auditService.logApproval({
-      withdrawalRequestId: request._id as Types.ObjectId,
-      action: ApprovalAction.HUB_APPROVE,
-      actorUserId: new Types.ObjectId(hubId),
-      actorRole: hub.role,
-      previousStatus: WithdrawalStatus.WAITING_HUB_APPROVAL,
-      newStatus: WithdrawalStatus.SENT_TO_ADMIN,
-      note,
-    });
-
-    await this.pushNotification({
-      type: NotificationType.WITHDRAWAL_HUB_APPROVED,
-      title: 'Withdrawal Approved by Hub',
-      message: `Your withdrawal ${request.requestNumber} was approved and sent to Admin for payout.`,
-      user: request.userId.toString(),
-      triggeredBy: hubId,
-      link: '/dashboard/partner/earnings?tab=payouts',
-    });
-
-    const requester = await this.usersService.findOne(request.userId.toString());
-    if (requester) {
-      await this.notifyAdminsPendingPayout(requester as any, request);
-    }
-
-    return this.enrichWithdrawal(request);
   }
 
   async verifyBankForAdmin(withdrawalId: string, adminUserId: string) {
@@ -1364,18 +1280,10 @@ export class WithdrawalsService {
     const user = await this.usersService.findOne(id);
     let resumed = 0;
     for (const request of waiting) {
-      const updated = await this.withdrawalModel.findOneAndUpdate(
-        {
-          _id: request._id,
-          status: WithdrawalStatus.WAITING_BANK_DETAILS,
-        },
-        {
-          $set: {
-            bankDetailsId: bank._id,
-            status: WithdrawalStatus.WAITING_HUB_APPROVAL,
-          },
-        },
-        { new: true },
+      const updated = await this.sendToAdmin(
+        request._id as Types.ObjectId,
+        WithdrawalStatus.WAITING_BANK_DETAILS,
+        { bankDetailsId: bank._id },
       );
       if (!updated) continue;
       resumed += 1;
@@ -1384,7 +1292,7 @@ export class WithdrawalsService {
           await this.notifyStakeholdersOnSubmit(user as any, updated);
         } catch (err) {
           console.error(
-            '[WithdrawalsService] Hub notify failed after bank details resume',
+            '[WithdrawalsService] Admin notify failed after bank details resume',
             request._id,
             err,
           );
