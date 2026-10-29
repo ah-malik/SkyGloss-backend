@@ -75,6 +75,7 @@ import { StripeAccountService } from './services/stripe-account.service';
 import { StripeMoneyManagementService } from './services/stripe-money-management.service';
 import { StripeWisePayoutsService } from './services/stripe-wise-payouts.service';
 import { StripePaymentBreakdownService } from './services/stripe-payment-breakdown.service';
+import { HubProductCommissionService } from './services/hub-product-commission.service';
 import { OrderCommissionTransferService } from './services/order-commission-transfer.service';
 import { EuropeCommissionTrackingService } from './services/europe-commission-tracking.service';
 import { UsersModule } from '../users/users.module';
@@ -133,6 +134,7 @@ import { ExchangeRatesModule } from '../exchange-rates/exchange-rates.module';
     StripeMoneyManagementService,
     StripeWisePayoutsService,
     StripePaymentBreakdownService,
+    HubProductCommissionService,
     OrderCommissionTransferService,
     EuropeCommissionTrackingService,
   ],

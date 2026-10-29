@@ -65,6 +65,10 @@ export class WithdrawalRequest {
   @Prop()
   sourceHubPartnerCode?: string;
 
+  /** 'hub_product_commission' = Hub 10% payout (no commission records). */
+  @Prop()
+  source?: string;
+
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
   hubReviewerId?: Types.ObjectId;
 

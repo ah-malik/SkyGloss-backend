@@ -31,6 +31,11 @@ import { randomUUID } from 'crypto';
 import { MailService } from '../../mail/mail.service';
 import { formatRoleLabel } from '../../common/role-labels';
 import { buildPayoutInvoicePdf } from '../payout-invoice.pdf';
+import { HubProductCommissionService } from './hub-product-commission.service';
+import {
+  HUB_PRODUCT_COMMISSION_RATE,
+  HUB_PRODUCT_COMMISSION_SOURCE,
+} from '../hub-product-commission.logic';
 
 @Injectable()
 export class WithdrawalsService implements OnApplicationBootstrap {
@@ -48,6 +53,7 @@ export class WithdrawalsService implements OnApplicationBootstrap {
     private notificationsGateway: NotificationsGateway,
     private wiseService: WiseService,
     private mailService: MailService,
+    private hubProductCommission: HubProductCommissionService,
   ) {}
 
   getWiseAccountMeta() {
@@ -302,6 +308,102 @@ export class WithdrawalsService implements OnApplicationBootstrap {
     if (current.status !== WithdrawalStatus.WAITING_BANK_DETAILS) {
       await this.notifyStakeholdersOnSubmit(user, current);
     }
+
+    return this.enrichWithdrawal(current);
+  }
+
+  /**
+   * Allowlisted Hub withdraws its 10% product commission. Same Admin → Wise
+   * flow as other withdrawals; no commission records to lock, the summary
+   * (released − in request − paid out) caps the amount instead.
+   */
+  async submitHubProductCommissionWithdrawal(userId: string, rawAmount: number) {
+    const user = await this.usersService.findOne(userId);
+    if (!user) throw new NotFoundException('User not found');
+    this.hubProductCommission.assertEligible(user);
+
+    const active = await this.withdrawalModel.findOne({
+      userId: new Types.ObjectId(userId),
+      status: { $in: ACTIVE_WITHDRAWAL_STATUSES },
+    });
+    if (active) {
+      throw new BadRequestException(
+        'You already have an active withdrawal request. Please wait for it to complete.',
+      );
+    }
+
+    const bank = await this.bankDetailsService.getVerifiedPrimaryOrThrow(userId);
+    if (!bank) {
+      throw new BadRequestException(
+        'Please add your bank details before requesting a withdrawal.',
+      );
+    }
+
+    const summary = await this.hubProductCommission.getSummary(user);
+    const amount = Math.round(Number(rawAmount) * 100) / 100;
+    if (!Number.isFinite(amount) || amount <= 0 || amount > summary.available) {
+      throw new BadRequestException(
+        `Invalid amount. Available balance: $${summary.available.toFixed(2)}`,
+      );
+    }
+
+    const request = await this.withdrawalModel.create({
+      requestNumber: await this.generateRequestNumber(),
+      userId: new Types.ObjectId(userId),
+      userPartnerCode: user.partnerCode || '',
+      userRole: user.role,
+      requestedAmount: amount,
+      currency: 'USD',
+      status: WithdrawalStatus.WAITING_HUB_APPROVAL,
+      commissionRecordIds: [],
+      bankDetailsId: bank._id,
+      sourceHubId: user._id,
+      sourceHubPartnerCode: user.partnerCode || '',
+      source: HUB_PRODUCT_COMMISSION_SOURCE,
+    });
+
+    await this.auditService.logApproval({
+      withdrawalRequestId: request._id as Types.ObjectId,
+      action: ApprovalAction.WITHDRAWAL_SUBMIT,
+      actorUserId: new Types.ObjectId(userId),
+      actorRole: user.role,
+      newStatus: WithdrawalStatus.WAITING_HUB_APPROVAL,
+      metadata: { amount, source: HUB_PRODUCT_COMMISSION_SOURCE },
+    });
+
+    const current =
+      (await this.sendToAdmin(
+        request._id as Types.ObjectId,
+        WithdrawalStatus.WAITING_HUB_APPROVAL,
+      )) ?? request;
+
+    await this.auditService.logTransaction({
+      userId: new Types.ObjectId(userId),
+      category: 'withdrawal',
+      title: `Withdrawal request ${request.requestNumber}`,
+      amount,
+      direction: 'debit',
+      referenceId: request.requestNumber,
+      sourceDocumentId: request._id as Types.ObjectId,
+      sourceCollection: 'WithdrawalRequest',
+      snapshot: { status: current.status, source: HUB_PRODUCT_COMMISSION_SOURCE },
+    });
+
+    try {
+      const admins = await this.usersService.findAdminUsers();
+      await this.mailService.sendWithdrawalRequestNotification(
+        current,
+        user,
+        admins.map((admin) => admin.email || '').filter(Boolean),
+      );
+    } catch (err) {
+      console.error(
+        '[WithdrawalsService] Withdrawal request email failed',
+        request.requestNumber,
+        err,
+      );
+    }
+    await this.notifyStakeholdersOnSubmit(user as any, current);
 
     return this.enrichWithdrawal(current);
   }
@@ -642,10 +744,11 @@ export class WithdrawalsService implements OnApplicationBootstrap {
       .populate('hubReviewerId', 'firstName lastName email partnerCode')
       .lean();
 
-    const items =
+    const items = (
       hub.role === UserRole.DISTRIBUTOR
         ? await this.filterWithdrawalsForActingDistributor(hubId, all)
-        : await this.filterWithdrawalsForHub(hubId, all);
+        : await this.filterWithdrawalsForHub(hubId, all)
+    ).filter((w) => this.resolveRequesterId(w) !== hubId);
     return Promise.all(
       items.map((w) => this.formatWithdrawalWithReviewAccess(w, hub)),
     );
@@ -1007,12 +1110,22 @@ export class WithdrawalsService implements OnApplicationBootstrap {
         country: requester.country,
       },
       hubPartnerCode: request.sourceHubPartnerCode,
-      lines: records.map((r) => ({
-        orderNumber: r.orderNumber,
-        earningType: r.earningType,
-        percentage: r.percentage,
-        amount: r.amount,
-      })),
+      lines:
+        request.source === HUB_PRODUCT_COMMISSION_SOURCE
+          ? [
+              {
+                orderNumber: '—',
+                earningType: 'Hub Product Commission',
+                percentage: HUB_PRODUCT_COMMISSION_RATE * 100,
+                amount: request.requestedAmount,
+              },
+            ]
+          : records.map((r) => ({
+              orderNumber: r.orderNumber,
+              earningType: r.earningType,
+              percentage: r.percentage,
+              amount: r.amount,
+            })),
       wise: {
         reference: request.wiseTransferReference,
         fee: request.wiseFee,

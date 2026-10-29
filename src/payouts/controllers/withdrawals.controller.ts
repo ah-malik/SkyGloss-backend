@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { Response } from 'express';
 import { WithdrawalsService } from '../services/withdrawals.service';
+import { HubProductCommissionService } from '../services/hub-product-commission.service';
 import { CreateWithdrawalDto } from '../dto/create-withdrawal.dto';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -26,7 +27,30 @@ import {
 @Controller('withdrawals')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class WithdrawalsController {
-  constructor(private readonly withdrawalsService: WithdrawalsService) {}
+  constructor(
+    private readonly withdrawalsService: WithdrawalsService,
+    private readonly hubProductCommission: HubProductCommissionService,
+  ) {}
+
+  /** Hub 10% product commission payouts (allowlisted Hubs only). */
+  @Get('hub-commission/summary')
+  @Roles(UserRole.PARTNER)
+  async hubCommissionSummary(@GetUser() user: UserDocument) {
+    if (!this.hubProductCommission.isEligible(user)) return { eligible: false };
+    return this.hubProductCommission.getSummary(user);
+  }
+
+  @Post('hub-commission')
+  @Roles(UserRole.PARTNER)
+  submitHubCommission(
+    @GetUser('_id') userId: string,
+    @Body() body: { amount: number },
+  ) {
+    return this.withdrawalsService.submitHubProductCommissionWithdrawal(
+      String(userId),
+      Number(body?.amount),
+    );
+  }
 
   @Get('available-balance')
   @Roles(...WITHDRAWAL_ELIGIBLE_ROLES)
@@ -48,7 +72,7 @@ export class WithdrawalsController {
   }
 
   @Get('my')
-  @Roles(...WITHDRAWAL_ELIGIBLE_ROLES)
+  @Roles(...WITHDRAWAL_ELIGIBLE_ROLES, UserRole.PARTNER)
   listMine(@GetUser('_id') userId: string) {
     return this.withdrawalsService.listMyWithdrawals(userId);
   }
@@ -100,7 +124,7 @@ export class WithdrawalsController {
    * stay behind reveal-amounts).
    */
   @Get(':id/invoice')
-  @Roles(...WITHDRAWAL_ELIGIBLE_ROLES)
+  @Roles(...WITHDRAWAL_ELIGIBLE_ROLES, UserRole.PARTNER)
   async downloadInvoice(
     @Param('id') id: string,
     @GetUser('_id') userId: string,
