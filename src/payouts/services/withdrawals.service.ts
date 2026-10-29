@@ -786,6 +786,9 @@ export class WithdrawalsService implements OnApplicationBootstrap {
       query.status = WithdrawalStatus.SENT_TO_ADMIN;
     } else if (status) {
       query.status = status;
+    } else {
+      // All History: requests still awaiting Admin approval stay in Pending only.
+      query.status = { $ne: WithdrawalStatus.SENT_TO_ADMIN };
     }
 
     const items = await this.withdrawalModel
@@ -1597,7 +1600,7 @@ export class WithdrawalsService implements OnApplicationBootstrap {
       waiting_hub_approval: 'Waiting for Hub Approval',
       rejected_by_hub: 'Rejected by Hub',
       hub_approved: 'Hub Approved',
-      sent_to_admin: 'Sent to Admin',
+      sent_to_admin: 'Awaiting Admin Approval',
       admin_approved: 'Admin Approved',
       rejected_by_admin: 'Rejected by Admin',
       payment_processing: 'Payment Processing',
