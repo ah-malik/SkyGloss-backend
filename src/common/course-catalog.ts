@@ -1,15 +1,15 @@
 /** Role-based required courses — keep in sync with frontend `courseCatalog.ts`. */
 
 export const COURSE_STEPS: Record<string, number> = {
-  UNDERSTANDING_SKYGLOSS: 48,
+  UNDERSTANDING_SKYGLOSS: 46,
   WELCOME_TO_SKYGLOSS: 24,
   PARTNER_SALES_MANUAL: 27,
   SHOP_SALES: 26,
   MARKETING_MASTERCLASS: 20,
   PARTNER_MARKETING_MANUAL: 15,
-  YOUR_ROLE_DISTRIBUTOR: 55,
-  YOUR_ROLE_PROMOTER: 33,
-  YOUR_ROLE_REPRESENTATIVE: 52,
+  YOUR_ROLE_DISTRIBUTOR: 40,
+  YOUR_ROLE_PROMOTER: 28,
+  YOUR_ROLE_REPRESENTATIVE: 34,
   /** Distributors and Representatives only; listed but not required. */
   TRAINER_MANUAL: 14,
   SKYGLOSS_SHOP_SETUP: 4,
