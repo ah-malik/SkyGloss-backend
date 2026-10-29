@@ -1825,7 +1825,42 @@ export class OrdersService implements OnModuleInit {
   }
 
   async generateInvoicePdf(order: any): Promise<Buffer> {
-    return this.pdfService.generateOrderDetails(order);
+    return this.pdfService.generateOrderDetails(
+      await this.ensureOrderUserForInvoice(order),
+    );
+  }
+
+  /**
+   * Invoice Business Name needs shopName/companyName. Many Stripe webhook
+   * paths only populate firstName/lastName/email — reload those fields.
+   */
+  private async ensureOrderUserForInvoice(order: any): Promise<any> {
+    if (!order) return order;
+    const user = order.user;
+    const populated =
+      user &&
+      typeof user === 'object' &&
+      (user.shopName !== undefined || user.companyName !== undefined);
+    if (populated) return order;
+
+    const userId =
+      user && typeof user === 'object' && user._id != null
+        ? String(user._id)
+        : user
+          ? String(user)
+          : '';
+    if (!userId) return order;
+
+    try {
+      const fullUser = await this.usersService.findOne(userId);
+      if (!fullUser) return order;
+      if (typeof order.toObject === 'function') {
+        return { ...order.toObject(), user: fullUser };
+      }
+      return { ...order, user: fullUser };
+    } catch {
+      return order;
+    }
   }
 
   private async retrieveRegistrationCheckoutSession(
@@ -4117,7 +4152,7 @@ export class OrdersService implements OnModuleInit {
       .findById(orderId)
       .populate(
         'user',
-        'firstName lastName email role partnerCode country hubPartnerCode referredByPartnerCode additionalEmail',
+        'firstName lastName email role partnerCode country hubPartnerCode referredByPartnerCode additionalEmail shopName companyName',
       )
       .exec();
     if (!order || order.status !== OrderStatus.PAID) return false;

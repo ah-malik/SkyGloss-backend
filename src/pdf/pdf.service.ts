@@ -761,17 +761,15 @@ export class PdfService {
       const customerEmail =
         clean(user?.email) || clean(shippingPreview.email) || 'N/A';
       const addressLine2 = clean(shippingPreview.address2);
+      // Never use address2 as Business Name — that field is suite/apt/unit only.
       const businessName = [
         user?.companyName,
         user?.shopName,
         // Pickup orders store the Hub's name here, not the customer's business.
         snapshot.isPickup ? '' : shippingPreview.companyName,
-        snapshot.isPickup ? '' : addressLine2,
       ]
         .map((value) => clean(value))
         .find(Boolean);
-      const addressLine2IsBusinessName =
-        !!addressLine2 && businessName === addressLine2;
 
       const contentLeft = doc.page.margins.left;
       const contentWidth =
@@ -906,8 +904,8 @@ export class PdfService {
           doc.text(`Company: ${shipping.companyName}`);
         }
         doc.text(`Address: ${shipping.address || 'N/A'}`);
-        if (shipping.address2 && !addressLine2IsBusinessName) {
-          doc.text(`Address Line 2: ${shipping.address2}`);
+        if (addressLine2) {
+          doc.text(`Address Line 2: ${addressLine2}`);
         }
         doc.text(`City: ${shipping.city || 'N/A'}`);
         doc.text(`State: ${shipping.state || 'N/A'}`);
