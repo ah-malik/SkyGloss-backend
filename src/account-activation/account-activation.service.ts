@@ -29,6 +29,12 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/entities/notification.entity';
 import { isTrainingRequirementSatisfied } from '../common/course-completion';
 import { PartnerAgreementFilesService } from '../users/partner-agreement-files.service';
+import { MediaService } from '../media/media.service';
+import {
+  SIGNATURE_UPLOAD_MAX_BYTES,
+  SIGNATURE_UPLOAD_TYPES,
+  isSignatureMediaKey,
+} from './signature-upload';
 
 @Injectable()
 export class AccountActivationService implements OnModuleInit {
@@ -41,6 +47,7 @@ export class AccountActivationService implements OnModuleInit {
     private readonly bankDetailsService: BankDetailsService,
     private readonly notificationsService: NotificationsService,
     private readonly partnerAgreementFiles: PartnerAgreementFilesService,
+    private readonly mediaService: MediaService,
   ) {}
 
   async onModuleInit() {
@@ -281,6 +288,44 @@ export class AccountActivationService implements OnModuleInit {
     };
   }
 
+  /** Stores a partner's uploaded signature image in the Media Library (B2). */
+  async uploadSignatureImage(userId: string, file?: Express.Multer.File) {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('Please choose a signature image.');
+    }
+    if (!SIGNATURE_UPLOAD_TYPES.includes(file.mimetype)) {
+      throw new BadRequestException(
+        'Signature must be a PNG, JPG or WEBP image.',
+      );
+    }
+    if (file.size > SIGNATURE_UPLOAD_MAX_BYTES) {
+      throw new BadRequestException(
+        'Signature image must be 500 KB or smaller.',
+      );
+    }
+    const user = await this.usersService.findOne(userId);
+    if (!user) throw new NotFoundException('User not found');
+    this.assertEligible(user);
+
+    const ext =
+      file.mimetype === 'image/png'
+        ? 'png'
+        : file.mimetype === 'image/webp'
+          ? 'webp'
+          : 'jpg';
+    const who =
+      [user.firstName, user.lastName].filter(Boolean).join(' ').trim() ||
+      user.partnerCode ||
+      'partner';
+    const stored = await this.mediaService.uploadBuffer({
+      buffer: file.buffer,
+      originalName: `signature-${who}.${ext}`,
+      contentType: file.mimetype,
+      userId,
+    });
+    return { key: stored.fileName, mediaId: stored.id, size: file.size };
+  }
+
   async submit(userId: string, dto: SubmitAccountActivationDto) {
     const user = await this.usersService.findOne(userId);
     if (!user) throw new NotFoundException('User not found');
@@ -298,6 +343,14 @@ export class AccountActivationService implements OnModuleInit {
 
     if (!dto.agreementAccepted) {
       throw new BadRequestException('You must accept the agreement to continue.');
+    }
+    if (
+      dto.agreementDetails?.signatureType === 'uploaded' &&
+      !isSignatureMediaKey(dto.agreementDetails.signatureFileKey)
+    ) {
+      throw new BadRequestException(
+        'Please upload your signature image again.',
+      );
     }
 
     const needsBank = requiresActivationBankDetails(user.role);

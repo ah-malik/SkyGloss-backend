@@ -6,8 +6,11 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { AccountActivationService } from './account-activation.service';
 import { SubmitAccountActivationDto } from './dto/submit-account-activation.dto';
 import { HubReviewActivationDto } from './dto/hub-review-activation.dto';
@@ -18,6 +21,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { GetUser } from '../common/decorators/get-user.decorator';
 import { UserRole } from '../users/entities/user.entity';
 import { ACCOUNT_ACTIVATION_ELIGIBLE_ROLES } from './account-activation.roles';
+import { SIGNATURE_UPLOAD_MAX_BYTES } from './signature-upload';
 
 @Controller('account-activation')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -39,6 +43,22 @@ export class AccountActivationController {
     @Body() dto: SubmitAccountActivationDto,
   ) {
     return this.accountActivationService.submit(userId, dto);
+  }
+
+  /** Uploaded signature image (≤ 500 KB, compressed in the browser) → Media Library. */
+  @Post('signature-image')
+  @Roles(...ACCOUNT_ACTIVATION_ELIGIBLE_ROLES)
+  @UseInterceptors(
+    // A little headroom so the service can answer with a clear size message.
+    FileInterceptor('signature', {
+      limits: { fileSize: SIGNATURE_UPLOAD_MAX_BYTES * 2 },
+    }),
+  )
+  uploadSignatureImage(
+    @GetUser('_id') userId: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.accountActivationService.uploadSignatureImage(userId, file);
   }
 
   @Get('hub/pending')

@@ -270,6 +270,52 @@ export class MediaService {
     );
   }
 
+  /**
+   * Server-side upload of a small file that is already in memory (e.g. a
+   * partner's signature image); lands in the media library like any upload.
+   */
+  async uploadBuffer(input: {
+    buffer: Buffer;
+    originalName: string;
+    contentType: string;
+    userId?: string;
+  }) {
+    const contentType = resolveContentType(
+      input.originalName,
+      input.contentType,
+    );
+    const category = categoryForContentType(contentType);
+    if (!category) {
+      throw new BadRequestException(
+        'Only images, videos and PDF files are allowed',
+      );
+    }
+    const fileName = buildMediaFileName(
+      category,
+      input.originalName,
+      randomUUID(),
+    );
+    // uploadSmallFile already counts the bytes toward bucket usage.
+    const info = await this.backblaze.uploadSmallFile(
+      fileName,
+      input.buffer,
+      contentType,
+    );
+    const created = await this.mediaModel.create({
+      originalName: input.originalName,
+      fileName: info.fileName,
+      fileId: info.fileId,
+      category,
+      contentType,
+      size: input.buffer.length,
+      uploadedBy:
+        input.userId && Types.ObjectId.isValid(input.userId)
+          ? new Types.ObjectId(input.userId)
+          : undefined,
+    });
+    return { id: String(created._id), fileName: info.fileName };
+  }
+
   private async findOrFail(id: string): Promise<MediaLean> {
     const doc = Types.ObjectId.isValid(id)
       ? await this.mediaModel.findById(id).lean<MediaLean>()

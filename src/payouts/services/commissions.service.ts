@@ -371,7 +371,72 @@ export class CommissionsService {
       summary[key] = Math.round(summary[key] * 100) / 100;
     }
 
-    return summary;
+    return {
+      ...summary,
+      paidOnDeletedOrders: await this.paidLinesOnDeletedOrders(records),
+    };
+  }
+
+  /**
+   * Paid-out (or in-withdrawal) lines whose order was deleted later. Order
+   * lists hide deleted orders, so the Earnings page adds these to Lifetime
+   * Commission to keep it in step with Paid Out.
+   */
+  private async paidLinesOnDeletedOrders(
+    records: Array<{
+      orderId?: Types.ObjectId;
+      orderNumber?: string;
+      earningType?: string;
+      amount: number;
+      status: CommissionLifecycleStatus;
+      createdAt?: Date;
+    }>,
+  ): Promise<
+    {
+      orderNumber: string;
+      earningType: string;
+      amount: number;
+      status: CommissionLifecycleStatus;
+      createdAt: Date | null;
+    }[]
+  > {
+    const paid = records.filter(
+      (r) =>
+        r.orderId &&
+        (r.status === CommissionLifecycleStatus.WITHDRAWN ||
+          r.status === CommissionLifecycleStatus.LOCKED),
+    );
+    if (!paid.length) return [];
+
+    const ids = [...new Set(paid.map((r) => String(r.orderId)))];
+    const live = await this.orderModel
+      .find({ _id: { $in: ids } })
+      .select('_id')
+      .lean();
+    const liveIds = new Set(live.map((o) => String(o._id)));
+    const goneIds = ids.filter((id) => !liveIds.has(id));
+    if (!goneIds.length) return [];
+
+    // Soft-deleted orders keep their createdAt; purged ones fall back to the
+    // record's own date (set when the order shipped).
+    const deleted = await this.orderModel
+      .find({ _id: { $in: goneIds } })
+      .setOptions({ withDeleted: true })
+      .select('_id createdAt')
+      .lean<{ _id: Types.ObjectId; createdAt?: Date }[]>();
+    const orderCreatedAt = new Map(
+      deleted.map((o) => [String(o._id), o.createdAt]),
+    );
+
+    return paid
+      .filter((r) => goneIds.includes(String(r.orderId)))
+      .map((r) => ({
+        orderNumber: r.orderNumber || '',
+        earningType: r.earningType || 'Shop Introduction',
+        amount: Math.round(r.amount * 100) / 100,
+        status: r.status,
+        createdAt: orderCreatedAt.get(String(r.orderId)) ?? r.createdAt ?? null,
+      }));
   }
 
   /**

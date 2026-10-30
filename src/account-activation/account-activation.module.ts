@@ -10,6 +10,7 @@ import { AccountActivationController } from './account-activation.controller';
 import { UsersModule } from '../users/users.module';
 import { PayoutsModule } from '../payouts/payouts.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { MediaModule } from '../media/media.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     UsersModule,
     PayoutsModule,
     NotificationsModule,
+    MediaModule,
   ],
   controllers: [AccountActivationController],
   providers: [AccountActivationService],
