@@ -494,6 +494,11 @@ export class OrdersService implements OnModuleInit {
     couponCode?: string,
   ): Promise<{ url: string | null; id: string } | { paid: true; user: any }> {
     const user = await this.usersService.findOne(userId);
+    if (user?.isPartnerPaid) {
+      throw new BadRequestException(
+        'The registration fee for this account has already been paid.',
+      );
+    }
     const type = additionalMetadata.type || 'partner_registration';
     const country =
       additionalMetadata.country || user?.country || '';
@@ -833,6 +838,62 @@ export class OrdersService implements OnModuleInit {
       paid: true,
       user: updatedUser,
     };
+  }
+
+  /**
+   * A registration checkout completed for a user who is already paid. A Stripe retry of the
+   * session that activated them is harmless; any other paid session is a second charge, so
+   * tell admin to refund it instead of dropping it silently.
+   */
+  private async flagDuplicateRegistrationPayment(
+    source: string,
+    user: any,
+    session: Stripe.Checkout.Session,
+  ): Promise<void> {
+    const amount = (session.amount_total || 0) / 100;
+    if (session.payment_status !== 'paid' || amount <= 0) return;
+
+    const activatedBySession = await this.orderModel.exists({
+      user: user._id,
+      'items.product': 'registration_fee',
+      stripeSessionId: session.id,
+    });
+    if (activatedBySession) return;
+
+    const currency = (session.currency || 'usd').toUpperCase();
+    const paymentIntentId =
+      typeof session.payment_intent === 'string'
+        ? session.payment_intent
+        : session.payment_intent?.id || '';
+    console.error(
+      `[${source}] DUPLICATE registration payment: user ${user._id} paid ${amount.toFixed(2)} ${currency} again (session ${session.id}, payment ${paymentIntentId}). Refund required.`,
+    );
+
+    try {
+      const notification = await this.notificationsService.create({
+        type: NotificationType.ORDER_PAID,
+        title: 'Duplicate Registration Payment',
+        message: `${user.firstName} ${user.lastName} (${user.email}) paid the registration fee again (${amount.toFixed(2)} ${currency}). The account was already active, so no order was created. Refund payment ${paymentIntentId} in Stripe.`,
+        metadata: {
+          userId: user._id,
+          stripeSessionId: session.id,
+          paymentIntentId,
+          amount,
+          currency,
+        },
+      });
+      this.notificationsGateway.broadcastNotification(notification);
+    } catch (err) {
+      console.error(`[${source}] Failed to create duplicate payment notification:`, err);
+    }
+
+    await this.mailService.sendDuplicateRegistrationPaymentAdminAlert(user, {
+      amount,
+      currency,
+      paymentIntentId,
+      stripeSessionId: session.id,
+      paidAt: new Date((session.created || Date.now() / 1000) * 1000),
+    });
   }
 
   private async resolvePaidShopRegistrationCoupon(
@@ -2219,6 +2280,7 @@ export class OrdersService implements OnModuleInit {
         console.log(
           `[USA Stripe Webhook] Shop ${userId} already paid. Skipping duplicate activation/emails.`,
         );
+        await this.flagDuplicateRegistrationPayment('USA Stripe Webhook', existingShop, session);
         return { received: true };
       }
 
@@ -2476,6 +2538,7 @@ export class OrdersService implements OnModuleInit {
         console.log(
           `[Europe Stripe Webhook] Shop ${userId} already paid. Skipping duplicate activation/emails.`,
         );
+        await this.flagDuplicateRegistrationPayment('Europe Stripe Webhook', existingShop, session);
         return { received: true };
       }
 
@@ -2611,6 +2674,7 @@ export class OrdersService implements OnModuleInit {
           console.log(
             `[Stripe Webhook] Partner ${userId} already paid. Skipping duplicate activation/emails.`,
           );
+          await this.flagDuplicateRegistrationPayment('Stripe Webhook', existingPartner, session);
           return { received: true };
         }
 
@@ -2683,6 +2747,7 @@ export class OrdersService implements OnModuleInit {
           console.log(
             `[Stripe Webhook] Shop ${userId} already paid. Skipping duplicate activation/emails.`,
           );
+          await this.flagDuplicateRegistrationPayment('Stripe Webhook', existingShop, session);
           return { received: true };
         }
 
