@@ -100,6 +100,38 @@ const STATE_CODES: Record<string, string> = {
 /** FedEx allows up to 3 street lines of 35 characters. */
 const FEDEX_STREET_LINE_MAX = 35;
 
+const TRANSIT_DAY_WORDS: Record<string, number> = {
+  ONE: 1,
+  TWO: 2,
+  THREE: 3,
+  FOUR: 4,
+  FIVE: 5,
+  SIX: 6,
+  SEVEN: 7,
+  EIGHT: 8,
+  NINE: 9,
+  TEN: 10,
+  ELEVEN: 11,
+  TWELVE: 12,
+  THIRTEEN: 13,
+  FOURTEEN: 14,
+  FIFTEEN: 15,
+  SIXTEEN: 16,
+  SEVENTEEN: 17,
+  EIGHTEEN: 18,
+  NINETEEN: 19,
+  TWENTY: 20,
+};
+
+/** FedEx sends transit time as an enum like "TWO_DAYS"; older replies send a number. */
+function parseTransitDays(raw: unknown): number | null {
+  if (raw == null) return null;
+  const asNumber = Number(raw);
+  if (Number.isFinite(asNumber) && asNumber > 0) return asNumber;
+  const word = String(raw).toUpperCase().split('_')[0];
+  return TRANSIT_DAY_WORDS[word] ?? null;
+}
+
 @Injectable()
 export class FedexService {
   private readonly logger = new Logger(FedexService.name);
@@ -577,6 +609,7 @@ export class FedexService {
         null;
       const deliveryDate =
         detail?.commit?.dateDetail?.dayFormat ||
+        detail?.operationalDetail?.deliveryDate ||
         detail?.commit?.dateDetail?.dayOfWeek ||
         null;
 
@@ -586,7 +619,7 @@ export class FedexService {
         packagingType,
         totalNetCharge: Number(best._amount),
         currency: best._currency,
-        transitDays: transit != null ? Number(transit) || null : null,
+        transitDays: parseTransitDays(transit),
         deliveryDate: deliveryDate ? String(deliveryDate) : null,
         rateType: best._rateType || null,
       });

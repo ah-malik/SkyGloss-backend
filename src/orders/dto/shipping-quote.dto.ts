@@ -49,4 +49,8 @@ export class ShippingQuoteDto {
   @IsBoolean()
   @IsOptional()
   isPickup?: boolean;
+
+  @IsString()
+  @IsOptional()
+  fedexServiceType?: string;
 }

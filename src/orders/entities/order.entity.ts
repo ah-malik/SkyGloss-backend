@@ -230,6 +230,10 @@ export class Order {
   @Prop()
   shippingCompany: string;
 
+  /** FedEx service the shop picked and paid for at checkout (e.g. "FedEx International Economy®"). */
+  @Prop()
+  shippingService?: string;
+
   /**
    * Parent Link (Hub or Distributor) at order creation.
    * Locked so later Parent Link changes do not move historical order management.

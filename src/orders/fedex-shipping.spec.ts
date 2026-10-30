@@ -286,6 +286,133 @@ describe('OrdersService.quoteCheckoutShipping', () => {
     // 3 × 2.5 LB + 1 × 1 LB default
     expect(getRateQuotes.mock.calls[0][0].weight).toBe(8.5);
   });
+
+  describe('FedEx service choice', () => {
+    const rate = (serviceType: string, totalNetCharge: number, transitDays: number | null = null) => ({
+      serviceType,
+      serviceName: `FedEx ${serviceType}`,
+      totalNetCharge,
+      currency: 'USD',
+      transitDays,
+    });
+    // Sorted cheapest first, as FedexService returns them; Priority repeats as a Saturday delivery.
+    const rates = [
+      rate('FEDEX_GROUND', 45.37, 2),
+      rate('FEDEX_INTERNATIONAL_CONNECT_PLUS', 152.38),
+      rate('INTERNATIONAL_ECONOMY', 179.29),
+      rate('FEDEX_INTERNATIONAL_PRIORITY', 192.44),
+      rate('FEDEX_INTERNATIONAL_PRIORITY', 209.24),
+    ];
+    const build = () =>
+      buildOrdersService({ rateQuotes: jest.fn().mockResolvedValue(rates) });
+
+    it('lists every service once, cheapest first, and charges the cheapest by default', async () => {
+      const { svc } = build();
+      const result = await quote(svc, addresses.canada, 285);
+      expect(result).toMatchObject({
+        source: 'fedex',
+        serviceType: 'FEDEX_GROUND',
+        shippingFee: 45.37,
+        transitDays: 2,
+      });
+      expect(result.fedexOptions.map((o: any) => [o.serviceType, o.shippingFee])).toEqual([
+        ['FEDEX_GROUND', 45.37],
+        ['FEDEX_INTERNATIONAL_CONNECT_PLUS', 152.38],
+        ['INTERNATIONAL_ECONOMY', 179.29],
+        ['FEDEX_INTERNATIONAL_PRIORITY', 192.44],
+      ]);
+    });
+
+    it('charges the service the shop picked', async () => {
+      const { svc } = build();
+      const result = await quote(svc, addresses.canada, 285, {
+        fedexServiceType: 'INTERNATIONAL_ECONOMY',
+      });
+      expect(result).toMatchObject({
+        serviceType: 'INTERNATIONAL_ECONOMY',
+        serviceName: 'FedEx INTERNATIONAL_ECONOMY',
+        shippingFee: 179.29,
+      });
+    });
+
+    it('falls back to the cheapest when the picked service is not offered', async () => {
+      const { svc, getRateQuotes } = build();
+      const result = await quote(svc, addresses.canada, 285, {
+        fedexServiceType: 'FIRST_OVERNIGHT',
+      });
+      expect(result).toMatchObject({ serviceType: 'FEDEX_GROUND', shippingFee: 45.37 });
+      // Asked FedEx once more before giving up on the pick.
+      expect(getRateQuotes).toHaveBeenCalledTimes(2);
+    });
+
+    it('asks FedEx again when a reply leaves out the picked service', async () => {
+      const getRateQuotes = jest
+        .fn()
+        .mockResolvedValueOnce(rates.slice(1))
+        .mockResolvedValueOnce(rates);
+      const { svc } = buildOrdersService({ rateQuotes: getRateQuotes });
+      const result = await quote(svc, addresses.canada, 285, {
+        fedexServiceType: 'FEDEX_GROUND',
+      });
+      expect(result).toMatchObject({ serviceType: 'FEDEX_GROUND', shippingFee: 45.37 });
+      expect(getRateQuotes).toHaveBeenCalledTimes(2);
+    });
+
+    it('stops checkout instead of charging another service or the flat fee', () => {
+      const { svc } = build();
+      const assert = (picked: string | undefined, result: Record<string, unknown>) =>
+        svc.assertPickedFedexServiceCharged(picked, result);
+      expect(() =>
+        assert('FEDEX_GROUND', { source: 'fedex', serviceType: 'FEDEX_GROUND' }),
+      ).not.toThrow();
+      expect(() => assert(undefined, { source: 'fedex', serviceType: 'FEDEX_GROUND' })).not.toThrow();
+      // Pickup / Certification Kit: shipping is free whatever was picked.
+      expect(() => assert('FEDEX_GROUND', { source: 'free' })).not.toThrow();
+      expect(() =>
+        assert('FEDEX_GROUND', { source: 'fedex', serviceType: 'INTERNATIONAL_ECONOMY' }),
+      ).toThrow('FedEx shipping rates');
+      expect(() => assert('FEDEX_GROUND', { source: 'flat' })).toThrow('FedEx shipping rates');
+    });
+
+    it('converts every option into the order currency', async () => {
+      const { svc } = build();
+      const result = await quote(svc, addresses.canada, 285, {
+        orderCurrency: 'CAD',
+        rateToUsd: 0.73,
+        fedexServiceType: 'INTERNATIONAL_ECONOMY',
+      });
+      // 179.29 USD / 0.73 USD per CAD
+      expect(result.shippingFee).toBeCloseTo(245.6, 2);
+      expect(result.fedexOptions[0].shippingFee).toBeCloseTo(62.15, 2);
+    });
+  });
+});
+
+describe('FedexService.parseRateQuotes', () => {
+  const parse = (details: unknown[]) =>
+    (new FedexService(new ConfigService({})) as any).parseRateQuotes({
+      output: { rateReplyDetails: details },
+    });
+
+  it('reads transit days from FedEx enums like "TWO_DAYS"', () => {
+    const [ground, priority] = parse([
+      {
+        serviceType: 'FEDEX_GROUND',
+        serviceName: 'FedEx International Ground®',
+        commit: { transitDays: { minimumTransitTime: 'TWO_DAYS' } },
+        operationalDetail: { deliveryDate: '2026-11-03T23:59:00' },
+        ratedShipmentDetails: [{ rateType: 'ACCOUNT', totalNetCharge: 45.37, currency: 'USD' }],
+      },
+      {
+        serviceType: 'FEDEX_INTERNATIONAL_PRIORITY',
+        serviceName: 'FedEx International Priority®',
+        commit: { dateDetail: { dayOfWeek: 'Mon', dayFormat: '2026-11-02T17:00:00' } },
+        ratedShipmentDetails: [{ rateType: 'ACCOUNT', totalNetCharge: 192.44, currency: 'USD' }],
+      },
+    ]);
+    expect(ground).toMatchObject({ transitDays: 2, deliveryDate: '2026-11-03T23:59:00' });
+    expect(priority).toMatchObject({ transitDays: null, deliveryDate: '2026-11-02T17:00:00' });
+  });
 });
 
 describe('Pickup is limited to FedEx regions', () => {

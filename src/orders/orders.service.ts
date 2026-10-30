@@ -187,6 +187,15 @@ const PAYMENT_REMINDER_INTERVALS_MS = [
   48 * 60 * 60 * 1000,
 ];
 
+/** One FedEx service the shop can pick at checkout, priced in the order currency. */
+export type CheckoutFedexOption = {
+  serviceType: string;
+  serviceName: string;
+  shippingFee: number;
+  transitDays: number | null;
+  deliveryDate: string | null;
+};
+
 @Injectable()
 export class OrdersService implements OnModuleInit {
   private readonly logger = new Logger(OrdersService.name);
@@ -1010,7 +1019,12 @@ export class OrdersService implements OnModuleInit {
       isPickup,
       includesCertificationKit:
         includesCertificationKit && kitResolved.freeShipping,
+      fedexServiceType: createOrderDto.fedexServiceType,
     });
+    this.assertPickedFedexServiceCharged(
+      createOrderDto.fedexServiceType,
+      shippingQuote,
+    );
     const shippingFee = shippingQuote.shippingFee;
 
     if (includesCertificationKit && couponCode?.trim()) {
@@ -1081,6 +1095,9 @@ export class OrdersService implements OnModuleInit {
           user: userId,
           items: resolvedItems,
           shippingFee,
+          ...(shippingQuote.source === 'fedex' && shippingQuote.serviceName
+            ? { shippingService: shippingQuote.serviceName }
+            : {}),
           vatAmount,
           vatRate,
           shippingAddress: orderShippingAddress,
@@ -5292,7 +5309,8 @@ export class OrdersService implements OnModuleInit {
 
   /**
    * Checkout shipping. FedEx destinations (Canada, Hawaii, Alaska, Puerto Rico)
-   * pay the cheapest FedEx rate from the shop's Hub with no free-shipping
+   * pay the FedEx rate from the shop's Hub for the service the shop picked
+   * (cheapest when none or an unavailable one is picked) with no free-shipping
    * threshold, falling back to the flat fee if FedEx cannot quote. Everywhere
    * else keeps the flat rule (free at 500).
    */
@@ -5312,12 +5330,17 @@ export class OrdersService implements OnModuleInit {
     rateToUsd: number;
     isPickup?: boolean;
     includesCertificationKit?: boolean;
+    /** FedEx serviceType the shop picked at checkout (e.g. INTERNATIONAL_ECONOMY). */
+    fedexServiceType?: string;
   }): Promise<{
     shippingFee: number;
     currency: string;
     source: 'free' | 'flat' | 'fedex';
+    serviceType?: string;
     serviceName?: string;
     transitDays?: number | null;
+    /** Every FedEx service for this route, cheapest first, in the order currency. */
+    fedexOptions?: CheckoutFedexOption[];
     error?: string;
   }> {
     const currency = String(params.orderCurrency || 'USD').toUpperCase();
@@ -5379,34 +5402,75 @@ export class OrdersService implements OnModuleInit {
         countryOfManufacture: shipper.countryCode,
       }));
 
-      const rates = await this.fedexService.getRateQuotes({
+      const rateRequest = {
         shipper,
         recipient,
         weight,
-        weightUnits: 'LB',
+        weightUnits: 'LB' as const,
         preferredCurrency: currency,
         customsValue: Math.max(1, params.itemsSubtotal),
         commodities,
-      });
-      const cheapest = rates[0];
-      if (!cheapest) {
+      };
+      let rates = await this.fedexService.getRateQuotes(rateRequest);
+      // FedEx occasionally leaves a service out of a reply; ask once more
+      // before the shop's pick is replaced by another service.
+      if (
+        params.fedexServiceType &&
+        !rates.some(
+          (r) => (r.serviceType || r.serviceName) === params.fedexServiceType,
+        )
+      ) {
+        rates = await this.fedexService.getRateQuotes(rateRequest);
+      }
+      if (!rates[0]) {
         throw new BadRequestException('FedEx returned no rates for this route.');
       }
 
-      let fee = Number(cheapest.totalNetCharge) || 0;
-      const quoteCurrency = String(cheapest.currency || currency).toUpperCase();
-      if (quoteCurrency !== currency) {
-        const quoteRateToUsd =
-          await this.exchangeRatesService.getRateToBase(quoteCurrency);
-        fee = usdToLocalAmount(fee * quoteRateToUsd, params.rateToUsd);
+      // Rates arrive cheapest first; FedEx can repeat a service (e.g. a pricier
+      // Saturday delivery), so keep its cheapest entry only.
+      const fedexOptions: CheckoutFedexOption[] = [];
+      const rateToUsdByCurrency = new Map<string, number>();
+      for (const rate of rates) {
+        const serviceType = rate.serviceType || rate.serviceName;
+        if (fedexOptions.some((o) => o.serviceType === serviceType)) continue;
+
+        let fee = Number(rate.totalNetCharge) || 0;
+        const quoteCurrency = String(rate.currency || currency).toUpperCase();
+        if (quoteCurrency !== currency) {
+          if (!rateToUsdByCurrency.has(quoteCurrency)) {
+            rateToUsdByCurrency.set(
+              quoteCurrency,
+              await this.exchangeRatesService.getRateToBase(quoteCurrency),
+            );
+          }
+          fee = usdToLocalAmount(
+            fee * rateToUsdByCurrency.get(quoteCurrency)!,
+            params.rateToUsd,
+          );
+        }
+
+        fedexOptions.push({
+          serviceType,
+          serviceName: rate.serviceName,
+          shippingFee: Math.round(fee * 100) / 100,
+          transitDays: rate.transitDays ?? null,
+          deliveryDate: rate.deliveryDate ?? null,
+        });
       }
+      fedexOptions.sort((a, b) => a.shippingFee - b.shippingFee);
+
+      const selected =
+        fedexOptions.find((o) => o.serviceType === params.fedexServiceType) ||
+        fedexOptions[0];
 
       return {
-        shippingFee: Math.round(fee * 100) / 100,
+        shippingFee: selected.shippingFee,
         currency,
         source: 'fedex',
-        serviceName: cheapest.serviceName,
-        transitDays: cheapest.transitDays ?? null,
+        serviceType: selected.serviceType,
+        serviceName: selected.serviceName,
+        transitDays: selected.transitDays,
+        fedexOptions,
       };
     } catch (err: any) {
       this.logger.warn(
@@ -5422,6 +5486,27 @@ export class OrdersService implements OnModuleInit {
   }
 
   /**
+   * The FedEx service the shop picked at checkout is the one charged: when
+   * FedEx no longer offers it (or cannot quote), stop instead of charging a
+   * different service or the flat fallback.
+   */
+  private assertPickedFedexServiceCharged(
+    pickedServiceType: string | undefined,
+    quote: { source: 'free' | 'flat' | 'fedex'; serviceType?: string },
+  ) {
+    if (
+      !pickedServiceType ||
+      quote.source === 'free' ||
+      quote.serviceType === pickedServiceType
+    ) {
+      return;
+    }
+    throw new BadRequestException(
+      'FedEx shipping rates for this address have changed. Please review the shipping options and try again.',
+    );
+  }
+
+  /**
    * Checkout preview: same server-side shipping the checkout session will charge.
    */
   async previewCheckoutShipping(
@@ -5430,6 +5515,7 @@ export class OrdersService implements OnModuleInit {
       items: CreateOrderDto['items'];
       shippingAddress?: Partial<CreateOrderDto['shippingAddress']>;
       isPickup?: boolean;
+      fedexServiceType?: string;
     },
   ) {
     const currentUser = await this.usersService.findOne(userId);
@@ -5464,6 +5550,7 @@ export class OrdersService implements OnModuleInit {
         dto.isPickup === true && !!(await this.getPickupHubForUser(userId)),
       includesCertificationKit:
         kitResolved.includesCertificationKit && kitResolved.freeShipping,
+      fedexServiceType: dto.fedexServiceType,
     });
     // Internal FedEx errors stay in server logs.
     const { error: _error, ...publicQuote } = quote;
@@ -6078,26 +6165,35 @@ export class OrdersService implements OnModuleInit {
         currency: orderCurrency,
       });
       // FedEx destinations (e.g. Puerto Rico) are quoted like checkout; D-Value keeps the flat rule.
+      let requestShippingService: string | undefined;
       if (
         !wantsDValue &&
         isFedexShippingDestination(shippingCountry, shippingAddress?.state)
       ) {
-        shippingFee = (
-          await this.quoteCheckoutShipping({
-            user: currentUser,
-            items: resolvedItems,
-            shippingAddress,
-            itemsSubtotal: shippingBase,
-            orderCurrency,
-            rateToUsd: requestRateToUsd,
-            isPickup,
-            includesCertificationKit:
-              includesCertificationKit && kitResolved.freeShipping,
-          })
-        ).shippingFee;
+        const fedexQuote = await this.quoteCheckoutShipping({
+          user: currentUser,
+          items: resolvedItems,
+          shippingAddress,
+          itemsSubtotal: shippingBase,
+          orderCurrency,
+          rateToUsd: requestRateToUsd,
+          isPickup,
+          includesCertificationKit:
+            includesCertificationKit && kitResolved.freeShipping,
+          fedexServiceType: createOrderDto.fedexServiceType,
+        });
+        this.assertPickedFedexServiceCharged(
+          createOrderDto.fedexServiceType,
+          fedexQuote,
+        );
+        shippingFee = fedexQuote.shippingFee;
+        if (fedexQuote.source === 'fedex') {
+          requestShippingService = fedexQuote.serviceName;
+        }
       }
       if ((includesCertificationKit && kitResolved.freeShipping) || isPickup) {
         shippingFee = 0;
+        requestShippingService = undefined;
       }
 
       if (includesCertificationKit && couponCode?.trim()) {
@@ -6167,6 +6263,9 @@ export class OrdersService implements OnModuleInit {
             user: userId,
             items: resolvedItems,
             shippingFee,
+            ...(requestShippingService
+              ? { shippingService: requestShippingService }
+              : {}),
             vatAmount,
             vatRate,
             shippingAddress: pickupHub

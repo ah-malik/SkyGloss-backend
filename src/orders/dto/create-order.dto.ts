@@ -124,4 +124,9 @@ export class CreateOrderDto {
   @IsBoolean()
   @IsOptional()
   dValueInvoice?: boolean;
+
+  /** FedEx service picked at checkout; the server re-quotes it and falls back to the cheapest. */
+  @IsString()
+  @IsOptional()
+  fedexServiceType?: string;
 }
